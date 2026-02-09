@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 from sklearn.metrics import (
+    accuracy_score,
     brier_score_loss,
+    f1_score,
     log_loss,
     mean_absolute_error,
     mean_squared_error,
@@ -32,7 +34,11 @@ from veldra.api.types import (
 )
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
-from veldra.modeling import train_binary_with_cv, train_regression_with_cv
+from veldra.modeling import (
+    train_binary_with_cv,
+    train_multiclass_with_cv,
+    train_regression_with_cv,
+)
 
 LOGGER = logging.getLogger("veldra")
 
@@ -49,9 +55,10 @@ def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
 def fit(config: RunConfig | dict[str, Any]) -> RunResult:
     """Train supported model with CV and persist artifact payload."""
     parsed = _ensure_config(config)
-    if parsed.task.type not in {"regression", "binary"}:
+    if parsed.task.type not in {"regression", "binary", "multiclass"}:
         raise VeldraNotImplementedError(
-            "fit is currently implemented only for task.type='regression' or 'binary'."
+            "fit is currently implemented only for task.type='regression', 'binary', or "
+            "'multiclass'."
         )
     if not parsed.data.path:
         raise VeldraValidationError("data.path is required for fit.")
@@ -59,8 +66,10 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
     frame = load_tabular_data(parsed.data.path)
     if parsed.task.type == "regression":
         training_output = train_regression_with_cv(config=parsed, data=frame)
-    else:
+    elif parsed.task.type == "binary":
         training_output = train_binary_with_cv(config=parsed, data=frame)
+    else:
+        training_output = train_multiclass_with_cv(config=parsed, data=frame)
 
     run_id = uuid4().hex
     artifact_path = Path(parsed.export.artifact_dir) / run_id
@@ -105,9 +114,10 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         )
 
     artifact = artifact_or_config
-    if artifact.run_config.task.type not in {"regression", "binary"}:
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass"}:
         raise VeldraNotImplementedError(
-            "evaluate is currently implemented only for task.type='regression' or 'binary'."
+            "evaluate is currently implemented only for task.type='regression', 'binary', or "
+            "'multiclass'."
         )
     if not isinstance(data, pd.DataFrame):
         raise VeldraValidationError("evaluate input must be a pandas.DataFrame.")
@@ -129,7 +139,7 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         mae = float(mean_absolute_error(y_true, y_pred))
         r2 = float(r2_score(y_true, y_pred))
         metrics = {"rmse": rmse, "mae": mae, "r2": r2}
-    else:
+    elif artifact.run_config.task.type == "binary":
         pred_frame = artifact.predict(x_eval)
         if not isinstance(pred_frame, pd.DataFrame):
             raise VeldraValidationError(
@@ -157,6 +167,47 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
             "logloss": float(log_loss(y_binary, p_cal, labels=[0, 1])),
             "brier": float(brier_score_loss(y_binary, p_cal)),
         }
+    else:
+        pred_frame = artifact.predict(x_eval)
+        if not isinstance(pred_frame, pd.DataFrame):
+            raise VeldraValidationError(
+                "Multiclass artifact predict output must be a pandas.DataFrame."
+            )
+
+        target_classes = artifact.feature_schema.get("target_classes")
+        if not isinstance(target_classes, list) or len(target_classes) < 3:
+            raise VeldraValidationError("feature_schema.target_classes is missing or invalid.")
+
+        prob_cols = [f"proba_{label}" for label in target_classes]
+        missing = [col for col in prob_cols if col not in pred_frame.columns]
+        if missing:
+            raise VeldraValidationError(
+                f"Multiclass predict output is missing required columns: {missing}"
+            )
+
+        class_mapping = {label: idx for idx, label in enumerate(target_classes)}
+        y_encoded = y_true.map(class_mapping)
+        if y_encoded.isna().any():
+            raise VeldraValidationError(
+                "evaluate input contains target values outside the artifact target classes."
+            )
+        y_multiclass = y_encoded.astype(int).to_numpy()
+
+        proba = np.asarray(pred_frame[prob_cols], dtype=float)
+        proba = np.clip(proba, 1e-7, 1 - 1e-7)
+        row_sum = proba.sum(axis=1, keepdims=True)
+        if np.any(row_sum <= 0):
+            raise VeldraValidationError("Multiclass probability rows have invalid sums.")
+        proba = proba / row_sum
+        y_pred = np.argmax(proba, axis=1)
+
+        metrics = {
+            "accuracy": float(accuracy_score(y_multiclass, y_pred)),
+            "macro_f1": float(f1_score(y_multiclass, y_pred, average="macro")),
+            "logloss": float(
+                log_loss(y_multiclass, proba, labels=list(range(len(target_classes))))
+            ),
+        }
 
     metadata = {
         "n_rows": int(len(data)),
@@ -181,9 +232,10 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
 
 
 def predict(artifact: Artifact, data: Any) -> Prediction:
-    if artifact.run_config.task.type not in {"regression", "binary"}:
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass"}:
         raise VeldraNotImplementedError(
-            "predict is currently implemented only for task.type='regression' or 'binary'."
+            "predict is currently implemented only for task.type='regression', 'binary', or "
+            "'multiclass'."
         )
     if not isinstance(data, pd.DataFrame):
         raise VeldraValidationError("predict input must be a pandas.DataFrame.")

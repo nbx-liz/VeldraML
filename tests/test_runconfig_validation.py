@@ -60,3 +60,12 @@ def test_binary_threshold_must_be_between_zero_and_one() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_multiclass_disallows_postprocess_calibration_and_threshold() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "multiclass"}
+    payload["postprocess"] = {"calibration": "platt", "threshold": 0.5}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

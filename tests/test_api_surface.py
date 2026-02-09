@@ -88,3 +88,42 @@ def test_binary_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:
 
     eval_result = evaluate(artifact, frame)
     assert {"auc", "logloss", "brier"} <= set(eval_result.metrics)
+
+
+def test_multiclass_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "x1": [0.1, 0.2, 0.0, 2.1, 2.3, 2.0, 4.0, 4.2, 3.9],
+            "x2": [1.0, 1.1, 0.9, 0.2, 0.1, 0.0, -0.8, -0.9, -1.0],
+            "y": [
+                "alpha",
+                "alpha",
+                "alpha",
+                "beta",
+                "beta",
+                "beta",
+                "gamma",
+                "gamma",
+                "gamma",
+            ],
+        }
+    )
+    data_path = tmp_path / "multiclass_train.csv"
+    frame.to_csv(data_path, index=False)
+
+    payload = {
+        "config_version": 1,
+        "task": {"type": "multiclass"},
+        "data": {"path": str(data_path), "target": "y"},
+        "split": {"type": "stratified", "n_splits": 3, "seed": 1},
+        "export": {"artifact_dir": str(tmp_path)},
+    }
+    run = fit(payload)
+    artifact = Artifact.load(run.artifact_path)
+
+    pred = predict(artifact, data=frame[["x1", "x2"]])
+    assert "label_pred" in pred.data.columns
+    assert {"proba_alpha", "proba_beta", "proba_gamma"} <= set(pred.data.columns)
+
+    eval_result = evaluate(artifact, frame)
+    assert {"accuracy", "macro_f1", "logloss"} <= set(eval_result.metrics)

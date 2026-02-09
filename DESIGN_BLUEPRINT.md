@@ -307,3 +307,49 @@ export（任意）：
 - Binary example output contract follows regression examples:
   - `run_result.json`, `eval_result.json`, `predictions_sample.csv`, `used_config.yaml`.
 - This extension is adapter-side only and does not change `veldra.api.*` signatures.
+
+---
+
+## 19. 2026-02-10 Multiclass Workflow Proposal (Phase 6)
+### 19.1 Goal
+- Add `task.type='multiclass'` runtime support for `fit/predict/evaluate`.
+- Keep stable API signatures unchanged while extending behavior.
+
+### 19.2 Proposed runtime contract
+- `fit` supports multiclass with CV metrics and artifact generation.
+- `predict` returns tabular output with:
+  - `label_pred`
+  - `proba_<class>` columns aligned to `feature_schema.target_classes`.
+- `evaluate` (Artifact input) returns:
+  - `accuracy`, `macro_f1`, `logloss`.
+
+### 19.3 Artifact and schema
+- No new required artifact files for multiclass.
+- Existing files remain mandatory:
+  - `manifest.json`, `run_config.yaml`, `feature_schema.json`.
+- Existing optional training payload remains used:
+  - `model.lgb.txt`, `metrics.json`, `cv_results.parquet`.
+- `feature_schema.json` includes multiclass `target_classes` order contract.
+
+### 19.4 Scope notes
+- In scope:
+  - multiclass core training path + API path + examples + tests.
+- Out of scope:
+  - calibration/threshold optimization for multiclass.
+  - `tune/simulate/export` implementations.
+
+### 19.5 Implemented status (Phase 6)
+- Added multiclass runtime for:
+  - `fit(config)`
+  - `predict(artifact, data)`
+  - `evaluate(artifact, data)`
+- Prediction contract:
+  - `label_pred`
+  - `proba_<class>` columns ordered by `feature_schema.target_classes`
+- Evaluation metrics:
+  - `accuracy`, `macro_f1`, `logloss`
+- Added multiclass examples:
+  - `prepare_demo_data_multiclass.py`
+  - `run_demo_multiclass.py`
+  - `evaluate_demo_multiclass_artifact.py`
+- Stable API signatures remain unchanged.

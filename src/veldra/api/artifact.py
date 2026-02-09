@@ -144,6 +144,40 @@ class Artifact:
             index=x.index,
         )
 
+    def _predict_multiclass(self, x: pd.DataFrame) -> pd.DataFrame:
+        target_classes = self.feature_schema.get("target_classes")
+        if not isinstance(target_classes, list) or len(target_classes) < 3:
+            raise VeldraArtifactError(
+                "Multiclass artifact requires feature_schema.target_classes with at least 3 labels."
+            )
+
+        raw = np.asarray(self._get_booster().predict(x), dtype=float)
+        num_class = len(target_classes)
+        if raw.ndim == 1:
+            if raw.size != len(x) * num_class:
+                raise VeldraArtifactError(
+                    "Multiclass prediction output has invalid shape for configured classes."
+                )
+            raw = raw.reshape(len(x), num_class)
+        if raw.ndim != 2 or raw.shape[1] != num_class:
+            raise VeldraArtifactError(
+                "Multiclass prediction output has invalid dimensions."
+            )
+
+        proba = np.clip(raw, 1e-7, 1 - 1e-7)
+        row_sum = proba.sum(axis=1, keepdims=True)
+        if np.any(row_sum <= 0):
+            raise VeldraArtifactError("Multiclass prediction probabilities have invalid row sums.")
+        proba = proba / row_sum
+
+        label_idx = np.argmax(proba, axis=1)
+        label_pred = [target_classes[int(idx)] for idx in label_idx]
+
+        payload: dict[str, Any] = {"label_pred": label_pred}
+        for idx, class_label in enumerate(target_classes):
+            payload[f"proba_{class_label}"] = proba[:, idx]
+        return pd.DataFrame(payload, index=x.index)
+
     def predict(self, df: Any) -> Any:
         if not isinstance(df, pd.DataFrame):
             raise VeldraValidationError("predict input must be a pandas.DataFrame.")
@@ -153,8 +187,11 @@ class Artifact:
             return self._predict_regression(x)
         if self.run_config.task.type == "binary":
             return self._predict_binary(x)
+        if self.run_config.task.type == "multiclass":
+            return self._predict_multiclass(x)
         raise VeldraNotImplementedError(
-            "Artifact.predict is currently implemented only for regression and binary tasks."
+            "Artifact.predict is currently implemented only for regression, binary, and "
+            "multiclass tasks."
         )
 
     def simulate(self, df: Any, scenario: dict[str, Any]) -> Any:
