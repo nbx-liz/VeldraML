@@ -409,3 +409,102 @@
     - Prevent leakage and preserve defensible evaluation.
   - Impact area:
     - Modeling / Validation
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (phase7 implementation set).
+- Binary default path remained fixed-threshold compatible.
+- `--optimize-threshold` example path produced optimized threshold policy and optional curve file.
+
+**Risks / Notes**
+- Threshold optimization objective is fixed to F1 in this phase.
+- The feature is intentionally binary-only and opt-in to avoid runtime surprise for standard users.
+
+**Open Questions**
+- [ ] Should additional threshold objectives (e.g., precision/recall constrained) be added in a future
+      phase, or kept out of stable API for now?
+- [ ] Should threshold policy be exposed in CLI/GUI presets after API stabilization?
+
+### 2026-02-10 (Session/PR: phase7.1-doc-closure-and-phase8-tune-mvp)
+**Context**
+- Close remaining doc consistency tasks and implement `runner.tune` MVP.
+- Keep stable API signatures unchanged and avoid behavioral regressions in existing paths.
+
+**Plan**
+- Phase 7.1:
+  - complete unfinished Phase 7 history section
+  - add capability matrix and historical clarification in design docs
+- Phase 8:
+  - implement `tune` runtime for regression/binary/multiclass
+  - persist tuning artifacts under `artifacts/tuning/<run_id>/`
+  - add full test coverage for tune smoke/validation/artifact outputs
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/modeling/tuning.py` (Optuna-backed tuning engine).
+  - Updated `src/veldra/modeling/__init__.py` exports.
+  - Updated `src/veldra/api/runner.py`:
+    - `tune` now validates config and executes tuning
+    - writes `study_summary.json` and `trials.parquet`
+    - returns populated `TuneResult`
+- Dependency updates:
+  - Added runtime dependency: `optuna==4.0.0`
+  - Updated lockfile (`uv.lock`)
+- Tests:
+  - Added `tests/test_tune_smoke_regression.py`
+  - Added `tests/test_tune_smoke_binary.py`
+  - Added `tests/test_tune_smoke_multiclass.py`
+  - Added `tests/test_tune_validation.py`
+  - Added `tests/test_tune_artifacts.py`
+  - Updated `tests/test_api_surface.py`
+  - Updated `tests/test_runner_additional.py`
+- Docs:
+  - Updated `DESIGN_BLUEPRINT.md` with capability matrix, historical note, and Phase 8 section.
+  - Updated `README.md` to reflect `tune` support and usage.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `tune` requires `tuning.enabled=true`; otherwise validation error.
+  - Reason:
+    - Prevent accidental tuning execution from standard training configs.
+  - Impact area:
+    - API behavior / Operability
+
+- Decision: confirmed
+  - Policy:
+    - Tuning objectives are fixed by task in MVP:
+      regression=`rmse`(min), binary=`auc`(max), multiclass=`macro_f1`(max).
+  - Reason:
+    - Keep MVP deterministic, simple, and auditable.
+  - Impact area:
+    - Modeling / Evaluation
+
+- Decision: confirmed
+  - Policy:
+    - Binary threshold optimization stays fully opt-in for prediction/evaluation flow and is disabled
+      in tuning objective evaluation.
+  - Reason:
+    - Keep tuning comparisons focused on probability quality and preserve non-intrusive default policy.
+  - Impact area:
+    - Compatibility / Modeling
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed with newly added tune tests.
+- `uv run coverage run -m pytest -q` + `uv run coverage report -m` : passed.
+- `tune` now returns non-empty `best_params` / `best_score` for regression, binary, and multiclass.
+- Tuning artifacts are generated under `artifacts/tuning/<run_id>/`.
+
+**Risks / Notes**
+- Search-space DSL is intentionally minimal in MVP; advanced conditional spaces are out of scope.
+- `simulate/export/frontier runtime` remain unimplemented by design.
+
+**Open Questions**
+- [ ] Should next phase add user-selectable optimization metric per task, or keep fixed objective
+      contracts for API stability?
+- [ ] Should tuning results be loadable through Artifact-like API, or remain file-based outputs?
+
+**Traceability note**
+- The `Decision: provisional` entries in the 2026-02-10 Phase 6 planning section are now resolved by
+  the confirmed implementation entry: `2026-02-10 (Session/PR: phase6-multiclass-fit-predict-evaluate-examples)`.

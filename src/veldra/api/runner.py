@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from veldra.api.types import (
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
+    run_tuning,
     train_binary_with_cv,
     train_multiclass_with_cv,
     train_regression_with_cv,
@@ -118,8 +120,68 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
 
 
 def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
-    _ = _ensure_config(config)
-    raise VeldraNotImplementedError("tune is not implemented in MVP scaffold.")
+    parsed = _ensure_config(config)
+    if parsed.task.type == "frontier":
+        raise VeldraNotImplementedError(
+            "tune is currently implemented only for task.type='regression', 'binary', or "
+            "'multiclass'."
+        )
+    if parsed.task.type not in {"regression", "binary", "multiclass"}:
+        raise VeldraValidationError(f"Unsupported task type for tune: '{parsed.task.type}'.")
+    if not parsed.tuning.enabled:
+        raise VeldraValidationError("tuning.enabled must be true to run tune().")
+    if parsed.tuning.n_trials < 1:
+        raise VeldraValidationError("tuning.n_trials must be >= 1.")
+    if not parsed.data.path:
+        raise VeldraValidationError("data.path is required for tune.")
+
+    frame = load_tabular_data(parsed.data.path)
+    tuning_output = run_tuning(config=parsed, data=frame)
+
+    run_id = uuid4().hex
+    tuning_path = Path(parsed.export.artifact_dir) / "tuning" / run_id
+    tuning_path.mkdir(parents=True, exist_ok=True)
+    summary_path = tuning_path / "study_summary.json"
+    trials_path = tuning_path / "trials.parquet"
+
+    summary = {
+        "run_id": run_id,
+        "task_type": parsed.task.type,
+        "metric_name": tuning_output.metric_name,
+        "direction": tuning_output.direction,
+        "best_score": tuning_output.best_score,
+        "best_params": tuning_output.best_params,
+        "n_trials": tuning_output.n_trials,
+        "seed": parsed.train.seed,
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    tuning_output.trials.to_parquet(trials_path, index=False)
+
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "tune completed",
+        run_id=run_id,
+        artifact_path=str(tuning_path),
+        task_type=parsed.task.type,
+        n_trials=tuning_output.n_trials,
+        metric_name=tuning_output.metric_name,
+    )
+    return TuneResult(
+        run_id=run_id,
+        task_type=parsed.task.type,
+        best_params=tuning_output.best_params,
+        best_score=tuning_output.best_score,
+        metadata={
+            "n_trials": tuning_output.n_trials,
+            "metric_name": tuning_output.metric_name,
+            "direction": tuning_output.direction,
+            "seed": parsed.train.seed,
+            "tuning_path": str(tuning_path),
+            "summary_path": str(summary_path),
+            "trials_path": str(trials_path),
+        },
+    )
 
 
 def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:

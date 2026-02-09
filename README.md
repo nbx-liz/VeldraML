@@ -11,6 +11,7 @@ Current implemented tasks are regression, binary classification, and multiclass 
 - Regression workflow: `fit`, `predict`, `evaluate`
 - Binary workflow: `fit`, `predict`, `evaluate` with OOF-based Platt calibration
 - Multiclass workflow: `fit`, `predict`, `evaluate`
+- Hyperparameter tuning workflow: `tune` (regression/binary/multiclass)
 
 ## Project Status
 
@@ -18,9 +19,10 @@ Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=regression`
 - `fit`, `predict`, `evaluate` for `task.type=binary`
 - `fit`, `predict`, `evaluate` for `task.type=multiclass`
+- `tune` for `task.type=regression|binary|multiclass` (Optuna-based MVP)
 
 Not implemented yet:
-- `tune`, `simulate`, `export`
+- `simulate`, `export`
 - frontier training
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
@@ -64,6 +66,24 @@ artifact = Artifact.load(run.artifact_path)
 frame = load_tabular_data("test.csv")
 pred = predict(artifact, frame.drop(columns=["target"]))
 ev = evaluate(artifact, frame)
+```
+
+### API usage (tuning)
+
+```python
+from veldra.api import tune
+
+tune_result = tune(
+    {
+        "config_version": 1,
+        "task": {"type": "regression"},
+        "data": {"path": "train.csv", "target": "target"},
+        "split": {"type": "kfold", "n_splits": 5, "seed": 42},
+        "tuning": {"enabled": True, "n_trials": 20, "preset": "fast"},
+        "export": {"artifact_dir": "artifacts"},
+    }
+)
+print(tune_result.best_score, tune_result.best_params)
 ```
 
 ### Example scripts

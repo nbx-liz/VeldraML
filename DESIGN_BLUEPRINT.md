@@ -383,3 +383,51 @@ export（任意）：
   - `auc`, `logloss`, `brier`
 - Add threshold-dependent metrics:
   - `accuracy`, `f1`, `precision`, `recall`, `threshold`
+
+---
+
+## 21. Current Capability Matrix (2026-02-10)
+| Area | Status | Notes |
+| --- | --- | --- |
+| `fit` | Implemented | regression, binary, multiclass |
+| `predict` | Implemented | regression, binary, multiclass |
+| `evaluate` | Implemented | Artifact input path for regression, binary, multiclass |
+| `tune` | Implemented (Phase 8 MVP) | regression, binary, multiclass (Optuna TPE) |
+| `simulate` | Not implemented | Kept as stable API stub |
+| `export` | Not implemented | Kept as stable API stub |
+| `frontier` task runtime | Not implemented | Config model exists, runtime deferred |
+
+## 22. Historical Note for Section 16
+- Section 16 records the **Phase 1 point-in-time state**.
+- Statements in Section 16 that mention unimplemented `evaluate/predict` are historical and do not
+  represent the current runtime status after Phases 2-8.
+
+## 23. Open Questions (Updated)
+- [Closed] Threshold optimization MVP inclusion
+  - Status: implemented as binary-only **opt-in** feature in Phase 7.
+- [P1] Frontier alpha default and objective finalization (`pinball` details).
+- [P1] Time-series split advanced options (`blocked/gap/embargo`) timeline.
+- [P2] Export ONNX support prioritization.
+
+## 24. 2026-02-10 Hyperparameter Tuning MVP (Phase 8)
+### 24.1 Goal
+- Activate `runner.tune(config)` while preserving stable API signatures.
+- Keep behavior non-intrusive for existing `fit/predict/evaluate` paths.
+
+### 24.2 Scope
+- Supported tasks: regression, binary, multiclass.
+- Optimization backend: Optuna TPE sampler with fixed seed (`train.seed`).
+- Outputs:
+  - `artifacts/tuning/<run_id>/study_summary.json`
+  - `artifacts/tuning/<run_id>/trials.parquet`
+
+### 24.3 Objective contract
+- regression: minimize `rmse`
+- binary: maximize `auc`
+- multiclass: maximize `macro_f1`
+
+### 24.4 Design constraints
+- `tuning.enabled=true` is required for `tune`.
+- `data.path` is required for `tune`.
+- Binary threshold optimization remains opt-in for prediction/evaluation flow, but is disabled inside
+  tuning objective evaluation to avoid adding threshold-policy effects to probability metric search.
