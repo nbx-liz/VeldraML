@@ -80,3 +80,4 @@ examples/out/
 examples/data/*.csv
 examples/data/*.parquet
 examples/data/sklearn_data/
+**/.veldra_tuning_artifacts/

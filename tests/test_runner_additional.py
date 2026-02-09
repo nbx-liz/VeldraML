@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from veldra.api import Artifact, evaluate, export, fit, predict, simulate, tune
+from veldra.api import Artifact, evaluate, export, fit, predict, simulate
 from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
 from veldra.config.models import RunConfig
 
@@ -50,10 +50,7 @@ def test_fit_validation_and_notimplemented_paths(tmp_path) -> None:
         fit(_config_payload("regression", path=None))
 
 
-def test_tune_simulate_export_are_unimplemented() -> None:
-    with pytest.raises(VeldraNotImplementedError):
-        tune(_config_payload("regression"))
-
+def test_simulate_and_export_are_unimplemented() -> None:
     artifact = _artifact_for_task("regression")
     with pytest.raises(VeldraNotImplementedError):
         simulate(artifact, data=None, scenarios=None)

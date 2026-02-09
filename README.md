@@ -11,6 +11,7 @@ Current implemented tasks are regression, binary classification, and multiclass 
 - Regression workflow: `fit`, `predict`, `evaluate`
 - Binary workflow: `fit`, `predict`, `evaluate` with OOF-based Platt calibration
 - Multiclass workflow: `fit`, `predict`, `evaluate`
+- Hyperparameter tuning workflow: `tune` (regression/binary/multiclass)
 
 ## Project Status
 
@@ -18,9 +19,10 @@ Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=regression`
 - `fit`, `predict`, `evaluate` for `task.type=binary`
 - `fit`, `predict`, `evaluate` for `task.type=multiclass`
+- `tune` for `task.type=regression|binary|multiclass` (Optuna-based MVP)
 
 Not implemented yet:
-- `tune`, `simulate`, `export`
+- `simulate`, `export`
 - frontier training
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
@@ -66,6 +68,24 @@ pred = predict(artifact, frame.drop(columns=["target"]))
 ev = evaluate(artifact, frame)
 ```
 
+### API usage (tuning)
+
+```python
+from veldra.api import tune
+
+tune_result = tune(
+    {
+        "config_version": 1,
+        "task": {"type": "regression"},
+        "data": {"path": "train.csv", "target": "target"},
+        "split": {"type": "kfold", "n_splits": 5, "seed": 42},
+        "tuning": {"enabled": True, "n_trials": 20, "preset": "fast"},
+        "export": {"artifact_dir": "artifacts"},
+    }
+)
+print(tune_result.best_score, tune_result.best_params)
+```
+
 ### Example scripts
 
 Regression (California Housing):
@@ -105,6 +125,25 @@ Example outputs are saved under `examples/out/<timestamp>/`:
 - `predictions_sample.csv`
 - `used_config.yaml`
 - `artifacts/<run_id>/...`
+
+Tune demo (single script for all supported tasks):
+
+```bash
+uv run python examples/run_demo_tune.py --task regression --n-trials 10
+uv run python examples/run_demo_tune.py --task binary --objective logloss --n-trials 20
+uv run python examples/run_demo_tune.py --task multiclass --objective accuracy --n-trials 20
+```
+
+Tune resume / verbosity / custom search-space:
+
+```bash
+uv run python examples/run_demo_tune.py \
+  --task regression \
+  --study-name my_study \
+  --resume \
+  --log-level DEBUG \
+  --search-space-file examples/search_space_regression.yaml
+```
 
 ## Development
 

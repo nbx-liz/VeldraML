@@ -35,7 +35,7 @@ def test_api_symbols_are_importable() -> None:
     assert hasattr(Artifact, "simulate")
 
 
-def test_unimplemented_runner_endpoints_raise_consistent_error(tmp_path) -> None:
+def test_runner_endpoints_raise_consistent_error_for_unimplemented_only(tmp_path) -> None:
     frame = pd.DataFrame({"x1": [0.0, 1.0, 2.0, 3.0], "y": [0.2, 1.1, 1.9, 3.2]})
     data_path = tmp_path / "train.csv"
     frame.to_csv(data_path, index=False)
@@ -47,8 +47,11 @@ def test_unimplemented_runner_endpoints_raise_consistent_error(tmp_path) -> None
     run = fit(payload)
     artifact = Artifact.load(run.artifact_path)
 
-    with pytest.raises(VeldraNotImplementedError):
-        tune(payload)
+    tune_payload = dict(payload)
+    tune_payload["tuning"] = {"enabled": True, "n_trials": 1, "preset": "fast"}
+    tune_result = tune(tune_payload)
+    assert tune_result.best_score is not None
+    assert tune_result.best_params
     with pytest.raises(VeldraNotImplementedError):
         evaluate(payload, data=None)
     with pytest.raises(VeldraValidationError):

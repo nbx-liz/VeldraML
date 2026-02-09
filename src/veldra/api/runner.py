@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import numpy as np
+import optuna
 import pandas as pd
 from pydantic import ValidationError
 from sklearn.metrics import (
@@ -37,12 +38,27 @@ from veldra.api.types import (
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
+    build_study_name,
+    run_tuning,
     train_binary_with_cv,
     train_multiclass_with_cv,
     train_regression_with_cv,
 )
 
 LOGGER = logging.getLogger("veldra")
+
+_LOG_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+_OPTUNA_LOG_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": optuna.logging.DEBUG,
+    "INFO": optuna.logging.INFO,
+    "WARNING": optuna.logging.WARNING,
+    "ERROR": optuna.logging.ERROR,
+}
 
 
 def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
@@ -118,8 +134,86 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
 
 
 def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
-    _ = _ensure_config(config)
-    raise VeldraNotImplementedError("tune is not implemented in MVP scaffold.")
+    parsed = _ensure_config(config)
+    if parsed.task.type == "frontier":
+        raise VeldraNotImplementedError(
+            "tune is currently implemented only for task.type='regression', 'binary', or "
+            "'multiclass'."
+        )
+    if parsed.task.type not in {"regression", "binary", "multiclass"}:
+        raise VeldraValidationError(f"Unsupported task type for tune: '{parsed.task.type}'.")
+    if not parsed.tuning.enabled:
+        raise VeldraValidationError("tuning.enabled must be true to run tune().")
+    if parsed.tuning.n_trials < 1:
+        raise VeldraValidationError("tuning.n_trials must be >= 1.")
+    if not parsed.data.path:
+        raise VeldraValidationError("data.path is required for tune.")
+
+    log_level = _LOG_LEVEL_MAP[parsed.tuning.log_level]
+    optuna.logging.set_verbosity(_OPTUNA_LOG_LEVEL_MAP[parsed.tuning.log_level])
+
+    frame = load_tabular_data(parsed.data.path)
+    run_id = uuid4().hex
+    study_name = build_study_name(parsed)
+    tuning_path = Path(parsed.export.artifact_dir) / "tuning" / study_name
+    tuning_path.mkdir(parents=True, exist_ok=True)
+    storage_path = tuning_path / "study.db"
+    storage_url = f"sqlite:///{storage_path.resolve()}"
+    summary_path = tuning_path / "study_summary.json"
+    trials_path = tuning_path / "trials.parquet"
+
+    def _trial_progress(payload: dict[str, Any]) -> None:
+        log_event(
+            LOGGER,
+            log_level,
+            "tune trial completed",
+            run_id=run_id,
+            artifact_path=str(tuning_path),
+            task_type=parsed.task.type,
+            **payload,
+        )
+
+    tuning_output = run_tuning(
+        config=parsed,
+        data=frame,
+        run_id=run_id,
+        study_name=study_name,
+        storage_url=storage_url,
+        resume=parsed.tuning.resume,
+        output_dir=tuning_path,
+        on_trial_complete=_trial_progress,
+    )
+
+    log_event(
+        LOGGER,
+        log_level,
+        "tune completed",
+        run_id=run_id,
+        artifact_path=str(tuning_path),
+        task_type=parsed.task.type,
+        n_trials=tuning_output.n_trials,
+        metric_name=tuning_output.metric_name,
+        study_name=study_name,
+        resume=parsed.tuning.resume,
+    )
+    return TuneResult(
+        run_id=run_id,
+        task_type=parsed.task.type,
+        best_params=tuning_output.best_params,
+        best_score=tuning_output.best_score,
+        metadata={
+            "n_trials": tuning_output.n_trials,
+            "metric_name": tuning_output.metric_name,
+            "direction": tuning_output.direction,
+            "seed": parsed.train.seed,
+            "tuning_path": str(tuning_path),
+            "summary_path": str(summary_path),
+            "trials_path": str(trials_path),
+            "study_name": study_name,
+            "storage_url": storage_url,
+            "resume": parsed.tuning.resume,
+        },
+    )
 
 
 def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:

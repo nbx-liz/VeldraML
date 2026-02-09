@@ -10,7 +10,15 @@ import numpy as np
 import pandas as pd
 from sklearn.calibration import calibration_curve
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    brier_score_loss,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import GroupKFold, KFold, StratifiedKFold
 
 from veldra.api.exceptions import VeldraValidationError
@@ -166,6 +174,18 @@ def _binary_metrics(y_true: np.ndarray, p_pred: np.ndarray) -> dict[str, float]:
     }
 
 
+def _binary_label_metrics(
+    y_true: np.ndarray, p_pred: np.ndarray, threshold: float
+) -> dict[str, float]:
+    label_pred = (p_pred >= threshold).astype(int)
+    return {
+        "accuracy": float(accuracy_score(y_true, label_pred)),
+        "f1": float(f1_score(y_true, label_pred, zero_division=0)),
+        "precision": float(precision_score(y_true, label_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, label_pred, zero_division=0)),
+    }
+
+
 def _find_best_threshold_f1(y_true: np.ndarray, p_pred: np.ndarray) -> tuple[float, pd.DataFrame]:
     candidates = np.arange(0.01, 1.0, 0.01)
     records: list[dict[str, float]] = []
@@ -255,8 +275,9 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
     calibrator.fit(oof_raw.reshape(-1, 1), y.to_numpy())
     oof_cal = calibrator.predict_proba(oof_raw.reshape(-1, 1))[:, 1]
 
-    mean_raw = _binary_metrics(y.to_numpy(), oof_raw)
-    mean_cal = _binary_metrics(y.to_numpy(), oof_cal)
+    y_true = y.to_numpy()
+    mean_raw = _binary_metrics(y_true, oof_raw)
+    mean_cal = _binary_metrics(y_true, oof_cal)
     cv_results = pd.DataFrame.from_records(fold_records)
 
     prob_true, prob_pred = calibration_curve(
@@ -309,6 +330,9 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
             else 0.5
         )
         threshold = {"policy": "fixed", "value": threshold_value}
+
+    mean_label = _binary_label_metrics(y_true, oof_cal, float(threshold["value"]))
+    mean_cal = {**mean_cal, **mean_label}
 
     return BinaryTrainingOutput(
         model_text=final_model.model_to_string(),
