@@ -99,5 +99,15 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     "postprocess.calibration/threshold can only be set when task.type='binary'"
                 )
+        else:
+            if (
+                self.postprocess.calibration is not None
+                and self.postprocess.calibration != "platt"
+            ):
+                raise ValueError("binary calibration supports only 'platt' in current phase")
+            if self.postprocess.threshold is not None and not (
+                0.0 <= self.postprocess.threshold <= 1.0
+            ):
+                raise ValueError("postprocess.threshold must be between 0 and 1")
 
         return self

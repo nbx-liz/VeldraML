@@ -59,3 +59,32 @@ def test_unimplemented_runner_endpoints_raise_consistent_error(tmp_path) -> None
         simulate(artifact, data=None, scenarios=None)
     with pytest.raises(VeldraNotImplementedError):
         export(artifact, format="python")
+
+
+def test_binary_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "x1": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            "x2": [1.0, 0.8, 1.2, 0.7, 1.1, 0.9],
+            "y": [0, 0, 0, 1, 1, 1],
+        }
+    )
+    data_path = tmp_path / "binary_train.csv"
+    frame.to_csv(data_path, index=False)
+
+    payload = {
+        "config_version": 1,
+        "task": {"type": "binary"},
+        "data": {"path": str(data_path), "target": "y"},
+        "split": {"type": "stratified", "n_splits": 2, "seed": 1},
+        "postprocess": {"calibration": "platt"},
+        "export": {"artifact_dir": str(tmp_path)},
+    }
+    run = fit(payload)
+    artifact = Artifact.load(run.artifact_path)
+
+    pred = predict(artifact, data=frame[["x1", "x2"]])
+    assert list(pred.data.columns) == ["p_cal", "p_raw", "label_pred"]
+
+    eval_result = evaluate(artifact, frame)
+    assert {"auc", "logloss", "brier"} <= set(eval_result.metrics)

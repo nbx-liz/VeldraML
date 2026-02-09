@@ -178,3 +178,98 @@
 **Open Questions**
 - [ ] Should the next example phase prioritize binary calibration flow or multiclass baseline first?
 - [ ] Should artifact re-evaluation examples accept file-path input directly in addition to DataFrame-only API usage?
+
+### 2026-02-09 (Session/PR: phase5-binary-fit-predict-evaluate-oof-calibration)
+**Context**
+- Extend MVP from regression-only runtime to binary runtime with OOF-safe calibration.
+- Preserve stable API signatures and enforce artifact-based reproducibility.
+
+**Plan**
+- Add binary training core with CV and OOF Platt calibration.
+- Extend artifact persistence for calibrator/calibration diagnostics/fixed threshold.
+- Enable binary predict/evaluate through existing stable API entrypoints.
+- Add binary-focused unit tests and update design/history docs.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/modeling/binary.py`.
+  - Updated `src/veldra/modeling/__init__.py` exports.
+  - Updated `src/veldra/api/runner.py` for binary `fit/predict/evaluate`.
+  - Updated `src/veldra/api/artifact.py` for binary prediction path.
+  - Updated `src/veldra/artifact/store.py` to persist/load binary extras.
+  - Updated `src/veldra/config/models.py` for binary calibration/threshold validation.
+- Tests:
+  - Added `tests/test_binary_fit_smoke.py`
+  - Added `tests/test_binary_oof_calibration.py`
+  - Added `tests/test_binary_predict_contract.py`
+  - Added `tests/test_binary_evaluate_metrics.py`
+  - Added `tests/test_binary_artifact_roundtrip.py`
+  - Updated `tests/test_api_surface.py`
+  - Updated `tests/test_runconfig_validation.py`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - OOF-only fit is mandatory for probability calibration in binary flow.
+  - Reason:
+    - Prevent calibration leakage and keep evaluation defensible.
+  - Impact area:
+    - Modeling / Validation / Reproducibility
+
+- Decision: confirmed
+  - Policy:
+    - Binary prediction contract is `p_cal` (default), plus `p_raw` and `label_pred`.
+  - Reason:
+    - Balance operational simplicity with auditability/debuggability.
+  - Impact area:
+    - API / Artifact / Consumer contract
+
+- Decision: confirmed
+  - Policy:
+    - Binary evaluation metrics are `auc`, `logloss`, `brier`.
+  - Reason:
+    - Covers discrimination and probability quality.
+  - Impact area:
+    - Evaluation / Reporting
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : 35 passed.
+- `uv run coverage run -m pytest -q && uv run coverage report -m` : TOTAL 94%.
+- Binary sample run (`fit` + `evaluate`) metrics snapshot:
+  - fit mean: `auc=0.9534`, `logloss=0.3247`, `brier=0.0955`
+  - evaluate: `auc=1.0000`, `logloss=0.1065`, `brier=0.0103`
+
+**Risks / Notes**
+- Threshold optimization remains out of scope in this phase (fixed 0.5 only).
+- `tune/simulate/export` remain unimplemented.
+
+**Open Questions**
+- [ ] Should Phase 6 prioritize binary threshold optimization or multiclass baseline first?
+- [ ] Should binary `label_pred` support original class label restoration in API output?
+
+### 2026-02-09 (Session/PR follow-up: phase5-binary-examples)
+**Context**
+- Extend examples after Phase 5 merge so binary workflow is reproducible end-to-end like regression.
+
+**Changes**
+- Added scripts:
+  - `examples/prepare_demo_data_binary.py`
+  - `examples/run_demo_binary.py`
+  - `examples/evaluate_demo_binary_artifact.py`
+- Updated docs:
+  - `examples/README.md` with binary commands and outputs.
+  - `DESIGN_BLUEPRINT.md` with binary examples note.
+- Added tests:
+  - `tests/test_examples_prepare_demo_data_binary.py`
+  - `tests/test_examples_run_demo_binary.py`
+  - `tests/test_examples_evaluate_demo_binary_artifact.py`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Binary examples are included as first-class adapter scripts in the repository.
+  - Reason:
+    - Keep onboarding and regression/binary parity for reproducible demo flows.
+  - Impact area:
+    - Examples / Documentation / QA

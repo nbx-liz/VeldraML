@@ -42,3 +42,21 @@ def test_group_split_requires_group_col() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_binary_calibration_allows_only_platt_in_current_phase() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "binary"}
+    payload["postprocess"] = {"calibration": "isotonic"}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_binary_threshold_must_be_between_zero_and_one() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "binary"}
+    payload["postprocess"] = {"threshold": 1.5}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

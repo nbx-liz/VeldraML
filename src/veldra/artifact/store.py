@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import joblib
 import pandas as pd
 
 from veldra.api.exceptions import VeldraArtifactError
@@ -22,6 +23,9 @@ def save_artifact(
     model_text: str | None = None,
     metrics: dict[str, Any] | None = None,
     cv_results: pd.DataFrame | None = None,
+    calibrator: Any | None = None,
+    calibration_curve: pd.DataFrame | None = None,
+    threshold: dict[str, Any] | None = None,
 ) -> None:
     artifact_dir = Path(path)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -43,6 +47,15 @@ def save_artifact(
         )
     if cv_results is not None:
         cv_results.to_parquet(artifact_dir / "cv_results.parquet", index=False)
+    if calibrator is not None:
+        joblib.dump(calibrator, artifact_dir / "calibrator.pkl")
+    if calibration_curve is not None:
+        calibration_curve.to_csv(artifact_dir / "calibration_curve.csv", index=False)
+    if threshold is not None:
+        (artifact_dir / "threshold.json").write_text(
+            json.dumps(threshold, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
 
 def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any], dict[str, Any]]:
@@ -69,15 +82,27 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         "model_text": None,
         "metrics": None,
         "cv_results": None,
+        "calibrator": None,
+        "calibration_curve": None,
+        "threshold": None,
     }
     model_path = artifact_dir / "model.lgb.txt"
     metrics_path = artifact_dir / "metrics.json"
     cv_results_path = artifact_dir / "cv_results.parquet"
+    calibrator_path = artifact_dir / "calibrator.pkl"
+    calibration_curve_path = artifact_dir / "calibration_curve.csv"
+    threshold_path = artifact_dir / "threshold.json"
     if model_path.exists():
         extras["model_text"] = model_path.read_text(encoding="utf-8")
     if metrics_path.exists():
         extras["metrics"] = json.loads(metrics_path.read_text(encoding="utf-8"))
     if cv_results_path.exists():
         extras["cv_results"] = pd.read_parquet(cv_results_path)
+    if calibrator_path.exists():
+        extras["calibrator"] = joblib.load(calibrator_path)
+    if calibration_curve_path.exists():
+        extras["calibration_curve"] = pd.read_csv(calibration_curve_path)
+    if threshold_path.exists():
+        extras["threshold"] = json.loads(threshold_path.read_text(encoding="utf-8"))
 
     return run_config, manifest, feature_schema, extras
