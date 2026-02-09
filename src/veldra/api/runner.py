@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pandas as pd
 from pydantic import ValidationError
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from veldra.api.artifact import Artifact
 from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
@@ -84,8 +85,55 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
 
 
 def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
-    _ = artifact_or_config, data
-    raise VeldraNotImplementedError("evaluate is not implemented in MVP scaffold.")
+    if not isinstance(artifact_or_config, Artifact):
+        raise VeldraNotImplementedError(
+            "evaluate currently supports Artifact input only."
+        )
+
+    artifact = artifact_or_config
+    if artifact.run_config.task.type != "regression":
+        raise VeldraNotImplementedError(
+            "evaluate is currently implemented only for task.type='regression'."
+        )
+    if not isinstance(data, pd.DataFrame):
+        raise VeldraValidationError("evaluate input must be a pandas.DataFrame.")
+    if data.empty:
+        raise VeldraValidationError("evaluate input DataFrame is empty.")
+
+    target_col = artifact.run_config.data.target
+    if target_col not in data.columns:
+        raise VeldraValidationError(
+            f"evaluate input is missing target column '{target_col}'."
+        )
+
+    y_true = data[target_col]
+    x_eval = data.drop(columns=[target_col])
+    y_pred = artifact.predict(x_eval)
+
+    rmse = float(mean_squared_error(y_true, y_pred) ** 0.5)
+    mae = float(mean_absolute_error(y_true, y_pred))
+    r2 = float(r2_score(y_true, y_pred))
+    metrics = {"rmse": rmse, "mae": mae, "r2": r2}
+    metadata = {
+        "n_rows": int(len(data)),
+        "target": target_col,
+        "artifact_run_id": artifact.manifest.run_id,
+    }
+
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "evaluate completed",
+        run_id=artifact.manifest.run_id,
+        artifact_path=None,
+        task_type=artifact.run_config.task.type,
+        n_rows=metadata["n_rows"],
+    )
+    return EvalResult(
+        task_type=artifact.run_config.task.type,
+        metrics=metrics,
+        metadata=metadata,
+    )
 
 
 def predict(artifact: Artifact, data: Any) -> Prediction:
