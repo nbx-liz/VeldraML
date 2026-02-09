@@ -270,3 +270,31 @@ export（任意）：
 - [Next] Binary calibration demo order:
   - Candidate A: implement binary training first, then examples.
   - Candidate B: ship a synthetic-only binary example before full binary training.
+
+---
+
+## 18. 2026-02-09 Binary Workflow (Phase 5)
+### 18.1 Goal
+- Implement binary `fit/predict/evaluate` with OOF-based probability calibration.
+- Keep stable API signatures unchanged and add behavior only.
+
+### 18.2 Implemented scope
+- `fit` supports `task.type='binary'`.
+- `predict` supports binary artifacts and returns `p_cal`, `p_raw`, `label_pred`.
+- `evaluate` supports binary artifacts and returns `auc`, `logloss`, `brier`.
+- OOF raw predictions are used to fit Platt calibrator.
+
+### 18.3 Binary artifact additions
+- `calibrator.pkl`
+- `calibration_curve.csv`
+- `threshold.json` (fixed threshold 0.5)
+
+### 18.4 Validation and constraints
+- Binary target must contain exactly two classes.
+- For this phase, `postprocess.calibration` supports `platt` only.
+- Threshold value validation: `0.0 <= threshold <= 1.0`.
+
+### 18.5 API behavior notes
+- Stable API signatures remain unchanged.
+- `Artifact.predict` now supports regression and binary.
+- `runner.evaluate` now supports regression and binary for Artifact input.
