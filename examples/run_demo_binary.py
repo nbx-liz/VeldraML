@@ -48,6 +48,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--n-splits", type=int, default=5, help="CV fold count.")
+    parser.add_argument(
+        "--optimize-threshold",
+        action="store_true",
+        help="Enable binary threshold optimization (disabled by default).",
+    )
     return parser.parse_args(argv)
 
 
@@ -56,14 +61,21 @@ def build_run_config(
     artifact_dir: Path,
     seed: int,
     n_splits: int,
+    optimize_threshold: bool,
 ) -> dict[str, Any]:
+    postprocess: dict[str, Any] = {"calibration": "platt"}
+    if optimize_threshold:
+        postprocess["threshold_optimization"] = {"enabled": True, "objective": "f1"}
+    else:
+        postprocess["threshold"] = 0.5
+
     return {
         "config_version": 1,
         "task": {"type": "binary"},
         "data": {"path": str(train_path), "target": DEFAULT_TARGET},
         "split": {"type": "stratified", "n_splits": n_splits, "seed": seed},
         "train": {"seed": seed, "early_stopping_rounds": 50},
-        "postprocess": {"calibration": "platt", "threshold": 0.5},
+        "postprocess": postprocess,
         "export": {"artifact_dir": str(artifact_dir)},
     }
 
@@ -104,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact_dir=run_dir / "artifacts",
             seed=args.seed,
             n_splits=args.n_splits,
+            optimize_threshold=args.optimize_threshold,
         )
 
         run_result = fit(config)
@@ -131,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"auc: {eval_result.metrics['auc']:.6f}")
     print(f"logloss: {eval_result.metrics['logloss']:.6f}")
     print(f"brier: {eval_result.metrics['brier']:.6f}")
+    print(f"threshold: {eval_result.metrics.get('threshold', 0.5):.6f}")
+    print(f"threshold_policy: {artifact.threshold.get('policy')}")
     print(f"output_dir: {run_dir}")
     return 0
 

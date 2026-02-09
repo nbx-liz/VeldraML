@@ -26,6 +26,7 @@ def save_artifact(
     calibrator: Any | None = None,
     calibration_curve: pd.DataFrame | None = None,
     threshold: dict[str, Any] | None = None,
+    threshold_curve: pd.DataFrame | None = None,
 ) -> None:
     artifact_dir = Path(path)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +57,8 @@ def save_artifact(
             json.dumps(threshold, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+    if threshold_curve is not None:
+        threshold_curve.to_csv(artifact_dir / "threshold_curve.csv", index=False)
 
 
 def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any], dict[str, Any]]:
@@ -85,6 +88,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         "calibrator": None,
         "calibration_curve": None,
         "threshold": None,
+        "threshold_curve": None,
     }
     model_path = artifact_dir / "model.lgb.txt"
     metrics_path = artifact_dir / "metrics.json"
@@ -92,6 +96,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
     calibrator_path = artifact_dir / "calibrator.pkl"
     calibration_curve_path = artifact_dir / "calibration_curve.csv"
     threshold_path = artifact_dir / "threshold.json"
+    threshold_curve_path = artifact_dir / "threshold_curve.csv"
     if model_path.exists():
         extras["model_text"] = model_path.read_text(encoding="utf-8")
     if metrics_path.exists():
@@ -104,5 +109,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         extras["calibration_curve"] = pd.read_csv(calibration_curve_path)
     if threshold_path.exists():
         extras["threshold"] = json.loads(threshold_path.read_text(encoding="utf-8"))
+    if threshold_curve_path.exists():
+        extras["threshold_curve"] = pd.read_csv(threshold_curve_path)
 
     return run_config, manifest, feature_schema, extras

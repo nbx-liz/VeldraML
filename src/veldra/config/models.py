@@ -54,6 +54,13 @@ class PostprocessConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     calibration: CalibrationType | None = None
     threshold: float | None = None
+    threshold_optimization: "ThresholdOptimizationConfig | None" = None
+
+
+class ThresholdOptimizationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    objective: Literal["f1"] = "f1"
 
 
 class SimulationConfig(BaseModel):
@@ -95,9 +102,14 @@ class RunConfig(BaseModel):
             raise ValueError("split.group_col is required when split.type='group'")
 
         if self.task.type != "binary":
-            if self.postprocess.calibration is not None or self.postprocess.threshold is not None:
+            if (
+                self.postprocess.calibration is not None
+                or self.postprocess.threshold is not None
+                or self.postprocess.threshold_optimization is not None
+            ):
                 raise ValueError(
-                    "postprocess.calibration/threshold can only be set when task.type='binary'"
+                    "postprocess.calibration/threshold/threshold_optimization can only be set "
+                    "when task.type='binary'"
                 )
         else:
             if (
@@ -109,5 +121,14 @@ class RunConfig(BaseModel):
                 0.0 <= self.postprocess.threshold <= 1.0
             ):
                 raise ValueError("postprocess.threshold must be between 0 and 1")
+            if (
+                self.postprocess.threshold_optimization is not None
+                and self.postprocess.threshold_optimization.enabled
+                and self.postprocess.threshold is not None
+            ):
+                raise ValueError(
+                    "postprocess.threshold cannot be combined with enabled "
+                    "postprocess.threshold_optimization"
+                )
 
         return self

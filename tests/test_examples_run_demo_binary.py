@@ -53,6 +53,8 @@ def test_run_demo_binary_writes_expected_outputs(tmp_path) -> None:
     artifact_path = run_result["artifact_path"]
     assert artifact_path
     assert (run_dir / "artifacts").exists()
+    used_config = (run_dir / "used_config.yaml").read_text(encoding="utf-8")
+    assert "threshold_optimization" not in used_config
 
     pred_sample = pd.read_csv(pred_sample_path)
     assert {"target", "p_cal", "p_raw", "label_pred"} <= set(pred_sample.columns)
@@ -64,3 +66,29 @@ def test_run_demo_binary_requires_prepared_csv(tmp_path) -> None:
         run_demo_binary.main(["--data-path", str(missing_path)])
 
     assert "prepare_demo_data_binary.py" in str(exc_info.value)
+
+
+def test_run_demo_binary_with_threshold_optimization_flag(tmp_path) -> None:
+    data_path = tmp_path / "demo_binary.csv"
+    out_dir = tmp_path / "out"
+    _binary_frame().to_csv(data_path, index=False)
+
+    exit_code = run_demo_binary.main(
+        [
+            "--data-path",
+            str(data_path),
+            "--out-dir",
+            str(out_dir),
+            "--seed",
+            "11",
+            "--n-splits",
+            "3",
+            "--optimize-threshold",
+        ]
+    )
+
+    assert exit_code == 0
+    run_dirs = [path for path in out_dir.iterdir() if path.is_dir()]
+    run_dir = run_dirs[0]
+    used_config = (run_dir / "used_config.yaml").read_text(encoding="utf-8")
+    assert "threshold_optimization" in used_config

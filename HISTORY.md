@@ -369,3 +369,43 @@
   - `macro_f1=0.979998`
   - `logloss=0.163656`
   - `n_rows=150`
+
+### 2026-02-10 (Session/PR: phase7-binary-threshold-optimization-optin)
+**Context**
+- Add binary threshold optimization while keeping default runtime behavior unchanged.
+- Ensure optimization is explicit opt-in and does not interfere with typical usage.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - added `postprocess.threshold_optimization` config
+    - added validation for binary-only usage and conflict with fixed threshold
+  - Updated `src/veldra/modeling/binary.py`:
+    - added optional OOF `p_cal` threshold optimization (F1)
+    - added optional threshold curve generation
+  - Updated `src/veldra/artifact/store.py` and `src/veldra/api/artifact.py`:
+    - added optional `threshold_curve.csv` save/load
+  - Updated `src/veldra/api/runner.py`:
+    - binary evaluate now includes threshold-dependent metrics
+    - binary metadata includes threshold policy/value
+  - Updated examples/docs:
+    - `examples/run_demo_binary.py` adds `--optimize-threshold` flag
+    - `examples/evaluate_demo_binary_artifact.py` prints threshold-dependent metrics
+    - `README.md` documents opt-in threshold optimization usage
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Threshold optimization is opt-in only; default remains fixed threshold.
+  - Reason:
+    - Avoid changing established behavior in common production usage.
+  - Impact area:
+    - Compatibility / Operability / API behavior
+
+- Decision: confirmed
+  - Policy:
+    - Threshold optimization uses OOF calibrated probabilities only.
+  - Reason:
+    - Prevent leakage and preserve defensible evaluation.
+  - Impact area:
+    - Modeling / Validation

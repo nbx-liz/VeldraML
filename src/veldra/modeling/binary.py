@@ -27,6 +27,7 @@ class BinaryTrainingOutput:
     calibrator: LogisticRegression
     calibration_curve: pd.DataFrame
     threshold: dict[str, Any]
+    threshold_curve: pd.DataFrame | None = None
 
 
 def _to_python_scalar(value: Any) -> Any:
@@ -165,6 +166,37 @@ def _binary_metrics(y_true: np.ndarray, p_pred: np.ndarray) -> dict[str, float]:
     }
 
 
+def _find_best_threshold_f1(y_true: np.ndarray, p_pred: np.ndarray) -> tuple[float, pd.DataFrame]:
+    candidates = np.arange(0.01, 1.0, 0.01)
+    records: list[dict[str, float]] = []
+    best_threshold = 0.5
+    best_f1 = -1.0
+
+    for threshold in candidates:
+        label_pred = (p_pred >= threshold).astype(int)
+        tp = float(np.sum((y_true == 1) & (label_pred == 1)))
+        fp = float(np.sum((y_true == 0) & (label_pred == 1)))
+        fn = float(np.sum((y_true == 1) & (label_pred == 0)))
+
+        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+        recall = tp / (tp + fn) if tp + fn > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if precision + recall > 0 else 0.0
+
+        records.append(
+            {
+                "threshold": float(threshold),
+                "f1": float(f1),
+                "precision": float(precision),
+                "recall": float(recall),
+            }
+        )
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = float(threshold)
+
+    return best_threshold, pd.DataFrame.from_records(records)
+
+
 def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainingOutput:
     """Train binary model with CV, then fit Platt calibrator on OOF predictions."""
     if config.task.type != "binary":
@@ -259,7 +291,25 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         "task_type": config.task.type,
         "target_classes": target_classes,
     }
-    threshold = {"policy": "fixed", "value": 0.5}
+    threshold_optimization = config.postprocess.threshold_optimization
+    use_optimization = bool(threshold_optimization and threshold_optimization.enabled)
+
+    threshold_curve: pd.DataFrame | None = None
+    if use_optimization:
+        best_threshold, threshold_curve = _find_best_threshold_f1(y.to_numpy(), oof_cal)
+        threshold = {
+            "policy": "optimized_f1",
+            "value": float(best_threshold),
+            "source": "oof_p_cal",
+        }
+    else:
+        threshold_value = (
+            float(config.postprocess.threshold)
+            if config.postprocess.threshold is not None
+            else 0.5
+        )
+        threshold = {"policy": "fixed", "value": threshold_value}
+
     return BinaryTrainingOutput(
         model_text=final_model.model_to_string(),
         metrics=metrics,
@@ -268,4 +318,5 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         calibrator=calibrator,
         calibration_curve=calibration_df,
         threshold=threshold,
+        threshold_curve=threshold_curve,
     )
