@@ -184,6 +184,22 @@ class Artifact:
             payload[f"proba_{class_label}"] = proba[:, idx]
         return pd.DataFrame(payload, index=x.index)
 
+    def _predict_frontier(self, source_df: pd.DataFrame, x: pd.DataFrame) -> pd.DataFrame:
+        pred = np.asarray(self._get_booster().predict(x), dtype=float)
+        payload: dict[str, Any] = {"frontier_pred": pred}
+
+        target_col = self.feature_schema.get("target", self.run_config.data.target)
+        if isinstance(target_col, str) and target_col in source_df.columns:
+            try:
+                y_obs = source_df[target_col].to_numpy(dtype=float)
+            except Exception as exc:
+                raise VeldraValidationError(
+                    f"Frontier target column '{target_col}' must be numeric for u_hat output."
+                ) from exc
+            payload["u_hat"] = np.maximum(0.0, pred - y_obs)
+
+        return pd.DataFrame(payload, index=x.index)
+
     def predict(self, df: Any) -> Any:
         if not isinstance(df, pd.DataFrame):
             raise VeldraValidationError("predict input must be a pandas.DataFrame.")
@@ -195,9 +211,11 @@ class Artifact:
             return self._predict_binary(x)
         if self.run_config.task.type == "multiclass":
             return self._predict_multiclass(x)
+        if self.run_config.task.type == "frontier":
+            return self._predict_frontier(df, x)
         raise VeldraNotImplementedError(
-            "Artifact.predict is currently implemented only for regression, binary, and "
-            "multiclass tasks."
+            "Artifact.predict is currently implemented only for regression, binary, multiclass, "
+            "and frontier tasks."
         )
 
     def simulate(self, df: Any, scenario: dict[str, Any]) -> Any:

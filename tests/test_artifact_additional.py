@@ -92,6 +92,9 @@ def test_predict_and_simulate_unimplemented_paths() -> None:
     artifact = _artifact("frontier")
     with pytest.raises(VeldraValidationError, match="pandas.DataFrame"):
         artifact.predict([1, 2, 3])
+    with pytest.raises(VeldraValidationError, match="model is missing"):
+        artifact.predict(pd.DataFrame({"x1": [1.0]}))
+    artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraNotImplementedError, match="implemented only"):
         artifact.predict(pd.DataFrame({"x1": [1.0]}))
     with pytest.raises(VeldraNotImplementedError, match="not implemented"):

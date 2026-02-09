@@ -391,11 +391,11 @@ export（任意）：
 | --- | --- | --- |
 | `fit` | Implemented | regression, binary, multiclass |
 | `predict` | Implemented | regression, binary, multiclass |
-| `evaluate` | Implemented | Artifact input path for regression, binary, multiclass |
+| `evaluate` | Implemented | Artifact input path for regression, binary, multiclass, frontier |
 | `tune` | Implemented (Phase 8 MVP) | regression, binary, multiclass (Optuna TPE) |
 | `simulate` | Not implemented | Kept as stable API stub |
 | `export` | Not implemented | Kept as stable API stub |
-| `frontier` task runtime | Not implemented | Config model exists, runtime deferred |
+| `frontier` task runtime | Implemented (Phase 9 MVP) | fit/predict/evaluate with quantile baseline |
 
 ## 22. Historical Note for Section 16
 - Section 16 records the **Phase 1 point-in-time state**.
@@ -405,7 +405,9 @@ export（任意）：
 ## 23. Open Questions (Updated)
 - [Closed] Threshold optimization MVP inclusion
   - Status: implemented as binary-only **opt-in** feature in Phase 7.
-- [P1] Frontier alpha default and objective finalization (`pinball` details).
+- [Closed] Frontier alpha default and objective finalization
+  - Status: Phase 9 sets default `alpha=0.90`, objective `quantile`, and metric contract
+    (`pinball`, `mae`, `mean_u_hat`, `coverage`).
 - [P1] Time-series split advanced options (`blocked/gap/embargo`) timeline.
 - [P2] Export ONNX support prioritization.
 
@@ -474,3 +476,62 @@ export（任意）：
 ### 26.3 Non-intrusive behavior
 - `fit/predict/evaluate` are unaffected.
 - Binary threshold optimization remains opt-in and is disabled during tuning objective scoring.
+
+## 27. 2026-02-10 Frontier Runtime MVP Proposal (Phase 9)
+### 27.1 Goal
+- Activate `task.type="frontier"` runtime for `fit/predict/evaluate` while preserving stable API
+  signatures.
+- Keep implementation minimal and non-intrusive for existing regression/binary/multiclass paths.
+
+### 27.2 Confirmed proposal defaults
+- Frontier quantile objective uses `objective="quantile"` and `metric="quantile"`.
+- Frontier default alpha is `0.90` when not explicitly configured.
+- MVP scope is limited to:
+  - `fit(config)`
+  - `predict(artifact, data)`
+  - `evaluate(artifact, data)` (Artifact input path only)
+
+### 27.3 Proposed config contract
+- Add `frontier.alpha: float = 0.90` under `RunConfig`.
+- Validation rules:
+  - `0 < frontier.alpha < 1` for `task.type="frontier"`.
+  - `split.type="stratified"` is forbidden for frontier.
+  - Non-frontier tasks must not set non-default `frontier` values.
+
+### 27.4 Proposed metric contract
+- CV/evaluation metrics for frontier:
+  - `pinball`
+  - `mae`
+  - `mean_u_hat` where `u_hat = max(0, frontier_pred - y_true)`
+  - `coverage` where `coverage = mean(y_true <= frontier_pred)`
+
+### 27.5 Proposed prediction contract
+- `Artifact.predict(df)` for frontier returns DataFrame with:
+  - `frontier_pred` (always)
+  - `u_hat` (only when target column exists in `df`)
+
+### 27.6 Compatibility notes
+- `tune(frontier)`, `simulate`, and `export` remain intentionally unimplemented.
+- Existing task contracts and outputs remain unchanged.
+
+## 28. 2026-02-10 Frontier Runtime MVP (Phase 9, implemented)
+### 28.1 Added capabilities
+- `fit` now supports `task.type="frontier"` with LightGBM quantile objective.
+- `predict` now supports frontier and returns DataFrame with:
+  - `frontier_pred` always
+  - `u_hat` when labeled input contains target column
+- `evaluate(artifact, data)` now supports frontier and returns:
+  - `pinball`, `mae`, `mean_u_hat`, `coverage`
+
+### 28.2 Config/runtime contract
+- Added `RunConfig.frontier.alpha` with default `0.90`.
+- Frontier validation:
+  - requires `0 < alpha < 1`
+  - rejects `split.type='stratified'`
+  - non-frontier tasks cannot override default frontier config
+
+### 28.3 Artifact and compatibility notes
+- Existing artifact files remain unchanged; frontier extras are stored in existing:
+  - `feature_schema.json` (`frontier_alpha`)
+  - `metrics.json`
+- `tune(frontier)`, `simulate`, and `export` remain intentionally unimplemented.
