@@ -247,3 +247,29 @@
 **Open Questions**
 - [ ] Should Phase 6 prioritize binary threshold optimization or multiclass baseline first?
 - [ ] Should binary `label_pred` support original class label restoration in API output?
+
+### 2026-02-09 (Session/PR follow-up: phase5-binary-examples)
+**Context**
+- Extend examples after Phase 5 merge so binary workflow is reproducible end-to-end like regression.
+
+**Changes**
+- Added scripts:
+  - `examples/prepare_demo_data_binary.py`
+  - `examples/run_demo_binary.py`
+  - `examples/evaluate_demo_binary_artifact.py`
+- Updated docs:
+  - `examples/README.md` with binary commands and outputs.
+  - `DESIGN_BLUEPRINT.md` with binary examples note.
+- Added tests:
+  - `tests/test_examples_prepare_demo_data_binary.py`
+  - `tests/test_examples_run_demo_binary.py`
+  - `tests/test_examples_evaluate_demo_binary_artifact.py`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Binary examples are included as first-class adapter scripts in the repository.
+  - Reason:
+    - Keep onboarding and regression/binary parity for reproducible demo flows.
+  - Impact area:
+    - Examples / Documentation / QA

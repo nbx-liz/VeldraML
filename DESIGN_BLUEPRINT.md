@@ -298,3 +298,12 @@ export（任意）：
 - Stable API signatures remain unchanged.
 - `Artifact.predict` now supports regression and binary.
 - `runner.evaluate` now supports regression and binary for Artifact input.
+
+### 18.6 Examples extension for binary workflow
+- Added binary demo scripts under `examples/`:
+  - `prepare_demo_data_binary.py` for local dataset preparation (Breast Cancer CSV).
+  - `run_demo_binary.py` for end-to-end `fit/predict/evaluate`.
+  - `evaluate_demo_binary_artifact.py` for artifact re-evaluation.
+- Binary example output contract follows regression examples:
+  - `run_result.json`, `eval_result.json`, `predictions_sample.csv`, `used_config.yaml`.
+- This extension is adapter-side only and does not change `veldra.api.*` signatures.
