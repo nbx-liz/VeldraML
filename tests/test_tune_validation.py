@@ -70,6 +70,21 @@ def test_tune_requires_path_and_positive_trials() -> None:
         )
 
 
+def test_tune_rejects_invalid_objective_by_task(tmp_path) -> None:
+    frame = pd.DataFrame({"x1": [0.0, 1.0], "target": [0.0, 1.0]})
+    path = tmp_path / "reg.csv"
+    frame.to_csv(path, index=False)
+    with pytest.raises(VeldraValidationError, match="Invalid RunConfig"):
+        tune(
+            {
+                "config_version": 1,
+                "task": {"type": "regression"},
+                "data": {"path": str(path), "target": "target"},
+                "tuning": {"enabled": True, "n_trials": 1, "objective": "auc"},
+            }
+        )
+
+
 def test_binary_tune_forces_threshold_optimization_off(monkeypatch, tmp_path) -> None:
     frame = _binary_frame()
     path = tmp_path / "bin.csv"
@@ -101,4 +116,3 @@ def test_binary_tune_forces_threshold_optimization_off(monkeypatch, tmp_path) ->
 
     assert result.best_score == 0.75
     assert seen["enabled"] is False
-

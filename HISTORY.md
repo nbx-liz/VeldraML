@@ -508,3 +508,115 @@
 **Traceability note**
 - The `Decision: provisional` entries in the 2026-02-10 Phase 6 planning section are now resolved by
   the confirmed implementation entry: `2026-02-10 (Session/PR: phase6-multiclass-fit-predict-evaluate-examples)`.
+
+### 2026-02-10 (Session planning: phase8.1-tune-expansion)
+**Context**
+- Expand tune runtime for practical optimization workflows (objective selection, resume, progress
+  logging, and tune examples).
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Objective is selectable with task-specific allowed choices.
+  - Reason:
+    - Preserve safety and clarity while avoiding free-form invalid objective names.
+  - Impact area:
+    - Config / Tuning / API behavior
+
+- Decision: provisional
+  - Policy:
+    - Resume is implemented using Optuna SQLite (`study.db`) in artifact tuning directory.
+  - Reason:
+    - Ensure trial-level durability and restartability for interrupted runs.
+  - Impact area:
+    - Operability / Reproducibility
+
+- Decision: provisional
+  - Policy:
+    - Tune progress logs are emitted during optimization with selectable log level.
+  - Reason:
+    - Improve observability during long optimization runs.
+  - Impact area:
+    - Logging / Operations
+
+### 2026-02-10 (Session/PR: phase8.1-tune-expansion-implementation)
+**Context**
+- Extend tune runtime to support objective selection, resume, progress logging, and runnable examples.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - tuning fields added: `objective`, `resume`, `study_name`, `log_level`
+    - task-constrained objective validation added
+  - Updated `src/veldra/modeling/tuning.py`:
+    - objective-aware direction mapping
+    - deterministic/default `study_name` generation
+    - SQLite storage support with resume handling
+    - trial callback persistence (`study_summary.json`, `trials.parquet`)
+  - Updated `src/veldra/api/runner.py`:
+    - structured progress logs per trial (`tune trial completed`)
+    - log level mapped from config
+    - resume/non-resume study behavior and storage path management
+  - Updated `src/veldra/modeling/binary.py`:
+    - added binary threshold-dependent mean metrics for tune objective compatibility
+  - Added `examples/run_demo_tune.py`:
+    - task switch, objective override, resume, study-name, log-level, search-space-file
+- Tests added:
+  - `tests/test_tune_objective_selection.py`
+  - `tests/test_tune_resume.py`
+  - `tests/test_tune_logging.py`
+  - `tests/test_examples_run_demo_tune.py`
+- Tests updated:
+  - `tests/test_tune_validation.py`
+  - `tests/test_tuning_internal.py`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Tuning objective is selectable, but constrained by task-specific allowed metrics.
+  - Reason:
+    - Enable flexibility while preventing invalid objective configurations.
+  - Impact area:
+    - Config / Tuning / API behavior
+
+- Decision: confirmed
+  - Policy:
+    - Resume uses Optuna SQLite in `artifacts/tuning/<study_name>/study.db`.
+  - Reason:
+    - Preserve progress across interruptions and allow controlled continuation.
+  - Impact area:
+    - Reproducibility / Operability
+
+- Decision: confirmed
+  - Policy:
+    - Progress logs are emitted per trial with configurable level from `tuning.log_level`.
+  - Reason:
+    - Improve observability for long-running optimization.
+  - Impact area:
+    - Logging / Operations
+
+- Decision: confirmed
+  - Policy:
+    - `tuning.search_space` remains the primary contract to choose target parameters and ranges.
+  - Reason:
+    - Keep optimization boundary explicit and controllable by users.
+  - Impact area:
+    - Tuning UX / Reproducibility
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed.
+- Tune now supports:
+  - objective selection
+  - resume continuation
+  - per-trial persisted progress
+  - configurable logging level
+  - unified tune demo script with CLI overrides
+
+**Risks / Notes**
+- Progress persistence writes per trial; very high trial counts can increase artifact I/O.
+- For non-resume runs with existing study name, explicit conflict error is returned by design.
+
+**Open Questions**
+- [ ] Should pruning strategy (e.g., median pruner) be introduced in a later phase?
+- [ ] Should tune results have a dedicated load API (Artifact-like) beyond file outputs?

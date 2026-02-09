@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import numpy as np
+import optuna
 import pandas as pd
 from pydantic import ValidationError
 from sklearn.metrics import (
@@ -38,6 +38,7 @@ from veldra.api.types import (
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
+    build_study_name,
     run_tuning,
     train_binary_with_cv,
     train_multiclass_with_cv,
@@ -45,6 +46,19 @@ from veldra.modeling import (
 )
 
 LOGGER = logging.getLogger("veldra")
+
+_LOG_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+_OPTUNA_LOG_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": optuna.logging.DEBUG,
+    "INFO": optuna.logging.INFO,
+    "WARNING": optuna.logging.WARNING,
+    "ERROR": optuna.logging.ERROR,
+}
 
 
 def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
@@ -135,37 +149,52 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     if not parsed.data.path:
         raise VeldraValidationError("data.path is required for tune.")
 
-    frame = load_tabular_data(parsed.data.path)
-    tuning_output = run_tuning(config=parsed, data=frame)
+    log_level = _LOG_LEVEL_MAP[parsed.tuning.log_level]
+    optuna.logging.set_verbosity(_OPTUNA_LOG_LEVEL_MAP[parsed.tuning.log_level])
 
+    frame = load_tabular_data(parsed.data.path)
     run_id = uuid4().hex
-    tuning_path = Path(parsed.export.artifact_dir) / "tuning" / run_id
+    study_name = build_study_name(parsed)
+    tuning_path = Path(parsed.export.artifact_dir) / "tuning" / study_name
     tuning_path.mkdir(parents=True, exist_ok=True)
+    storage_path = tuning_path / "study.db"
+    storage_url = f"sqlite:///{storage_path.resolve()}"
     summary_path = tuning_path / "study_summary.json"
     trials_path = tuning_path / "trials.parquet"
 
-    summary = {
-        "run_id": run_id,
-        "task_type": parsed.task.type,
-        "metric_name": tuning_output.metric_name,
-        "direction": tuning_output.direction,
-        "best_score": tuning_output.best_score,
-        "best_params": tuning_output.best_params,
-        "n_trials": tuning_output.n_trials,
-        "seed": parsed.train.seed,
-    }
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    tuning_output.trials.to_parquet(trials_path, index=False)
+    def _trial_progress(payload: dict[str, Any]) -> None:
+        log_event(
+            LOGGER,
+            log_level,
+            "tune trial completed",
+            run_id=run_id,
+            artifact_path=str(tuning_path),
+            task_type=parsed.task.type,
+            **payload,
+        )
+
+    tuning_output = run_tuning(
+        config=parsed,
+        data=frame,
+        run_id=run_id,
+        study_name=study_name,
+        storage_url=storage_url,
+        resume=parsed.tuning.resume,
+        output_dir=tuning_path,
+        on_trial_complete=_trial_progress,
+    )
 
     log_event(
         LOGGER,
-        logging.INFO,
+        log_level,
         "tune completed",
         run_id=run_id,
         artifact_path=str(tuning_path),
         task_type=parsed.task.type,
         n_trials=tuning_output.n_trials,
         metric_name=tuning_output.metric_name,
+        study_name=study_name,
+        resume=parsed.tuning.resume,
     )
     return TuneResult(
         run_id=run_id,
@@ -180,6 +209,9 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
             "tuning_path": str(tuning_path),
             "summary_path": str(summary_path),
             "trials_path": str(trials_path),
+            "study_name": study_name,
+            "storage_url": storage_url,
+            "resume": parsed.tuning.resume,
         },
     )
 

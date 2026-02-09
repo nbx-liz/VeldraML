@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import optuna
 import pandas as pd
+from optuna.exceptions import DuplicatedStudyError
 
 from veldra.api.exceptions import VeldraValidationError
-from veldra.config.models import RunConfig
+from veldra.config.models import RunConfig, resolve_tuning_objective
 from veldra.modeling.binary import train_binary_with_cv
 from veldra.modeling.multiclass import train_multiclass_with_cv
 from veldra.modeling.regression import train_regression_with_cv
@@ -23,20 +27,44 @@ class TuningOutput:
     direction: str
     n_trials: int
     trials: pd.DataFrame
+    study_name: str
+    storage_url: str
 
 
-def _objective_spec(task_type: str) -> tuple[str, str]:
-    mapping = {
-        "regression": ("rmse", "minimize"),
-        "binary": ("auc", "maximize"),
-        "multiclass": ("macro_f1", "maximize"),
+def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
+    try:
+        metric_name = resolve_tuning_objective(task_type, objective)
+    except ValueError as exc:
+        raise VeldraValidationError(str(exc)) from exc
+    direction_by_metric = {
+        "rmse": "minimize",
+        "mae": "minimize",
+        "r2": "maximize",
+        "auc": "maximize",
+        "logloss": "minimize",
+        "brier": "minimize",
+        "accuracy": "maximize",
+        "f1": "maximize",
+        "precision": "maximize",
+        "recall": "maximize",
+        "macro_f1": "maximize",
     }
-    if task_type not in mapping:
-        raise VeldraValidationError(f"Unsupported task type for tuning: '{task_type}'.")
-    return mapping[task_type]
+    if metric_name not in direction_by_metric:
+        raise VeldraValidationError(f"Unsupported objective metric '{metric_name}'.")
+    return metric_name, direction_by_metric[metric_name]
+
+
+def build_study_name(config: RunConfig) -> str:
+    if config.tuning.study_name:
+        return config.tuning.study_name
+    payload = config.model_dump(mode="json", exclude_none=True)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    suffix = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+    return f"{config.task.type}_tune_{suffix}"
 
 
 def _default_search_space(task_type: str, preset: str) -> dict[str, Any]:
+    _ = task_type
     if preset == "fast":
         return {
             "learning_rate": {"type": "float", "low": 0.02, "high": 0.2, "log": True},
@@ -138,18 +166,89 @@ def _study_trials_dataframe(study: optuna.Study) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
-def run_tuning(config: RunConfig, data: pd.DataFrame) -> TuningOutput:
+def _best_snapshot(study: optuna.Study) -> tuple[float | None, dict[str, Any]]:
+    try:
+        trial = study.best_trial
+    except ValueError:
+        return None, {}
+    if trial.value is None:
+        return None, {}
+    return float(trial.value), dict(trial.params)
+
+
+def _write_tuning_artifacts(
+    output_dir: Path,
+    summary: dict[str, Any],
+    trials: pd.DataFrame,
+) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "study_summary.json"
+    trials_path = output_dir / "trials.parquet"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    trials.to_parquet(trials_path, index=False)
+    return summary_path, trials_path
+
+
+def run_tuning(
+    config: RunConfig,
+    data: pd.DataFrame,
+    *,
+    run_id: str,
+    study_name: str,
+    storage_url: str,
+    resume: bool,
+    output_dir: Path,
+    on_trial_complete: Callable[[dict[str, Any]], None] | None = None,
+) -> TuningOutput:
     """Run Optuna tuning and return summary payload for API adapter layer."""
     if config.task.type not in {"regression", "binary", "multiclass"}:
         raise VeldraValidationError(
             "run_tuning supports only regression/binary/multiclass tasks."
         )
 
-    metric_name, direction = _objective_spec(config.task.type)
+    metric_name, direction = _objective_spec(config.task.type, config.tuning.objective)
     search_space = _resolve_search_space(config)
-
     sampler = optuna.samplers.TPESampler(seed=config.train.seed)
-    study = optuna.create_study(direction=direction, sampler=sampler)
+
+    try:
+        study = optuna.create_study(
+            study_name=study_name,
+            direction=direction,
+            sampler=sampler,
+            storage=storage_url,
+            load_if_exists=resume,
+        )
+    except DuplicatedStudyError as exc:
+        raise VeldraValidationError(
+            f"Study '{study_name}' already exists. Set tuning.resume=true to continue or use "
+            "a different tuning.study_name."
+        ) from exc
+
+    def callback(study_obj: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        best_value, best_params = _best_snapshot(study_obj)
+        trials_df = _study_trials_dataframe(study_obj)
+        summary = {
+            "run_id": run_id,
+            "task_type": config.task.type,
+            "study_name": study_name,
+            "storage_url": storage_url,
+            "metric_name": metric_name,
+            "direction": direction,
+            "best_score": best_value,
+            "best_params": best_params,
+            "n_trials": int(len(study_obj.trials)),
+            "seed": config.train.seed,
+        }
+        _write_tuning_artifacts(output_dir, summary, trials_df)
+        if on_trial_complete is not None:
+            on_trial_complete(
+                {
+                    "trial_number": int(trial.number),
+                    "trial_value": None if trial.value is None else float(trial.value),
+                    "best_value": best_value,
+                    "n_trials_done": int(len(study_obj.trials)),
+                }
+            )
 
     def objective(trial: optuna.Trial) -> float:
         params: dict[str, Any] = {}
@@ -158,16 +257,33 @@ def run_tuning(config: RunConfig, data: pd.DataFrame) -> TuningOutput:
         trial_cfg = _build_trial_config(config, params)
         return _score_for_task(trial_cfg, data, metric_name)
 
-    study.optimize(objective, n_trials=config.tuning.n_trials)
+    study.optimize(objective, n_trials=config.tuning.n_trials, callbacks=[callback])
+
+    best_value, best_params = _best_snapshot(study)
+    if best_value is None:
+        raise VeldraValidationError("Tuning finished without a completed trial.")
 
     trials = _study_trials_dataframe(study)
-    best = study.best_trial
+    summary = {
+        "run_id": run_id,
+        "task_type": config.task.type,
+        "study_name": study_name,
+        "storage_url": storage_url,
+        "metric_name": metric_name,
+        "direction": direction,
+        "best_score": best_value,
+        "best_params": best_params,
+        "n_trials": int(len(study.trials)),
+        "seed": config.train.seed,
+    }
+    _write_tuning_artifacts(output_dir, summary, trials)
     return TuningOutput(
-        best_params=dict(best.params),
-        best_score=float(best.value),
+        best_params=best_params,
+        best_score=best_value,
         metric_name=metric_name,
         direction=direction,
         n_trials=int(len(study.trials)),
         trials=trials,
+        study_name=study_name,
+        storage_url=storage_url,
     )
-

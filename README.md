@@ -126,6 +126,25 @@ Example outputs are saved under `examples/out/<timestamp>/`:
 - `used_config.yaml`
 - `artifacts/<run_id>/...`
 
+Tune demo (single script for all supported tasks):
+
+```bash
+uv run python examples/run_demo_tune.py --task regression --n-trials 10
+uv run python examples/run_demo_tune.py --task binary --objective logloss --n-trials 20
+uv run python examples/run_demo_tune.py --task multiclass --objective accuracy --n-trials 20
+```
+
+Tune resume / verbosity / custom search-space:
+
+```bash
+uv run python examples/run_demo_tune.py \
+  --task regression \
+  --study-name my_study \
+  --resume \
+  --log-level DEBUG \
+  --search-space-file examples/search_space_regression.yaml
+```
+
 ## Development
 
 Run quality checks:

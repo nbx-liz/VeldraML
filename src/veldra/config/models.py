@@ -10,6 +10,18 @@ TaskType = Literal["regression", "binary", "multiclass", "frontier"]
 SplitType = Literal["kfold", "stratified", "group", "timeseries"]
 CalibrationType = Literal["platt", "isotonic"]
 TuningPreset = Literal["fast", "standard"]
+TuningLogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+
+_TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
+    "regression": {"rmse", "mae", "r2"},
+    "binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall"},
+    "multiclass": {"accuracy", "macro_f1", "logloss"},
+}
+_TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
+    "regression": "rmse",
+    "binary": "auc",
+    "multiclass": "macro_f1",
+}
 
 
 class TaskConfig(BaseModel):
@@ -48,6 +60,10 @@ class TuningConfig(BaseModel):
     n_trials: int = 30
     search_space: dict[str, Any] = Field(default_factory=dict)
     preset: TuningPreset = "standard"
+    objective: str | None = None
+    resume: bool = False
+    study_name: str | None = None
+    log_level: TuningLogLevel = "INFO"
 
 
 class PostprocessConfig(BaseModel):
@@ -131,4 +147,27 @@ class RunConfig(BaseModel):
                     "postprocess.threshold_optimization"
                 )
 
+        if self.task.type in _TUNE_ALLOWED_OBJECTIVES:
+            objective = self.tuning.objective
+            if objective is not None and objective not in _TUNE_ALLOWED_OBJECTIVES[self.task.type]:
+                allowed = sorted(_TUNE_ALLOWED_OBJECTIVES[self.task.type])
+                raise ValueError(
+                    f"tuning.objective '{objective}' is not allowed for task.type="
+                    f"'{self.task.type}'. Allowed: {allowed}"
+                )
+
         return self
+
+
+def resolve_tuning_objective(task_type: str, objective: str | None) -> str:
+    if task_type not in _TUNE_ALLOWED_OBJECTIVES:
+        raise ValueError(f"Unsupported task type for tuning objective: '{task_type}'")
+    if objective is None:
+        return _TUNE_DEFAULT_OBJECTIVES[task_type]
+    if objective not in _TUNE_ALLOWED_OBJECTIVES[task_type]:
+        allowed = sorted(_TUNE_ALLOWED_OBJECTIVES[task_type])
+        raise ValueError(
+            f"tuning.objective '{objective}' is not allowed for task.type='{task_type}'. "
+            f"Allowed: {allowed}"
+        )
+    return objective

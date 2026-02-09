@@ -431,3 +431,46 @@ export（任意）：
 - `data.path` is required for `tune`.
 - Binary threshold optimization remains opt-in for prediction/evaluation flow, but is disabled inside
   tuning objective evaluation to avoid adding threshold-policy effects to probability metric search.
+
+## 25. 2026-02-10 Hyperparameter Tuning Expansion Proposal (Phase 8.1)
+### 25.1 Proposal
+- Extend tuning to support:
+  - selectable objective per task (task-constrained choices)
+  - resumable study execution via Optuna SQLite storage
+  - per-trial progress persistence (`study_summary.json`, `trials.parquet`)
+  - progress logs with configurable log level
+  - single runnable tune example script with CLI overrides
+
+### 25.2 Rationale
+- Improves practical usability for long-running optimization jobs.
+- Reduces risk of losing work on interruptions.
+- Keeps stable API signatures unchanged while expanding behavior.
+
+### 25.3 Compatibility notes
+- Existing `fit/predict/evaluate` behavior remains unchanged.
+- Binary threshold optimization remains fully opt-in and separated from tuning objectives.
+
+## 26. 2026-02-10 Hyperparameter Tuning Expansion (Phase 8.1, implemented)
+### 26.1 Added capabilities
+- Objective selection with task-constrained allowed values:
+  - regression: `rmse|mae|r2`
+  - binary: `auc|logloss|brier|accuracy|f1|precision|recall`
+  - multiclass: `accuracy|macro_f1|logloss`
+- Resumable tuning via Optuna SQLite:
+  - `artifacts/tuning/<study_name>/study.db`
+- Trial-by-trial persistence:
+  - `study_summary.json`
+  - `trials.parquet`
+- Progress logging with configurable level (`DEBUG|INFO|WARNING|ERROR`).
+- Single tune demo script:
+  - `examples/run_demo_tune.py`
+
+### 26.2 Runtime contract
+- `tune` remains `veldra.api.runner.tune(config) -> TuneResult` (signature unchanged).
+- `tuning.enabled=true` is required for execution.
+- `tuning.resume=true` continues existing study; otherwise existing study name is rejected.
+- `tuning.search_space` is the formal user contract for optimization target parameters and ranges.
+
+### 26.3 Non-intrusive behavior
+- `fit/predict/evaluate` are unaffected.
+- Binary threshold optimization remains opt-in and is disabled during tuning objective scoring.

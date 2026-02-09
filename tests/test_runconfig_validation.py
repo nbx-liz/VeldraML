@@ -89,3 +89,13 @@ def test_threshold_optimization_conflicts_with_fixed_threshold() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_tuning_objective_is_task_constrained() -> None:
+    payload = _minimal_payload()
+    payload["tuning"] = {"enabled": True, "n_trials": 1, "objective": "rmse"}
+    RunConfig.model_validate(payload)
+
+    payload["tuning"]["objective"] = "auc"
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

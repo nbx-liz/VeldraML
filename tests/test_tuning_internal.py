@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -36,11 +37,16 @@ class _Trial:
 
 
 def test_objective_and_default_search_space_validation() -> None:
-    assert tuning._objective_spec("regression") == ("rmse", "minimize")
-    assert tuning._objective_spec("binary") == ("auc", "maximize")
-    assert tuning._objective_spec("multiclass") == ("macro_f1", "maximize")
+    assert tuning._objective_spec("regression", None) == ("rmse", "minimize")
+    assert tuning._objective_spec("binary", None) == ("auc", "maximize")
+    assert tuning._objective_spec("multiclass", None) == ("macro_f1", "maximize")
+    assert tuning._objective_spec("regression", "r2") == ("r2", "maximize")
+    assert tuning._objective_spec("binary", "logloss") == ("logloss", "minimize")
+    assert tuning._objective_spec("multiclass", "logloss") == ("logloss", "minimize")
     with pytest.raises(VeldraValidationError):
-        tuning._objective_spec("frontier")
+        tuning._objective_spec("frontier", None)
+    with pytest.raises(VeldraValidationError):
+        tuning._objective_spec("binary", "r2")
     with pytest.raises(VeldraValidationError):
         tuning._default_search_space("regression", "unknown")
     assert tuning._default_search_space("regression", "standard")
@@ -87,5 +93,20 @@ def test_score_for_task_validation_paths(monkeypatch) -> None:
 def test_run_tuning_rejects_unsupported_task() -> None:
     frame = pd.DataFrame({"x1": [0.1, 0.2], "target": [0.0, 1.0]})
     with pytest.raises(VeldraValidationError):
-        tuning.run_tuning(_config("frontier"), frame)
+        tuning.run_tuning(
+            _config("frontier"),
+            frame,
+            run_id="rid",
+            study_name="s",
+            storage_url="sqlite:///dummy.db",
+            resume=False,
+            output_dir=Path("dummy"),
+        )
 
+
+def test_build_study_name_is_deterministic() -> None:
+    cfg = _config("regression")
+    first = tuning.build_study_name(cfg)
+    second = tuning.build_study_name(cfg)
+    assert first == second
+    assert first.startswith("regression_tune_")
