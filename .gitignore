@@ -33,6 +33,12 @@ pip-delete-this-directory.txt
 # Unit test / coverage reports
 .pytest_cache/
 .pytest_tmp/
+.pytest_tmp*/
+.tmp_tests*/
+pytest-of-*/
+pytest_temp_root_phase4/
+pytest_tmp_manual/
+tmp_tests/
 .coverage
 .coverage.*
 coverage.xml
@@ -67,6 +73,7 @@ env/
 .idea/
 .vscode/
 *.code-workspace
+.codex/
 
 # OS files
 .DS_Store
@@ -75,3 +82,6 @@ Desktop.ini
 
 # Project artifacts
 artifacts/
+examples/out/
+examples/data/*.csv
+examples/data/sklearn_data/

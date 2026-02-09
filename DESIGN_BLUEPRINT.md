@@ -233,3 +233,40 @@ export（任意）：
 - 必須ファイル: `manifest.json`, `run_config.yaml`, `feature_schema.json`。
 - manifestには `manifest_version`, `project_version`, `run_id`, `task_type`,
   `config_version`, `config_hash`, `python_version`, `dependencies`, `created_at_utc` を保存する。
+
+---
+
+## 17. 2026-02-09 Examples and Demo Flow (Phase 4)
+### 17.1 Goal
+- Add runnable examples that execute the regression workflow on real demo data.
+- Keep the stable API unchanged while making onboarding and reproducibility easier.
+
+### 17.2 Included scripts
+- `examples/prepare_demo_data.py`
+  - Downloads California Housing with `fetch_california_housing(as_frame=True)`.
+  - Writes `examples/data/california_housing.csv` with a normalized target column name: `target`.
+  - Uses `examples/data/sklearn_data` as local dataset cache to avoid permission issues.
+- `examples/run_demo_regression.py`
+  - Reads local CSV, performs train/test split, runs `fit`, `evaluate`, and `predict`.
+  - Stores outputs under `examples/out/<timestamp>/`.
+- `examples/evaluate_demo_artifact.py`
+  - Loads an existing Artifact and re-runs `evaluate` on labeled tabular data.
+
+### 17.3 Output contract for demo run
+- `run_result.json`
+- `eval_result.json`
+- `predictions_sample.csv`
+- `used_config.yaml`
+- Artifact files under `artifacts/<run_id>/`
+
+### 17.4 Design constraints
+- Examples are adapter-side helpers only and do not introduce business logic into core modules.
+- Demo data file is generated locally and is not committed.
+- Failure cases must give actionable hints (missing CSV, target column mismatch, invalid artifact path).
+
+### 17.5 Open Questions updates
+- [Closed] Should examples with real data be included in MVP follow-up phases?
+  - Decision: yes (Phase 4).
+- [Next] Binary calibration demo order:
+  - Candidate A: implement binary training first, then examples.
+  - Candidate B: ship a synthetic-only binary example before full binary training.
