@@ -48,6 +48,7 @@ def test_binary_fit_smoke_creates_artifact_with_calibration_files(tmp_path) -> N
         "threshold.json",
     }
     assert expected_files <= {path.name for path in artifact_path.iterdir()}
+    assert "threshold_curve.csv" not in {path.name for path in artifact_path.iterdir()}
 
     artifact = Artifact.load(artifact_path)
     pred = artifact.predict(frame[["x1", "x2"]])

@@ -69,3 +69,23 @@ def test_multiclass_disallows_postprocess_calibration_and_threshold() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_threshold_optimization_is_binary_only() -> None:
+    payload = _minimal_payload()
+    payload["postprocess"] = {"threshold_optimization": {"enabled": True, "objective": "f1"}}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_threshold_optimization_conflicts_with_fixed_threshold() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "binary"}
+    payload["postprocess"] = {
+        "threshold": 0.5,
+        "threshold_optimization": {"enabled": True, "objective": "f1"},
+    }
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

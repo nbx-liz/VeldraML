@@ -37,7 +37,16 @@ def test_binary_evaluate_returns_auc_logloss_brier(tmp_path) -> None:
     result = evaluate(artifact, frame)
 
     assert result.task_type == "binary"
-    assert {"auc", "logloss", "brier"} <= set(result.metrics)
+    assert {
+        "auc",
+        "logloss",
+        "brier",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "threshold",
+    } <= set(result.metrics)
     assert result.metadata["n_rows"] == len(frame)
     assert result.metadata["target"] == "target"
 

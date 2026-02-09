@@ -353,3 +353,33 @@ export（任意）：
   - `run_demo_multiclass.py`
   - `evaluate_demo_multiclass_artifact.py`
 - Stable API signatures remain unchanged.
+
+---
+
+## 20. 2026-02-10 Binary Threshold Optimization (Phase 7)
+### 20.1 Goal
+- Add optional binary threshold optimization without changing default behavior.
+- Keep existing jobs fully compatible unless optimization is explicitly enabled.
+
+### 20.2 Non-intrusive default policy
+- `postprocess.threshold_optimization` is disabled by default.
+- When disabled:
+  - threshold remains fixed (`postprocess.threshold` or fallback `0.5`)
+  - no additional optimization artifact files are produced
+  - predict/evaluate runtime path stays lightweight
+
+### 20.3 Opt-in optimization policy
+- Enabled only via explicit config:
+  - `postprocess.threshold_optimization.enabled: true`
+  - `objective: "f1"` (current phase)
+- Optimization data source:
+  - OOF calibrated probabilities (`p_cal`) only.
+- Saved outputs:
+  - `threshold.json` with `policy: optimized_f1`
+  - `threshold_curve.csv` (optional, optimization enabled only)
+
+### 20.4 Binary evaluate extension
+- Keep existing probability metrics:
+  - `auc`, `logloss`, `brier`
+- Add threshold-dependent metrics:
+  - `accuracy`, `f1`, `precision`, `recall`, `threshold`

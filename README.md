@@ -22,7 +22,7 @@ Implemented:
 Not implemented yet:
 - `tune`, `simulate`, `export`
 - frontier training
-- threshold optimization for binary classification (fixed `0.5` in current phase)
+- threshold optimization is optional for binary classification (default is fixed `0.5`)
 
 ## Requirements
 
@@ -82,6 +82,12 @@ Binary (Breast Cancer):
 uv run python examples/prepare_demo_data_binary.py
 uv run python examples/run_demo_binary.py
 uv run python examples/evaluate_demo_binary_artifact.py --artifact-path <artifact_dir>
+```
+
+Optional: enable binary threshold optimization explicitly:
+
+```bash
+uv run python examples/run_demo_binary.py --optimize-threshold
 ```
 
 Multiclass (Iris):

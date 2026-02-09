@@ -34,6 +34,7 @@ class Artifact:
         calibrator: Any | None = None,
         calibration_curve: pd.DataFrame | None = None,
         threshold: dict[str, Any] | None = None,
+        threshold_curve: pd.DataFrame | None = None,
     ) -> None:
         self.run_config = run_config
         self.manifest = manifest
@@ -44,6 +45,7 @@ class Artifact:
         self.calibrator = calibrator
         self.calibration_curve = calibration_curve
         self.threshold = threshold or {"policy": "fixed", "value": 0.5}
+        self.threshold_curve = threshold_curve
         self._booster: lgb.Booster | None = None
 
     @classmethod
@@ -58,6 +60,7 @@ class Artifact:
         calibrator: Any | None = None,
         calibration_curve: pd.DataFrame | None = None,
         threshold: dict[str, Any] | None = None,
+        threshold_curve: pd.DataFrame | None = None,
     ) -> "Artifact":
         manifest = build_manifest(
             run_config=run_config,
@@ -74,6 +77,7 @@ class Artifact:
             calibrator=calibrator,
             calibration_curve=calibration_curve,
             threshold=threshold,
+            threshold_curve=threshold_curve,
         )
 
     @classmethod
@@ -89,6 +93,7 @@ class Artifact:
             calibrator=extras.get("calibrator"),
             calibration_curve=extras.get("calibration_curve"),
             threshold=extras.get("threshold"),
+            threshold_curve=extras.get("threshold_curve"),
         )
 
     def save(self, path: str | Path) -> None:
@@ -103,6 +108,7 @@ class Artifact:
             calibrator=self.calibrator,
             calibration_curve=self.calibration_curve,
             threshold=self.threshold,
+            threshold_curve=self.threshold_curve,
         )
 
     def _get_booster(self) -> lgb.Booster:

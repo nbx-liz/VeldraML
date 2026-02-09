@@ -57,7 +57,16 @@ def test_evaluate_demo_binary_artifact_writes_metrics(tmp_path) -> None:
     eval_only_path = run_dirs[0] / "eval_only_result.json"
     assert eval_only_path.exists()
     payload = json.loads(eval_only_path.read_text(encoding="utf-8"))
-    assert set(payload["metrics"]) == {"auc", "logloss", "brier"}
+    assert {
+        "auc",
+        "logloss",
+        "brier",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "threshold",
+    } <= set(payload["metrics"])
 
 
 def test_evaluate_demo_binary_artifact_requires_target_column(tmp_path) -> None:

@@ -17,7 +17,9 @@ from sklearn.metrics import (
     log_loss,
     mean_absolute_error,
     mean_squared_error,
+    precision_score,
     r2_score,
+    recall_score,
     roc_auc_score,
 )
 
@@ -83,6 +85,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         calibrator=getattr(training_output, "calibrator", None),
         calibration_curve=getattr(training_output, "calibration_curve", None),
         threshold=getattr(training_output, "threshold", None),
+        threshold_curve=getattr(training_output, "threshold_curve", None),
     )
     artifact.save(artifact_path)
     log_event(
@@ -99,6 +102,18 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         task_type=parsed.task.type,
         artifact_path=str(artifact_path),
         metrics={k: float(v) for k, v in mean_metrics.items()},
+        metadata={
+            "threshold_policy": (
+                artifact.threshold.get("policy")
+                if parsed.task.type == "binary" and artifact.threshold
+                else None
+            ),
+            "threshold_value": (
+                float(artifact.threshold.get("value"))
+                if parsed.task.type == "binary" and artifact.threshold is not None
+                else None
+            ),
+        },
     )
 
 
@@ -162,10 +177,17 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
                 "Binary evaluation requires both classes to be present in input data."
             )
         p_cal = np.clip(pred_frame["p_cal"].to_numpy(dtype=float), 1e-7, 1 - 1e-7)
+        threshold_value = float((artifact.threshold or {}).get("value", 0.5))
+        label_pred = (p_cal >= threshold_value).astype(int)
         metrics = {
             "auc": float(roc_auc_score(y_binary, p_cal)),
             "logloss": float(log_loss(y_binary, p_cal, labels=[0, 1])),
             "brier": float(brier_score_loss(y_binary, p_cal)),
+            "accuracy": float(accuracy_score(y_binary, label_pred)),
+            "f1": float(f1_score(y_binary, label_pred, zero_division=0)),
+            "precision": float(precision_score(y_binary, label_pred, zero_division=0)),
+            "recall": float(recall_score(y_binary, label_pred, zero_division=0)),
+            "threshold": threshold_value,
         }
     else:
         pred_frame = artifact.predict(x_eval)
@@ -213,6 +235,16 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         "n_rows": int(len(data)),
         "target": target_col,
         "artifact_run_id": artifact.manifest.run_id,
+        "threshold_policy": (
+            artifact.threshold.get("policy")
+            if artifact.run_config.task.type == "binary" and artifact.threshold
+            else None
+        ),
+        "threshold_value": (
+            float(artifact.threshold.get("value"))
+            if artifact.run_config.task.type == "binary" and artifact.threshold is not None
+            else None
+        ),
     }
 
     log_event(

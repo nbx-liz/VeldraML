@@ -62,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"auc: {eval_result.metrics['auc']:.6f}")
     print(f"logloss: {eval_result.metrics['logloss']:.6f}")
     print(f"brier: {eval_result.metrics['brier']:.6f}")
+    print(f"accuracy: {eval_result.metrics['accuracy']:.6f}")
+    print(f"f1: {eval_result.metrics['f1']:.6f}")
+    print(f"precision: {eval_result.metrics['precision']:.6f}")
+    print(f"recall: {eval_result.metrics['recall']:.6f}")
+    print(f"threshold: {eval_result.metrics['threshold']:.6f}")
     print(f"n_rows: {eval_result.metadata['n_rows']}")
     print(f"output_dir: {run_dir}")
     return 0
