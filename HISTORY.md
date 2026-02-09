@@ -117,3 +117,64 @@
 **Open Questions**
 - [ ] `fit` のMVP実装を「Artifact生成のみ」から「最小学習（1 fold smoke）」へいつ拡張するか
 - [ ] `manifest_version` の次回更新ポリシー（破壊変更判定ルール）をどこで固定するか
+
+### 2026-02-09 (Session/PR: phase4-examples-california-demo)
+**Context**
+- Add runnable examples for the current regression workflow (fit/predict/evaluate).
+- Provide demo scripts that generate concrete output files for onboarding and verification.
+
+**Plan**
+- Add `examples/prepare_demo_data.py`, `examples/run_demo_regression.py`, and `examples/evaluate_demo_artifact.py`.
+- Add shared helpers in `examples/common.py`.
+- Add tests for prepare/run/evaluate example scripts.
+- Update design and history documents with the examples contract.
+
+**Changes**
+- Added `examples/` scripts and `examples/README.md`.
+- Added tests:
+  - `tests/test_examples_prepare_demo_data.py`
+  - `tests/test_examples_run_demo_regression.py`
+  - `tests/test_examples_evaluate_demo_artifact.py`
+- Updated `.gitignore` for `.codex/`, `examples/out/`, and generated CSV in `examples/data/`.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Example scripts are maintained as adapter-level executable references and do not alter `veldra.api.*` signatures.
+  - Reason:
+    - Reduces onboarding friction while preserving stable API compatibility.
+  - Impact area:
+    - API / Docs / Operability
+
+- Decision: confirmed
+  - Policy:
+    - California Housing is the default demo source; local CSV must be created by `prepare_demo_data.py`.
+  - Reason:
+    - Makes demo flow explicit and reproducible with a consistent local input contract.
+  - Impact area:
+    - Data / Docs / Operability
+
+**Results**
+- Script-level outputs are produced under `examples/out/<timestamp>/`.
+- `uv run ruff check .` passed.
+- `uv run pytest -q` passed in this workspace before demo execution (15 passed).
+- `uv run python examples/prepare_demo_data.py` failed in this environment due blocked network
+  (`WinError 10061` while downloading California Housing), and exited with the expected hint.
+- `uv run python examples/run_demo_regression.py` succeeded with local labeled CSV at the default path:
+  - `run_id`: `ffff7218fba24318a1eaf4db85342f78`
+  - `rmse`: `0.391954`
+  - `mae`: `0.314148`
+  - `r2`: `0.872247`
+- `uv run python examples/evaluate_demo_artifact.py --artifact-path ...` succeeded:
+  - `rmse`: `0.186839`
+  - `mae`: `0.106562`
+  - `r2`: `0.971317`
+  - `n_rows`: `500`
+
+**Risks / Notes**
+- `prepare_demo_data.py` requires network access at fetch time.
+- If download is unavailable, the script exits with a retry/network hint.
+
+**Open Questions**
+- [ ] Should the next example phase prioritize binary calibration flow or multiclass baseline first?
+- [ ] Should artifact re-evaluation examples accept file-path input directly in addition to DataFrame-only API usage?

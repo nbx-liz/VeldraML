@@ -67,6 +67,7 @@ env/
 .idea/
 .vscode/
 *.code-workspace
+.codex/
 
 # OS files
 .DS_Store
@@ -75,3 +76,7 @@ Desktop.ini
 
 # Project artifacts
 artifacts/
+examples/out/
+examples/data/*.csv
+examples/data/*.parquet
+examples/data/sklearn_data/
