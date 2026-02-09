@@ -84,4 +84,5 @@ Desktop.ini
 artifacts/
 examples/out/
 examples/data/*.csv
+examples/data/*.parquet
 examples/data/sklearn_data/
