@@ -205,8 +205,10 @@ export（任意）：
 ---
 
 ## 15. Open Questions（都度更新）
-- [P1] [ ] Frontierのalphaデフォルトと評価指標（pinball loss等）
+- [P1] [ ] binaryのOOF校正（Platt/Isotonic）をどのフェーズで入れるか
+- [P1] [ ] `evaluate(...)` をArtifact入力で先に実装するか、config入力と同時に実装するか
 - [P1] [ ] 時系列splitの強化（blocked/gap）をいつ入れるか
+- [P2] [ ] Frontierのalphaデフォルトと評価指標（pinball loss等）
 - [P2] [ ] 自動最適化（配賦）をMVPに入れるか、後回しにするか
 - [P2] [ ] Export（ONNX等）をサポートするか
 
@@ -233,3 +235,37 @@ export（任意）：
 - 必須ファイル: `manifest.json`, `run_config.yaml`, `feature_schema.json`。
 - manifestには `manifest_version`, `project_version`, `run_id`, `task_type`,
   `config_version`, `config_hash`, `python_version`, `dependencies`, `created_at_utc` を保存する。
+
+---
+
+## 17. 2026-02-09 Phase 2 実装済み（回帰 fit/predict）
+### 17.1 実装範囲
+- `fit(config)` は回帰タスクで実学習を実施し、CV評価を計算する。
+- `Artifact.predict(df)` と `runner.predict(artifact, data)` は回帰タスクで実行可能。
+- `data.path` は `.csv` / `.parquet` をサポートする。
+
+### 17.2 学習仕様（MVP+）
+- 分割器:
+  - `kfold`: `KFold(shuffle=True, random_state=seed)`
+  - `timeseries`: `TimeSeriesSplitter`
+  - `group`: `GroupKFold`
+- 指標:
+  - foldごと: `rmse`, `mae`, `r2`
+  - 集約: OOFベース mean metrics
+- 最終モデル:
+  - CV後に全量再学習した単一モデルを Artifact に保存する。
+
+### 17.3 Artifact拡張
+- 必須の最小契約ファイルは維持:
+  - `manifest.json`, `run_config.yaml`, `feature_schema.json`
+- 追加生成:
+  - `model.lgb.txt`
+  - `metrics.json`
+  - `cv_results.parquet`
+- 後方互換:
+  - `model/metrics/cv_results` は読み込み時 optional とし、旧Artifactの読込を維持する。
+
+### 17.4 予測時の入出力契約
+- `feature_schema.feature_names` を基準に列検証する。
+- 不足列はエラー、余剰列は無視（必要列のみ選択して推論）。
+- 非回帰タスクは `VeldraNotImplementedError` を返す。
