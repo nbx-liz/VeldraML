@@ -1,18 +1,21 @@
 """Modeling layer exports."""
 
 from veldra.modeling.binary import BinaryTrainingOutput, train_binary_with_cv
+from veldra.modeling.frontier import FrontierTrainingOutput, train_frontier_with_cv
 from veldra.modeling.multiclass import MulticlassTrainingOutput, train_multiclass_with_cv
 from veldra.modeling.regression import RegressionTrainingOutput, train_regression_with_cv
 from veldra.modeling.tuning import TuningOutput, build_study_name, run_tuning
 
 __all__ = [
     "BinaryTrainingOutput",
+    "FrontierTrainingOutput",
     "MulticlassTrainingOutput",
     "RegressionTrainingOutput",
     "TuningOutput",
     "build_study_name",
     "run_tuning",
     "train_binary_with_cv",
+    "train_frontier_with_cv",
     "train_multiclass_with_cv",
     "train_regression_with_cv",
 ]

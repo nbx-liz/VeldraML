@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 @pytest.fixture
 def tmp_path() -> Path:
     """Workspace-local tmp_path to avoid permission issues in this environment."""
-    temp_root = REPO_ROOT / "tmp_tests"
+    temp_root = REPO_ROOT / ".pytest_tmp" / "cases"
     temp_root.mkdir(parents=True, exist_ok=True)
     created = temp_root / f"case_{uuid4().hex}"
     created.mkdir(parents=True, exist_ok=False)

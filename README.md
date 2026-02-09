@@ -1,7 +1,7 @@
 ﻿# VeldraML
 
 VeldraML is a config-driven LightGBM analysis library.
-Current implemented tasks are regression, binary classification, and multiclass classification.
+Current implemented tasks are regression, binary classification, multiclass classification, and frontier.
 
 ## Features
 
@@ -11,6 +11,7 @@ Current implemented tasks are regression, binary classification, and multiclass 
 - Regression workflow: `fit`, `predict`, `evaluate`
 - Binary workflow: `fit`, `predict`, `evaluate` with OOF-based Platt calibration
 - Multiclass workflow: `fit`, `predict`, `evaluate`
+- Frontier workflow: `fit`, `predict`, `evaluate` (quantile baseline)
 - Hyperparameter tuning workflow: `tune` (regression/binary/multiclass)
 
 ## Project Status
@@ -19,11 +20,12 @@ Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=regression`
 - `fit`, `predict`, `evaluate` for `task.type=binary`
 - `fit`, `predict`, `evaluate` for `task.type=multiclass`
+- `fit`, `predict`, `evaluate` for `task.type=frontier`
 - `tune` for `task.type=regression|binary|multiclass` (Optuna-based MVP)
 
 Not implemented yet:
 - `simulate`, `export`
-- frontier training
+- `tune` for `task.type=frontier`
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
 ## Requirements
@@ -116,6 +118,14 @@ Multiclass (Iris):
 uv run python examples/prepare_demo_data_multiclass.py
 uv run python examples/run_demo_multiclass.py
 uv run python examples/evaluate_demo_multiclass_artifact.py --artifact-path <artifact_dir>
+```
+
+Frontier (synthetic quantile demo):
+
+```bash
+uv run python examples/prepare_demo_data_frontier.py
+uv run python examples/run_demo_frontier.py --alpha 0.90
+uv run python examples/evaluate_demo_frontier_artifact.py --artifact-path <artifact_dir>
 ```
 
 Example outputs are saved under `examples/out/<timestamp>/`:

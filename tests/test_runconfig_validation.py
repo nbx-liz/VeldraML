@@ -99,3 +99,29 @@ def test_tuning_objective_is_task_constrained() -> None:
     payload["tuning"]["objective"] = "auc"
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_frontier_alpha_must_be_in_open_interval() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "frontier"}
+    payload["frontier"] = {"alpha": 1.0}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_frontier_disallows_stratified_split() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "frontier"}
+    payload["split"] = {"type": "stratified", "n_splits": 3, "seed": 42}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_non_frontier_disallows_custom_frontier_settings() -> None:
+    payload = _minimal_payload()
+    payload["frontier"] = {"alpha": 0.8}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

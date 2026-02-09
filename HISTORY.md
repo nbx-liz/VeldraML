@@ -620,3 +620,118 @@
 **Open Questions**
 - [ ] Should pruning strategy (e.g., median pruner) be introduced in a later phase?
 - [ ] Should tune results have a dedicated load API (Artifact-like) beyond file outputs?
+
+### 2026-02-10 (Session planning: phase9-frontier-fit-predict-evaluate-mvp)
+**Context**
+- Implement the next runtime capability for `task.type="frontier"` with minimal MVP scope.
+- Preserve stable API signatures and avoid regressions for existing tasks.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Frontier runtime MVP scope is `fit/predict/evaluate` only.
+  - Reason:
+    - Delivers practical runtime coverage without coupling to larger simulate/export work.
+  - Impact area:
+    - API behavior / Modeling / Artifact contract
+
+- Decision: provisional
+  - Policy:
+    - Frontier default quantile alpha is `0.90`.
+  - Reason:
+    - Provides a deterministic default while keeping explicit override support.
+  - Impact area:
+    - Config / Modeling / Evaluation
+
+- Decision: provisional
+  - Policy:
+    - Frontier prediction output contract is DataFrame with `frontier_pred`, and optional `u_hat`
+      when labeled input is provided.
+  - Reason:
+    - Keeps unlabeled inference simple while supporting immediate inefficiency inspection on labeled
+      data.
+  - Impact area:
+    - API contract / Operability
+
+### 2026-02-10 (Session/PR: phase9-frontier-fit-predict-evaluate-mvp)
+**Context**
+- Implement frontier runtime as the next minimal production path after tune expansion.
+- Keep stable API signatures unchanged and preserve existing task behavior.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/modeling/frontier.py`:
+    - `train_frontier_with_cv` with quantile objective and CV evaluation
+    - frontier metrics: `pinball`, `mae`, `mean_u_hat`, `coverage`
+  - Updated `src/veldra/config/models.py`:
+    - added `FrontierConfig` (`alpha` default `0.90`)
+    - added frontier validation rules (`alpha` bounds, split restrictions, non-frontier guard)
+  - Updated `src/veldra/modeling/__init__.py` exports for frontier trainer.
+  - Updated `src/veldra/api/runner.py`:
+    - `fit/predict/evaluate` now support `task.type="frontier"`
+    - evaluate returns frontier metrics and metadata (`frontier_alpha`)
+  - Updated `src/veldra/api/artifact.py`:
+    - frontier prediction path with `frontier_pred` and optional `u_hat`
+  - Updated `examples/common.py` with `DEFAULT_FRONTIER_DATA_PATH`.
+  - Added examples:
+    - `examples/prepare_demo_data_frontier.py`
+    - `examples/run_demo_frontier.py`
+    - `examples/evaluate_demo_frontier_artifact.py`
+- Tests added:
+  - `tests/test_frontier_fit_smoke.py`
+  - `tests/test_frontier_predict_contract.py`
+  - `tests/test_frontier_evaluate_metrics.py`
+  - `tests/test_frontier_artifact_roundtrip.py`
+  - `tests/test_frontier_config_validation.py`
+  - `tests/test_examples_prepare_demo_data_frontier.py`
+  - `tests/test_examples_run_demo_frontier.py`
+  - `tests/test_examples_evaluate_demo_frontier_artifact.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_runner_additional.py`
+  - `tests/test_artifact_additional.py`
+  - `tests/test_runconfig_validation.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Frontier quantile default alpha is `0.90`.
+  - Reason:
+    - Ensures deterministic behavior while preserving explicit override capability.
+  - Impact area:
+    - Config / Modeling / Evaluation
+
+- Decision: confirmed
+  - Policy:
+    - Frontier MVP scope is `fit/predict/evaluate` only.
+  - Reason:
+    - Delivers runtime value now without coupling to simulate/export backlog.
+  - Impact area:
+    - API behavior / Delivery risk
+
+- Decision: confirmed
+  - Policy:
+    - Frontier prediction contract is `frontier_pred` (+ optional `u_hat` when target present).
+  - Reason:
+    - Supports both unlabeled inference and labeled inefficiency inspection without API branching.
+  - Impact area:
+    - API contract / Operability
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed with frontier tests included.
+- `uv run coverage run -m pytest -q` + `uv run coverage report -m` : passed.
+
+**Risks / Notes**
+- `u_hat` output on frontier prediction is available only when target column is present in input.
+- `tune(frontier)`, `simulate`, and `export` remain intentionally unimplemented.
+
+**Open Questions**
+- [ ] Should frontier `tune` objective support only pinball initially, or include coverage-constrained
+      variants from the first release?
+- [ ] Should frontier prediction always return `u_hat` when target is absent by allowing explicit
+      target argument, or keep current implicit contract?

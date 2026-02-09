@@ -92,6 +92,9 @@ def test_predict_and_simulate_unimplemented_paths() -> None:
     artifact = _artifact("frontier")
     with pytest.raises(VeldraValidationError, match="pandas.DataFrame"):
         artifact.predict([1, 2, 3])
+    with pytest.raises(VeldraValidationError, match="model is missing"):
+        artifact.predict(pd.DataFrame({"x1": [1.0]}))
+    artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraNotImplementedError, match="implemented only"):
         artifact.predict(pd.DataFrame({"x1": [1.0]}))
     with pytest.raises(VeldraNotImplementedError, match="not implemented"):
@@ -113,3 +116,20 @@ def test_predict_multiclass_accepts_flat_output_with_expected_size(monkeypatch) 
 
     assert list(pred.columns) == ["label_pred", "proba_a", "proba_b", "proba_c"]
     assert len(pred) == 2
+
+
+def test_predict_frontier_rejects_non_numeric_target_for_u_hat(monkeypatch) -> None:
+    artifact = _artifact(
+        "frontier",
+        feature_schema={"feature_names": ["x1"], "target": "target"},
+    )
+    artifact.model_text = "dummy"
+
+    class _Booster:
+        def predict(self, _: pd.DataFrame) -> np.ndarray:
+            return np.array([1.0, 1.2], dtype=float)
+
+    monkeypatch.setattr(artifact, "_get_booster", lambda: _Booster())
+    frame = pd.DataFrame({"x1": [0.1, 0.2], "target": ["a", "b"]})
+    with pytest.raises(VeldraValidationError, match="must be numeric"):
+        artifact.predict(frame)

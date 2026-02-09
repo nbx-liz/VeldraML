@@ -41,6 +41,7 @@ from veldra.modeling import (
     build_study_name,
     run_tuning,
     train_binary_with_cv,
+    train_frontier_with_cv,
     train_multiclass_with_cv,
     train_regression_with_cv,
 )
@@ -73,10 +74,10 @@ def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
 def fit(config: RunConfig | dict[str, Any]) -> RunResult:
     """Train supported model with CV and persist artifact payload."""
     parsed = _ensure_config(config)
-    if parsed.task.type not in {"regression", "binary", "multiclass"}:
+    if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
-            "fit is currently implemented only for task.type='regression', 'binary', or "
-            "'multiclass'."
+            "fit is currently implemented only for task.type='regression', 'binary', "
+            "'multiclass', or 'frontier'."
         )
     if not parsed.data.path:
         raise VeldraValidationError("data.path is required for fit.")
@@ -86,8 +87,10 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         training_output = train_regression_with_cv(config=parsed, data=frame)
     elif parsed.task.type == "binary":
         training_output = train_binary_with_cv(config=parsed, data=frame)
-    else:
+    elif parsed.task.type == "multiclass":
         training_output = train_multiclass_with_cv(config=parsed, data=frame)
+    else:
+        training_output = train_frontier_with_cv(config=parsed, data=frame)
 
     run_id = uuid4().hex
     artifact_path = Path(parsed.export.artifact_dir) / run_id
@@ -223,10 +226,10 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         )
 
     artifact = artifact_or_config
-    if artifact.run_config.task.type not in {"regression", "binary", "multiclass"}:
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
-            "evaluate is currently implemented only for task.type='regression', 'binary', or "
-            "'multiclass'."
+            "evaluate is currently implemented only for task.type='regression', 'binary', "
+            "'multiclass', or 'frontier'."
         )
     if not isinstance(data, pd.DataFrame):
         raise VeldraValidationError("evaluate input must be a pandas.DataFrame.")
@@ -283,7 +286,7 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
             "recall": float(recall_score(y_binary, label_pred, zero_division=0)),
             "threshold": threshold_value,
         }
-    else:
+    elif artifact.run_config.task.type == "multiclass":
         pred_frame = artifact.predict(x_eval)
         if not isinstance(pred_frame, pd.DataFrame):
             raise VeldraValidationError(
@@ -324,6 +327,33 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
                 log_loss(y_multiclass, proba, labels=list(range(len(target_classes))))
             ),
         }
+    else:
+        pred_frame = artifact.predict(x_eval)
+        if not isinstance(pred_frame, pd.DataFrame):
+            raise VeldraValidationError(
+                "Frontier artifact predict output must be a pandas.DataFrame."
+            )
+        if "frontier_pred" not in pred_frame.columns:
+            raise VeldraValidationError(
+                "Frontier predict output is missing required column 'frontier_pred'."
+            )
+        try:
+            y_frontier = y_true.to_numpy(dtype=float)
+        except Exception as exc:
+            raise VeldraValidationError("Frontier evaluate target values must be numeric.") from exc
+        frontier_pred = pred_frame["frontier_pred"].to_numpy(dtype=float)
+        frontier_alpha = float(
+            artifact.feature_schema.get("frontier_alpha", artifact.run_config.frontier.alpha)
+        )
+        err = y_frontier - frontier_pred
+        pinball = float(np.mean(np.maximum(frontier_alpha * err, (frontier_alpha - 1.0) * err)))
+        u_hat = np.maximum(0.0, frontier_pred - y_frontier)
+        metrics = {
+            "pinball": pinball,
+            "mae": float(mean_absolute_error(y_frontier, frontier_pred)),
+            "mean_u_hat": float(np.mean(u_hat)),
+            "coverage": float(np.mean(y_frontier <= frontier_pred)),
+        }
 
     metadata = {
         "n_rows": int(len(data)),
@@ -337,6 +367,11 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         "threshold_value": (
             float(artifact.threshold.get("value"))
             if artifact.run_config.task.type == "binary" and artifact.threshold is not None
+            else None
+        ),
+        "frontier_alpha": (
+            float(artifact.feature_schema.get("frontier_alpha", artifact.run_config.frontier.alpha))
+            if artifact.run_config.task.type == "frontier"
             else None
         ),
     }
@@ -358,10 +393,10 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
 
 
 def predict(artifact: Artifact, data: Any) -> Prediction:
-    if artifact.run_config.task.type not in {"regression", "binary", "multiclass"}:
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
-            "predict is currently implemented only for task.type='regression', 'binary', or "
-            "'multiclass'."
+            "predict is currently implemented only for task.type='regression', 'binary', "
+            "'multiclass', or 'frontier'."
         )
     if not isinstance(data, pd.DataFrame):
         raise VeldraValidationError("predict input must be a pandas.DataFrame.")

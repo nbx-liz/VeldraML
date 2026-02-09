@@ -6,6 +6,7 @@ import pytest
 
 from veldra.api import Artifact, evaluate, export, fit, predict, simulate
 from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
+from veldra.api.runner import tune
 from veldra.config.models import RunConfig
 
 
@@ -40,11 +41,24 @@ def test_fit_validation_and_notimplemented_paths(tmp_path) -> None:
     with pytest.raises(VeldraValidationError):
         fit({})
 
-    frame = pd.DataFrame({"x1": [0.0, 1.0], "target": [0.1, 0.9]})
+    frame = pd.DataFrame(
+        {
+            "x1": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5],
+            "target": [0.1, 0.4, 0.9, 1.2, 1.6, 2.0],
+        }
+    )
     data_path = tmp_path / "frontier.csv"
     frame.to_csv(data_path, index=False)
-    with pytest.raises(VeldraNotImplementedError):
-        fit(_config_payload("frontier", path=str(data_path)))
+    run = fit(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(data_path), "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 7},
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    assert run.task_type == "frontier"
 
     with pytest.raises(VeldraValidationError):
         fit(_config_payload("regression", path=None))
@@ -60,12 +74,14 @@ def test_simulate_and_export_are_unimplemented() -> None:
 
 def test_runner_predict_rejects_unsupported_task() -> None:
     artifact = _artifact_for_task("frontier")
+    artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraNotImplementedError):
         predict(artifact, pd.DataFrame({"x1": [1.0]}))
 
 
 def test_evaluate_rejects_unsupported_task_type() -> None:
     artifact = _artifact_for_task("frontier")
+    artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     frame = pd.DataFrame({"x1": [0.1, 0.2], "target": [0, 1]})
     with pytest.raises(VeldraNotImplementedError):
         evaluate(artifact, frame)
@@ -131,3 +147,46 @@ def test_multiclass_evaluate_error_branches() -> None:
     artifact.feature_schema = {"feature_names": ["x1"]}
     with pytest.raises(VeldraValidationError):
         evaluate(artifact, frame)
+
+
+def test_fit_and_tune_unsupported_task_branches(tmp_path) -> None:
+    cfg = RunConfig.model_validate(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(tmp_path / "dummy.csv"), "target": "target"},
+        }
+    )
+    cfg.task.type = "unknown"  # type: ignore[assignment]
+    with pytest.raises(VeldraNotImplementedError):
+        fit(cfg)
+
+    cfg_tune = RunConfig.model_validate(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": str(tmp_path / "dummy.csv"), "target": "target"},
+            "tuning": {"enabled": True, "n_trials": 1},
+        }
+    )
+    cfg_tune.task.type = "unknown"  # type: ignore[assignment]
+    with pytest.raises(VeldraValidationError):
+        tune(cfg_tune)
+
+
+def test_frontier_evaluate_error_branches() -> None:
+    artifact = _artifact_for_task("frontier", feature_schema={"feature_names": ["x1"]})
+    frame = pd.DataFrame({"x1": [0.1, 0.2], "target": [0.0, 1.0]})
+
+    artifact.predict = lambda df: np.array([0.2, 0.3])  # type: ignore[method-assign]
+    with pytest.raises(VeldraValidationError):
+        evaluate(artifact, frame)
+
+    artifact.predict = lambda df: pd.DataFrame({"wrong_col": [0.2, 0.3]})  # type: ignore[method-assign]
+    with pytest.raises(VeldraValidationError):
+        evaluate(artifact, frame)
+
+    artifact.predict = lambda df: pd.DataFrame({"frontier_pred": [0.2, 0.3]})  # type: ignore[method-assign]
+    frame_bad_target = pd.DataFrame({"x1": [0.1, 0.2], "target": ["a", "b"]})
+    with pytest.raises(VeldraValidationError):
+        evaluate(artifact, frame_bad_target)

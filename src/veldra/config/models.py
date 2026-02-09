@@ -92,6 +92,11 @@ class ExportConfig(BaseModel):
     inference_package: bool = False
 
 
+class FrontierConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    alpha: float = 0.90
+
+
 class RunConfig(BaseModel):
     """Single shared entrypoint configuration for all adapters."""
 
@@ -105,6 +110,7 @@ class RunConfig(BaseModel):
     postprocess: PostprocessConfig = Field(default_factory=PostprocessConfig)
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
+    frontier: FrontierConfig = Field(default_factory=FrontierConfig)
 
     @model_validator(mode="after")
     def _validate_cross_fields(self) -> "RunConfig":
@@ -116,6 +122,17 @@ class RunConfig(BaseModel):
 
         if self.split.type == "group" and not self.split.group_col:
             raise ValueError("split.group_col is required when split.type='group'")
+
+        if self.task.type == "frontier":
+            if not (0.0 < self.frontier.alpha < 1.0):
+                raise ValueError("frontier.alpha must satisfy 0 < alpha < 1 for frontier task")
+            if self.split.type == "stratified":
+                raise ValueError("split.type='stratified' is not supported for frontier task")
+        else:
+            if self.frontier.alpha != 0.90:
+                raise ValueError(
+                    "frontier settings can only be customized when task.type='frontier'"
+                )
 
         if self.task.type != "binary":
             if (
