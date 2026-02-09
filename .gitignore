@@ -75,3 +75,6 @@ Desktop.ini
 
 # Project artifacts
 artifacts/
+
+# Local agent config
+.codex/
