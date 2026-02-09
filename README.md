@@ -1,7 +1,7 @@
 ﻿# VeldraML
 
 VeldraML is a config-driven LightGBM analysis library.
-Current implemented tasks are regression and binary classification.
+Current implemented tasks are regression, binary classification, and multiclass classification.
 
 ## Features
 
@@ -10,16 +10,18 @@ Current implemented tasks are regression and binary classification.
 - Artifact-based reproducibility (`save/load/predict/evaluate`)
 - Regression workflow: `fit`, `predict`, `evaluate`
 - Binary workflow: `fit`, `predict`, `evaluate` with OOF-based Platt calibration
+- Multiclass workflow: `fit`, `predict`, `evaluate`
 
 ## Project Status
 
 Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=regression`
 - `fit`, `predict`, `evaluate` for `task.type=binary`
+- `fit`, `predict`, `evaluate` for `task.type=multiclass`
 
 Not implemented yet:
 - `tune`, `simulate`, `export`
-- multiclass/frontier training
+- frontier training
 - threshold optimization for binary classification (fixed `0.5` in current phase)
 
 ## Requirements
@@ -80,6 +82,14 @@ Binary (Breast Cancer):
 uv run python examples/prepare_demo_data_binary.py
 uv run python examples/run_demo_binary.py
 uv run python examples/evaluate_demo_binary_artifact.py --artifact-path <artifact_dir>
+```
+
+Multiclass (Iris):
+
+```bash
+uv run python examples/prepare_demo_data_multiclass.py
+uv run python examples/run_demo_multiclass.py
+uv run python examples/evaluate_demo_multiclass_artifact.py --artifact-path <artifact_dir>
 ```
 
 Example outputs are saved under `examples/out/<timestamp>/`:

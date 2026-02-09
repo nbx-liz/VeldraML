@@ -273,3 +273,99 @@
     - Keep onboarding and regression/binary parity for reproducible demo flows.
   - Impact area:
     - Examples / Documentation / QA
+
+### 2026-02-10 (Session planning: phase6-multiclass-fit-predict-evaluate-examples)
+**Context**
+- Start Phase 6 to extend runtime from regression/binary to multiclass MVP.
+- Keep stable API signatures unchanged and preserve artifact-first reproducibility.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Multiclass prediction output contract is `label_pred` + `proba_<class>`.
+  - Reason:
+    - Supports both operational classification and probability-level analysis.
+  - Impact area:
+    - API / Artifact / Consumer contract
+
+- Decision: provisional
+  - Policy:
+    - Multiclass evaluation metrics are `accuracy`, `macro_f1`, `logloss`.
+  - Reason:
+    - Balances label-quality and probability-quality checks.
+  - Impact area:
+    - Evaluation / Reporting
+
+- Decision: provisional
+  - Policy:
+    - Multiclass examples are implemented in the same phase as core/API.
+  - Reason:
+    - Keeps onboarding parity across regression, binary, multiclass workflows.
+  - Impact area:
+    - Examples / Documentation / QA
+
+### 2026-02-10 (Session/PR: phase6-multiclass-fit-predict-evaluate-examples)
+**Context**
+- Implement multiclass runtime (`fit/predict/evaluate`) and keep stable API signatures unchanged.
+- Add runnable multiclass examples and matching tests in the same phase.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/modeling/multiclass.py`.
+  - Updated `src/veldra/modeling/__init__.py` exports.
+  - Updated `src/veldra/api/runner.py` for multiclass `fit/predict/evaluate`.
+  - Updated `src/veldra/api/artifact.py` for multiclass prediction contract.
+  - Updated `examples/common.py` with multiclass default dataset path.
+  - Added multiclass examples:
+    - `examples/prepare_demo_data_multiclass.py`
+    - `examples/run_demo_multiclass.py`
+    - `examples/evaluate_demo_multiclass_artifact.py`
+  - Updated `README.md` with multiclass status and commands.
+- Tests:
+  - Added `tests/test_multiclass_fit_smoke.py`
+  - Added `tests/test_multiclass_predict_contract.py`
+  - Added `tests/test_multiclass_evaluate_metrics.py`
+  - Added `tests/test_multiclass_artifact_roundtrip.py`
+  - Added `tests/test_examples_prepare_demo_data_multiclass.py`
+  - Added `tests/test_examples_run_demo_multiclass.py`
+  - Added `tests/test_examples_evaluate_demo_multiclass_artifact.py`
+  - Updated `tests/test_api_surface.py`
+  - Updated `tests/test_runconfig_validation.py`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Multiclass prediction contract is `label_pred` + `proba_<class>`.
+  - Reason:
+    - Provides both decision output and probability diagnostics from one API contract.
+  - Impact area:
+    - API / Artifact / Consumer contract
+
+- Decision: confirmed
+  - Policy:
+    - Multiclass evaluation metrics are `accuracy`, `macro_f1`, `logloss`.
+  - Reason:
+    - Covers class-level quality and probability calibration quality.
+  - Impact area:
+    - Evaluation / Reporting
+
+- Decision: confirmed
+  - Policy:
+    - Multiclass examples are shipped in the same phase as core/API support.
+  - Reason:
+    - Keeps runnable onboarding parity across task types.
+  - Impact area:
+    - Examples / Documentation / QA
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : 53 passed.
+- Multiclass demo run (`examples/run_demo_multiclass.py`) snapshot:
+  - `accuracy=0.900000`
+  - `macro_f1=0.899749`
+  - `logloss=0.818215`
+- Multiclass artifact re-evaluation (`examples/evaluate_demo_multiclass_artifact.py`) snapshot:
+  - `accuracy=0.980000`
+  - `macro_f1=0.979998`
+  - `logloss=0.163656`
+  - `n_rows=150`

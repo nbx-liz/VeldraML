@@ -13,6 +13,7 @@ import yaml
 EXAMPLES_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_PATH = EXAMPLES_DIR / "data" / "california_housing.csv"
 DEFAULT_BINARY_DATA_PATH = EXAMPLES_DIR / "data" / "breast_cancer_binary.csv"
+DEFAULT_MULTICLASS_DATA_PATH = EXAMPLES_DIR / "data" / "iris_multiclass.csv"
 DEFAULT_OUT_DIR = EXAMPLES_DIR / "out"
 DEFAULT_TARGET = "target"
 
