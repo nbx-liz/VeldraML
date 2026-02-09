@@ -45,3 +45,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.coverage.run]
+source = ["src/veldra", "examples"]
+omit = ["tests/*"]
