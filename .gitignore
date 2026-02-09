@@ -67,6 +67,7 @@ env/
 .idea/
 .vscode/
 *.code-workspace
+.codex/
 
 # OS files
 .DS_Store

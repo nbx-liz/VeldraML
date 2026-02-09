@@ -49,8 +49,11 @@ def test_unimplemented_runner_endpoints_raise_consistent_error(tmp_path) -> None
 
     with pytest.raises(VeldraNotImplementedError):
         tune(payload)
+    eval_result = evaluate(artifact, data=frame)
+    assert eval_result.task_type == "regression"
+    assert {"rmse", "mae", "r2"}.issubset(eval_result.metrics.keys())
     with pytest.raises(VeldraNotImplementedError):
-        evaluate(payload, data=None)
+        evaluate(payload, data=frame)
     with pytest.raises(VeldraValidationError):
         predict(artifact, data=None)
     pred = predict(artifact, data=frame[["x1"]])

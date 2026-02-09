@@ -205,8 +205,9 @@ export（任意）：
 ---
 
 ## 15. Open Questions（都度更新）
-- [P1] [ ] Frontierのalphaデフォルトと評価指標（pinball loss等）
+- [P1] [ ] binaryのOOF校正（Platt/Isotonic）をどのフェーズで入れるか
 - [P1] [ ] 時系列splitの強化（blocked/gap）をいつ入れるか
+- [P2] [ ] Frontierのalphaデフォルトと評価指標（pinball loss等）
 - [P2] [ ] 自動最適化（配賦）をMVPに入れるか、後回しにするか
 - [P2] [ ] Export（ONNX等）をサポートするか
 
@@ -233,3 +234,36 @@ export（任意）：
 - 必須ファイル: `manifest.json`, `run_config.yaml`, `feature_schema.json`。
 - manifestには `manifest_version`, `project_version`, `run_id`, `task_type`,
   `config_version`, `config_hash`, `python_version`, `dependencies`, `created_at_utc` を保存する。
+
+---
+
+## 17. 2026-02-09 Phase 2 実装済み（回帰 fit/predict）
+### 17.1 実装範囲
+- `fit(config)` は回帰タスクで実学習（CV評価）を実施し、Artifactを生成する。
+- `Artifact.predict(df)` と `runner.predict(artifact, data)` は回帰タスクで実行可能。
+- `data.path` は `.csv` / `.parquet` をサポートする。
+
+### 17.2 Artifact拡張
+- 最小契約ファイル（`manifest.json`, `run_config.yaml`, `feature_schema.json`）は維持。
+- 追加生成: `model.lgb.txt`, `metrics.json`, `cv_results.parquet`。
+- 後方互換: 追加ファイルは読み込み時 optional（旧Artifactを読める）。
+
+---
+
+## 18. 2026-02-09 Phase 3 実装済み（回帰 evaluate）
+### 18.1 実装範囲
+- `evaluate(artifact, data)` を回帰タスクで実装。
+- 初期対応は Artifact入力限定（config入力は未実装維持）。
+
+### 18.2 入力契約
+- `data` は `pandas.DataFrame` 必須。
+- `run_config.data.target` 列を含むこと。
+- 空データ、target欠落、DataFrame以外は `VeldraValidationError`。
+
+### 18.3 出力契約
+- `EvalResult.metrics` に `rmse`, `mae`, `r2` を返す。
+- `EvalResult.metadata` に `n_rows`, `target`, `artifact_run_id` を返す。
+
+### 18.4 未実装の維持
+- `evaluate(config, data)` は `VeldraNotImplementedError` を返す。
+- `tune/simulate/export` は引き続き未実装。
