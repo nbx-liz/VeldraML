@@ -14,6 +14,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Frontier workflow: `fit`, `predict`, `evaluate` (quantile baseline)
 - Hyperparameter tuning workflow: `tune` (regression/binary/multiclass)
 - Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
+- Export workflow: `export` (`python` + optional `onnx`)
 
 ## Project Status
 
@@ -24,9 +25,9 @@ Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=frontier`
 - `tune` for `task.type=regression|binary|multiclass` (Optuna-based MVP)
 - `simulate` for `task.type=regression|binary|multiclass|frontier` (Scenario DSL MVP)
+- `export` for all implemented tasks (`python` always, `onnx` optional dependency)
 
 Not implemented yet:
-- `export`
 - `tune` for `task.type=frontier`
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
@@ -41,6 +42,12 @@ Not implemented yet:
 
 ```bash
 uv sync --dev
+```
+
+Optional ONNX export dependencies:
+
+```bash
+uv sync --extra export-onnx
 ```
 
 ### Verify installation
@@ -161,6 +168,19 @@ Simulate demo (regression baseline with scenario actions):
 
 ```bash
 uv run python examples/run_demo_simulate.py --data-path examples/data/california_housing.csv
+```
+
+Export demo:
+
+```bash
+uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --format python
+```
+
+ONNX export (requires optional dependencies):
+
+```bash
+uv sync --extra export-onnx
+uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --format onnx
 ```
 
 ## Development

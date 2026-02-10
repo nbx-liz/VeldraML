@@ -67,8 +67,9 @@ def test_runner_endpoints_raise_consistent_error_for_unimplemented_only(tmp_path
     )
     assert len(sim.data) == len(frame)
     assert {"row_id", "scenario", "task_type"} <= set(sim.data.columns)
-    with pytest.raises(VeldraNotImplementedError):
-        export(artifact, format="python")
+    exported = export(artifact, format="python")
+    assert exported.format == "python"
+    assert exported.path
 
 
 def test_binary_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:

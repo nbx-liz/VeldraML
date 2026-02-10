@@ -813,6 +813,8 @@
 **Context**
 - Implement `simulate` MVP as the next runtime capability after frontier and tuning expansions.
 - Preserve stable API signatures and keep existing task behavior unchanged.
+- Status:
+  - Superseded by `Session/PR: phase10-simulate-mvp-scenario-dsl` with `Decision: confirmed`.
 
 **Decisions**
 - Decision: provisional
@@ -839,3 +841,100 @@
     - Keeps downstream analysis format stable while supporting all implemented task types.
   - Impact area:
     - API contract / Operability
+
+### 2026-02-10 (Session planning: phase11-export-mvp-python-onnx-optional)
+**Context**
+- Implement `export` MVP as the next runtime capability after `simulate`.
+- Keep existing runtime behavior stable and add optional ONNX support without making it mandatory.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - `runner.export` supports `python` and `onnx` formats with unchanged signature.
+  - Reason:
+    - Closes remaining stable API gap while preserving compatibility.
+  - Impact area:
+    - API behavior / Artifact distribution
+
+- Decision: provisional
+  - Policy:
+    - ONNX export is optional-dependency based; missing dependency raises explicit validation error.
+  - Reason:
+    - Avoids forcing heavy dependencies while keeping ONNX path available.
+  - Impact area:
+    - Packaging / Operability
+
+- Decision: provisional
+  - Policy:
+    - Python export is always available and task-agnostic (regression/binary/multiclass/frontier).
+  - Reason:
+    - Guarantees baseline export usability in constrained environments.
+  - Impact area:
+    - User experience / Runtime reliability
+
+### 2026-02-10 (Session/PR: phase11-export-mvp-python-onnx-optional)
+**Context**
+- Implement `export` MVP to close the remaining stable API runtime gap.
+- Keep `fit/predict/evaluate/tune/simulate` behavior unchanged.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/artifact/exporter.py`:
+    - `export_python_package(artifact, out_dir)`
+    - `export_onnx_model(artifact, out_dir)`
+    - optional ONNX dependency loading with explicit error guidance
+  - Updated `src/veldra/api/runner.py`:
+    - implemented `export(artifact, format)`
+    - supported formats: `python`, `onnx`
+    - structured export completion log
+  - Added `examples/run_demo_export.py`
+  - Updated `pyproject.toml`:
+    - added optional dependency group `export-onnx`
+- Tests added:
+  - `tests/test_export_python_mvp.py`
+  - `tests/test_export_onnx_optional.py`
+  - `tests/test_export_runner_contract.py`
+  - `tests/test_examples_run_demo_export.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_runner_additional.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `export` supports `python` and `onnx` with unchanged API signature.
+  - Reason:
+    - Completes the stable API runtime surface with minimal compatibility risk.
+  - Impact area:
+    - API behavior / Distribution workflow
+
+- Decision: confirmed
+  - Policy:
+    - ONNX export remains optional-dependency based and non-blocking for python export.
+  - Reason:
+    - Keeps default setup lightweight while enabling ONNX where required.
+  - Impact area:
+    - Packaging / Operability
+
+- Decision: confirmed
+  - Policy:
+    - ONNX export for `frontier` is explicitly unsupported in MVP (`VeldraNotImplementedError`).
+  - Reason:
+    - Avoids silent behavior ambiguity and keeps conversion contract explicit.
+  - Impact area:
+    - API contract / Reliability
+
+**Results**
+- `uv run ruff check .` : pending
+- `uv run pytest -q` : pending
+
+**Risks / Notes**
+- ONNX conversion success depends on optional toolchain availability and converter compatibility.
+- `tune(frontier)` remains intentionally unimplemented.
+
+**Open Questions**
+- [ ] Should Phase 12 prioritize `tune(frontier)` or frontier ONNX export support first?

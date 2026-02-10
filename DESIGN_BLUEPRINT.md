@@ -394,7 +394,7 @@ export（任意）：
 | `evaluate` | Implemented | Artifact input path for regression, binary, multiclass, frontier |
 | `tune` | Implemented (Phase 8 MVP) | regression, binary, multiclass (Optuna TPE) |
 | `simulate` | Implemented (Phase 10 MVP) | Scenario DSL (`set/add/mul/clip`) for regression, binary, multiclass, frontier |
-| `export` | Not implemented | Kept as stable API stub |
+| `export` | Implemented (Phase 11 MVP) | `python` export + optional `onnx` export |
 | `frontier` task runtime | Implemented (Phase 9 MVP) | fit/predict/evaluate with quantile baseline |
 
 ## 22. Historical Note for Section 16
@@ -617,3 +617,72 @@ export（任意）：
 - Remaining unimplemented runtime APIs:
   - `export`
   - `tune(frontier)`
+
+## 31. 2026-02-10 Export MVP Proposal (Phase 11)
+### 31.1 Goal
+- Activate `runner.export(artifact, format)` while preserving stable API signatures.
+- Provide practical distribution outputs with non-intrusive behavior.
+
+### 31.2 Scope
+- In scope:
+  - `format="python"` export for all implemented tasks
+  - `format="onnx"` export with optional dependency handling
+  - export example script and contract tests
+- Out of scope:
+  - `tune(frontier)` implementation
+  - advanced package optimization/signing
+  - ONNX graph optimization and quantization
+
+### 31.3 Export format contract
+- `python`:
+  - export directory contains artifact payload and minimal runtime stub:
+    - `manifest.json`, `run_config.yaml`, `feature_schema.json`, `model.lgb.txt`
+    - `metadata.json`, `runtime_predict.py`, `README.md`
+- `onnx`:
+  - export directory contains:
+    - `model.onnx`, `metadata.json`
+  - optional dependency policy:
+    - missing ONNX toolchain raises `VeldraValidationError` with install guidance
+    - python export remains usable without ONNX packages
+
+### 31.4 Runtime/API behavior
+- Signature remains unchanged:
+  - `export(artifact, format="python") -> ExportResult`
+- output path convention:
+  - `<artifact_dir>/exports/<run_id>/<format>/`
+- structured log event:
+  - `export completed` with `run_id`, `artifact_path`, `task_type`, `format`, `export_path`
+
+### 31.5 Compatibility notes
+- No behavior change for `fit/predict/evaluate/tune/simulate`.
+- Existing artifact contract remains unchanged.
+
+## 32. 2026-02-10 Export MVP (Phase 11, implemented)
+### 32.1 Added capabilities
+- `runner.export(artifact, format)` now supports:
+  - `format="python"` for regression/binary/multiclass/frontier
+  - `format="onnx"` for regression/binary/multiclass (optional dependency path)
+- Added export core module:
+  - `src/veldra/artifact/exporter.py`
+- Added export demo script:
+  - `examples/run_demo_export.py`
+
+### 32.2 Export contract
+- Output path:
+  - `<artifact_dir>/exports/<run_id>/<format>/`
+- Python export output:
+  - `manifest.json`, `run_config.yaml`, `feature_schema.json`, `model.lgb.txt`
+  - `metadata.json`, `runtime_predict.py`, `README.md`
+- ONNX export output:
+  - `model.onnx`, `metadata.json`
+
+### 32.3 Optional dependency policy
+- ONNX export requires optional packages:
+  - `onnx`, `onnxmltools`, `onnxruntime`
+- Missing ONNX dependency raises explicit `VeldraValidationError` with install guidance.
+- Default environment remains lightweight; python export is always available.
+
+### 32.4 Compatibility notes
+- Stable API signatures remain unchanged.
+- Existing `fit/predict/evaluate/tune/simulate` behavior remains unchanged.
+- `tune(frontier)` remains intentionally unimplemented.
