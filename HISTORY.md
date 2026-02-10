@@ -1473,3 +1473,78 @@
     - superseded by `Session/PR: phase16-timeseries-split-advanced-mvp` (`Decision: confirmed`)
   - `Session planning: phase17-frontier-tune-coverage-objective-mvp`
     - superseded by `Session/PR: phase17-frontier-tune-coverage-objective-mvp` (`Decision: confirmed`)
+
+### 2026-02-10 (Session planning: phase18-evaluate-config-input-mvp)
+**Context**
+- Close the remaining `RunConfig` entry gap by implementing `evaluate(config, data)`.
+- Keep `evaluate(artifact, data)` behavior unchanged and non-invasive.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - `evaluate(artifact_or_config, data)` accepts `RunConfig | dict` in addition to `Artifact`.
+    - Config mode runs ephemeral training in memory and does not persist artifacts.
+  - Reason:
+    - Aligns runtime behavior with the "RunConfig as common entrypoint" design principle.
+  - Impact area:
+    - API behavior / Operability / Compatibility
+
+- Decision: provisional
+  - Policy:
+    - Config-mode evaluation metadata includes:
+      - `evaluation_mode`
+      - `train_source_path`
+      - `ephemeral_run`
+  - Reason:
+    - Keeps execution context explicit for debugging and audit trails without changing signatures.
+  - Impact area:
+    - Observability / Diagnostics
+
+### 2026-02-10 (Session/PR: phase18-evaluate-config-input-mvp)
+**Context**
+- Implement `evaluate(config, data)` for all task types while preserving stable API signatures.
+- Keep artifact-path evaluation behavior unchanged.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/api/runner.py`:
+    - added config-input branch for `evaluate(artifact_or_config, data)`.
+    - added ephemeral model build path via existing task trainers.
+    - refactored shared evaluation logic into an internal helper.
+    - added metadata fields:
+      - `evaluation_mode`
+      - `train_source_path`
+      - `ephemeral_run`
+    - extended `evaluate completed` structured log context with config/ephemeral markers.
+- Tests added:
+  - `tests/test_evaluate_config_path.py`
+  - `tests/test_evaluate_config_validation.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_binary_evaluate_metrics.py`
+  - `tests/test_multiclass_evaluate_metrics.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `evaluate` accepts `Artifact` and `RunConfig | dict`; config mode trains ephemerally in memory.
+  - Reason:
+    - Restores alignment with the common RunConfig entrypoint principle without introducing new APIs.
+  - Impact area:
+    - API behavior / Operability / Compatibility
+
+- Decision: confirmed
+  - Policy:
+    - Config-mode metadata includes `evaluation_mode`, `train_source_path`, `ephemeral_run`.
+  - Reason:
+    - Makes runtime path and provenance explicit while preserving response shape.
+  - Impact area:
+    - Observability / Diagnostics
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`238 passed`).

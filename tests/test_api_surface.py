@@ -3,7 +3,6 @@ import pytest
 
 from veldra.api import (
     Artifact,
-    VeldraNotImplementedError,
     VeldraValidationError,
     evaluate,
     export,
@@ -52,7 +51,7 @@ def test_runner_endpoints_raise_consistent_error_for_unimplemented_only(tmp_path
     tune_result = tune(tune_payload)
     assert tune_result.best_score is not None
     assert tune_result.best_params
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError):
         evaluate(payload, data=None)
     with pytest.raises(VeldraValidationError):
         predict(artifact, data=None)

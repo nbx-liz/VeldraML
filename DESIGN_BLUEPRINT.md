@@ -1033,3 +1033,62 @@ export（任意）：
 - Stable API signatures remain unchanged.
 - Non-frontier tuning behavior is unchanged.
 - Existing frontier pinball tuning workflows continue to run without config changes.
+
+## 45. 2026-02-10 Evaluate Config Input Proposal (Phase 18)
+### 45.1 Goal
+- Close the remaining `RunConfig` entry gap in `runner.evaluate` by implementing
+  `evaluate(config, data)` for all supported tasks.
+- Keep existing `evaluate(artifact, data)` behavior unchanged.
+- Keep stable API signatures unchanged.
+
+### 45.2 Scope
+- In scope:
+  - `evaluate(config, data)` for regression, binary, multiclass, frontier.
+  - config-path evaluation based on ephemeral training (no artifact persistence).
+  - unified validation and logging contract with existing artifact path.
+- Out of scope:
+  - new public API functions.
+  - `predict(config, data)` entrypoint.
+  - ONNX graph optimization (explicitly skipped/backlog).
+
+### 45.3 Runtime contract
+- `evaluate(artifact_or_config, data)` accepts:
+  - `Artifact` (existing behavior).
+  - `RunConfig | dict` (new behavior in this phase).
+- For config path:
+  - training source is `config.data.path` (CSV/Parquet via existing loader).
+  - evaluation source is `data` argument (`pandas.DataFrame` with target column).
+  - model is trained ephemerally in memory and not saved as artifact.
+- `EvalResult.metadata` additions (non-breaking):
+  - `evaluation_mode: "artifact" | "config"`
+  - `train_source_path: str | None`
+  - `ephemeral_run: bool`
+
+### 45.4 Compatibility notes
+- `fit/predict/tune/simulate/export` behavior remains unchanged.
+- `evaluate(artifact, data)` metrics and error behavior remain unchanged.
+- Existing stable API signatures remain unchanged.
+
+## 46. 2026-02-10 Evaluate Config Input MVP (Phase 18, implemented)
+### 46.1 Added capabilities
+- `runner.evaluate(artifact_or_config, data)` now supports:
+  - `Artifact` input (existing path).
+  - `RunConfig | dict` input (new config path).
+- Config-path evaluation executes:
+  - training from `config.data.path` (CSV/Parquet loader).
+  - in-memory ephemeral model build (no artifact persistence).
+  - metrics evaluation against runtime `data` (`DataFrame` with target).
+
+### 46.2 Metadata and logging
+- `EvalResult.metadata` now includes:
+  - `evaluation_mode: "artifact" | "config"`
+  - `train_source_path: str | None`
+  - `ephemeral_run: bool`
+- Structured evaluation log now includes:
+  - `evaluation_mode`
+  - `ephemeral_run`
+
+### 46.3 Compatibility notes
+- Stable API signatures remain unchanged.
+- Existing artifact-path evaluation behavior and metric contracts remain unchanged.
+- `fit/predict/tune/simulate/export` behavior remains unchanged.
