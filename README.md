@@ -173,6 +173,8 @@ uv run python examples/run_demo_tune.py --task regression --n-trials 10
 uv run python examples/run_demo_tune.py --task binary --objective logloss --n-trials 20
 uv run python examples/run_demo_tune.py --task multiclass --objective accuracy --n-trials 20
 uv run python examples/run_demo_tune.py --task frontier --objective pinball --n-trials 20
+# opt-in coverage-aware frontier objective
+uv run python examples/run_demo_tune.py --task frontier --objective pinball_coverage_penalty --coverage-target 0.92 --coverage-tolerance 0.02 --penalty-weight 2.0 --n-trials 20
 ```
 
 Tune resume / verbosity / custom search-space:
