@@ -28,7 +28,7 @@ Implemented:
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
 
 Not implemented yet:
-- frontier ONNX export in `export(format=\"onnx\")`
+- ONNX graph optimization/quantization pipeline
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
 ## Requirements
@@ -182,6 +182,8 @@ ONNX export (requires optional dependencies):
 ```bash
 uv sync --extra export-onnx
 uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --format onnx
+# frontier artifact is also supported:
+uv run python examples/run_demo_export.py --artifact-path <frontier_artifact_dir> --format onnx
 ```
 
 ## Development

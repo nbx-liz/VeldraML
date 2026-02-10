@@ -1044,3 +1044,101 @@
 **Open Questions**
 - [ ] Should Phase 13 prioritize frontier ONNX export support or frontier tuning objective expansion
       (coverage-constrained variants)?
+
+### 2026-02-10 (Session planning: phase13-frontier-onnx-export-mvp)
+**Context**
+- Implement frontier ONNX export as the final runtime parity gap in export MVP.
+- Keep existing API signatures and runtime behaviors stable.
+- Status:
+  - Superseded by `Session/PR: phase13-frontier-onnx-export-mvp` with `Decision: confirmed`.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Enable `export(format="onnx")` for `task.type="frontier"` in Phase 13 MVP.
+  - Reason:
+    - Completes export task coverage without requiring API changes.
+  - Impact area:
+    - API behavior / Distribution workflow
+
+- Decision: provisional
+  - Policy:
+    - Keep ONNX as optional dependency and surface explicit guidance on missing dependencies.
+  - Reason:
+    - Maintains lightweight default environment while preserving ONNX portability path.
+  - Impact area:
+    - Packaging / Operability
+
+- Decision: provisional
+  - Policy:
+    - ONNX converter/runtime failures are handled as explicit validation errors with actionable guidance.
+  - Reason:
+    - Avoids silent failures and clarifies converter compatibility limits for frontier models.
+  - Impact area:
+    - Reliability / Troubleshooting
+
+### 2026-02-10 (Session/PR: phase13-frontier-onnx-export-mvp)
+**Context**
+- Implement frontier ONNX export support in MVP while preserving existing API signatures.
+- Keep python export always available and ONNX path optional.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/artifact/exporter.py`:
+    - removed frontier-specific `NotImplemented` branch in ONNX export
+    - added conversion failure handling with actionable `VeldraValidationError`
+    - added metadata field `frontier_alpha` for frontier ONNX export
+  - Updated `pyproject.toml`:
+    - added explicit optional dependency `onnxconverter-common==1.16.0` to `export-onnx`
+  - Updated `uv.lock`:
+    - resolved and locked `onnxconverter-common`
+- Tests added/updated:
+  - Updated `tests/test_exporter_internal.py`:
+    - frontier ONNX mocked success path
+    - converter failure validation path
+  - Updated `tests/test_export_onnx_optional.py`:
+    - removed frontier-not-supported expectation
+    - added frontier ONNX generation path under optional dependency condition
+  - Updated `tests/test_export_runner_contract.py`:
+    - runner frontier ONNX export contract via mocked exporter
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `export(format="onnx")` supports frontier artifacts in MVP.
+  - Reason:
+    - Completes export task coverage across implemented tasks.
+  - Impact area:
+    - API behavior / Distribution workflow
+
+- Decision: confirmed
+  - Policy:
+    - ONNX remains optional dependency based (`export-onnx` extra).
+  - Reason:
+    - Preserves lightweight default installs while enabling ONNX usage where needed.
+  - Impact area:
+    - Packaging / Operability
+
+- Decision: confirmed
+  - Policy:
+    - Converter/runtime failures are surfaced as explicit, guided `VeldraValidationError`.
+  - Reason:
+    - Improves troubleshooting and avoids silent or ambiguous conversion failures.
+  - Impact area:
+    - Reliability / User diagnostics
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`184 passed, 2 skipped`).
+
+**Risks / Notes**
+- Frontier ONNX conversion still depends on converter compatibility; explicit failure guidance is retained.
+- ONNX graph optimization/quantization remains out of scope.
+
+**Open Questions**
+- [ ] Should Phase 14 prioritize ONNX optimization (quantization/graph optimization) or export package
+      validation tooling (smoke-runner generation)?

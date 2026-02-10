@@ -31,7 +31,11 @@ def _artifact(
     model_text: str | None = "dummy-model",
     feature_schema: dict[str, Any] | None = None,
 ) -> Artifact:
-    schema = {"feature_names": ["x1"], "target": "target"} if feature_schema is None else feature_schema
+    schema = (
+        {"feature_names": ["x1"], "target": "target"}
+        if feature_schema is None
+        else feature_schema
+    )
     return Artifact.from_config(
         run_config=_config(task_type),
         run_id="rid_exporter_test",
@@ -116,3 +120,63 @@ def test_export_onnx_model_writes_outputs_with_mocked_toolchain(monkeypatch, tmp
     assert metadata["task_type"] == "regression"
     assert metadata["export_format"] == "onnx"
     assert fake_toolchain.last_initial_types is not None
+
+
+def test_export_onnx_model_writes_frontier_metadata_with_mocked_toolchain(
+    monkeypatch, tmp_path
+) -> None:
+    artifact = _artifact(
+        task_type="frontier",
+        feature_schema={"feature_names": ["x1"], "target": "target", "frontier_alpha": 0.9},
+    )
+
+    class _FakeONNXModel:
+        def SerializeToString(self) -> bytes:
+            return b"frontier-onnx"
+
+    class _FakeOnnxTools:
+        def convert_lightgbm(self, booster, initial_types):  # type: ignore[no-untyped-def]
+            _ = booster, initial_types
+            return _FakeONNXModel()
+
+    class _FakeFloatTensorType:
+        def __init__(self, shape):  # type: ignore[no-untyped-def]
+            self.shape = shape
+
+    monkeypatch.setattr(
+        exporter,
+        "_load_onnx_toolchain",
+        lambda: (_FakeOnnxTools(), _FakeFloatTensorType),
+    )
+    artifact._get_booster = MethodType(lambda self: object(), artifact)  # type: ignore[method-assign]
+
+    out_dir = tmp_path / "onnx_export_frontier"
+    exporter.export_onnx_model(artifact, out_dir)
+
+    metadata_path = out_dir / "metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert payload["task_type"] == "frontier"
+    assert payload["frontier_alpha"] == 0.9
+
+
+def test_export_onnx_model_converter_failure_has_actionable_message(monkeypatch, tmp_path) -> None:
+    artifact = _artifact(task_type="frontier")
+
+    class _FailingOnnxTools:
+        def convert_lightgbm(self, booster, initial_types):  # type: ignore[no-untyped-def]
+            _ = booster, initial_types
+            raise RuntimeError("converter boom")
+
+    class _FakeFloatTensorType:
+        def __init__(self, shape):  # type: ignore[no-untyped-def]
+            self.shape = shape
+
+    monkeypatch.setattr(
+        exporter,
+        "_load_onnx_toolchain",
+        lambda: (_FailingOnnxTools(), _FakeFloatTensorType),
+    )
+    artifact._get_booster = MethodType(lambda self: object(), artifact)  # type: ignore[method-assign]
+
+    with pytest.raises(VeldraValidationError, match="ONNX conversion failed"):
+        exporter.export_onnx_model(artifact, tmp_path / "onnx_export_fail")

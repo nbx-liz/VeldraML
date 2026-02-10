@@ -748,4 +748,56 @@ export（任意）：
 ### 34.4 Compatibility notes
 - `fit/predict/evaluate/simulate/export` behavior remains unchanged.
 - Remaining known gap:
-  - frontier ONNX export path (`export(format=\"onnx\")`) is intentionally unsupported in MVP.
+  - ONNX optimization pipeline (quantization/graph optimization) is out of scope.
+
+## 35. 2026-02-10 Frontier ONNX Export Proposal (Phase 13)
+### 35.1 Goal
+- Enable `export(format="onnx")` for `task.type="frontier"` while preserving stable API signatures.
+- Keep Python export behavior unchanged and preserve optional dependency policy.
+
+### 35.2 Scope
+- In scope:
+  - frontier ONNX conversion path in `src/veldra/artifact/exporter.py`
+  - converter failure handling with explicit user guidance
+  - optional dependency clarification including `onnxconverter-common`
+  - test expansion for mocked frontier ONNX success/failure
+- Out of scope:
+  - ONNX graph optimization/quantization
+  - objective/metric extensions for frontier tuning
+
+### 35.3 Contract changes
+- API signatures stay unchanged:
+  - `export(artifact, format="python") -> ExportResult`
+- Behavior update:
+  - `export(artifact, format="onnx")` supports frontier where converter compatibility allows.
+- Failure policy:
+  - dependency missing or conversion failure raises `VeldraValidationError` with install/diagnostic hints.
+
+### 35.4 Compatibility notes
+- no behavior change for:
+  - `fit/predict/evaluate/tune/simulate`
+- optional dependency model remains:
+  - python export always available
+  - ONNX export requires optional extra
+
+## 36. 2026-02-10 Frontier ONNX Export MVP (Phase 13, implemented)
+### 36.1 Added capabilities
+- `export(format="onnx")` now supports:
+  - regression
+  - binary
+  - multiclass
+  - frontier
+- `src/veldra/artifact/exporter.py` now:
+  - removes frontier-specific `NotImplemented` branch
+  - performs converter failure handling with explicit `VeldraValidationError` guidance
+  - includes `frontier_alpha` in ONNX export metadata for frontier artifacts
+
+### 36.2 Dependency and error policy
+- ONNX export remains optional dependency based (`export-onnx` extra).
+- Missing dependency and converter/runtime failures are explicit and actionable:
+  - install guidance: `uv sync --extra export-onnx`
+  - compatibility guidance for converter failures
+
+### 36.3 Compatibility notes
+- Stable API signatures remain unchanged.
+- No behavior change for `fit/predict/evaluate/tune/simulate`.

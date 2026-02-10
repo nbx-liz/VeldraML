@@ -675,6 +675,20 @@ wheels = [
 ]
 
 [[package]]
+name = "onnxconverter-common"
+version = "1.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnx" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4a/67/8dca1868a6e226f8d3f7d666cb6a48b79a60aad5267b16b24627cd8d9eb8/onnxconverter_common-1.16.0-py2.py3-none-any.whl", hash = "sha256:df39ee96f17fff119dff10dd245467651b60b9e8a96020eb93402239794852f7", size = 89511, upload-time = "2025-08-28T19:37:46.988Z" },
+]
+
+[[package]]
 name = "onnxmltools"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1481,6 +1495,7 @@ dependencies = [
 [package.optional-dependencies]
 export-onnx = [
     { name = "onnx" },
+    { name = "onnxconverter-common" },
     { name = "onnxmltools" },
     { name = "onnxruntime" },
 ]
@@ -1500,6 +1515,7 @@ requires-dist = [
     { name = "lightgbm", specifier = "==4.6.0" },
     { name = "numpy", specifier = "==2.4.2" },
     { name = "onnx", marker = "extra == 'export-onnx'", specifier = "==1.19.1" },
+    { name = "onnxconverter-common", marker = "extra == 'export-onnx'", specifier = "==1.16.0" },
     { name = "onnxmltools", marker = "extra == 'export-onnx'", specifier = "==1.14.0" },
     { name = "onnxruntime", marker = "extra == 'export-onnx'", specifier = "==1.23.2" },
     { name = "optuna", specifier = "==4.0.0" },
