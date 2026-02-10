@@ -28,7 +28,7 @@ Implemented:
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
 
 Not implemented yet:
-- ONNX graph optimization/quantization pipeline
+- ONNX graph optimization pipeline (quantization is available as opt-in)
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
 ## Requirements
@@ -189,6 +189,18 @@ uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --forma
 # frontier artifact is also supported:
 uv run python examples/run_demo_export.py --artifact-path <frontier_artifact_dir> --format onnx
 ```
+
+ONNX dynamic quantization (opt-in, default off):
+
+```yaml
+export:
+  artifact_dir: artifacts
+  onnx_optimization:
+    enabled: true
+    mode: dynamic_quant
+```
+
+When enabled, export also writes `model.optimized.onnx` and records size diff metadata.
 
 ## Development
 

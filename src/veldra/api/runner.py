@@ -493,9 +493,23 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
     if fmt == "python":
         output_dir = export_python_package(artifact, export_path)
         validation = _validate_python_export(output_dir, artifact)
+        optimization_meta = {
+            "onnx_optimized": False,
+            "onnx_optimization_mode": None,
+            "optimized_model_path": None,
+            "size_before_bytes": None,
+            "size_after_bytes": None,
+        }
     else:
         output_dir = export_onnx_model(artifact, export_path)
         validation = _validate_onnx_export(output_dir, artifact)
+        optimization_meta = {
+            "onnx_optimized": bool(validation.get("onnx_optimized", False)),
+            "onnx_optimization_mode": validation.get("onnx_optimization_mode"),
+            "optimized_model_path": validation.get("optimized_model_path"),
+            "size_before_bytes": validation.get("size_before_bytes"),
+            "size_after_bytes": validation.get("size_after_bytes"),
+        }
 
     files = sorted([p.name for p in output_dir.iterdir() if p.is_file()])
     log_event(
@@ -519,6 +533,20 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
         validation_passed=validation["validation_passed"],
         validation_report=validation["validation_report"],
     )
+    if fmt == "onnx":
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "onnx optimization completed",
+            run_id=run_id,
+            artifact_path=str(source_artifact_path),
+            task_type=artifact.run_config.task.type,
+            format=fmt,
+            optimized=optimization_meta["onnx_optimized"],
+            mode=optimization_meta["onnx_optimization_mode"],
+            size_before_bytes=optimization_meta["size_before_bytes"],
+            size_after_bytes=optimization_meta["size_after_bytes"],
+        )
     return ExportResult(
         path=str(output_dir),
         format=fmt,
@@ -531,5 +559,10 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
             "validation_passed": validation["validation_passed"],
             "validation_report": validation["validation_report"],
             "validation_mode": validation["validation_mode"],
+            "onnx_optimized": optimization_meta["onnx_optimized"],
+            "onnx_optimization_mode": optimization_meta["onnx_optimization_mode"],
+            "optimized_model_path": optimization_meta["optimized_model_path"],
+            "size_before_bytes": optimization_meta["size_before_bytes"],
+            "size_after_bytes": optimization_meta["size_after_bytes"],
         },
     )
