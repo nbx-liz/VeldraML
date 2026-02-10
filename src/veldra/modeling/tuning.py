@@ -30,6 +30,7 @@ class TuningOutput:
     trials: pd.DataFrame
     study_name: str
     storage_url: str
+    best_components: dict[str, Any]
 
 
 def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
@@ -42,6 +43,7 @@ def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
         "mae": "minimize",
         "r2": "maximize",
         "pinball": "minimize",
+        "pinball_coverage_penalty": "minimize",
         "auc": "maximize",
         "logloss": "minimize",
         "brier": "minimize",
@@ -136,7 +138,59 @@ def _build_trial_config(config: RunConfig, trial_params: dict[str, Any]) -> RunC
     return trial_cfg
 
 
-def _score_for_task(config: RunConfig, data: pd.DataFrame, metric_name: str) -> float:
+def _resolve_frontier_tuning_terms(config: RunConfig) -> tuple[float, float, float]:
+    coverage_target = (
+        float(config.frontier.alpha)
+        if config.tuning.coverage_target is None
+        else float(config.tuning.coverage_target)
+    )
+    coverage_tolerance = float(config.tuning.coverage_tolerance)
+    penalty_weight = float(config.tuning.penalty_weight)
+    return coverage_target, coverage_tolerance, penalty_weight
+
+
+def _frontier_objective_from_metrics(
+    config: RunConfig,
+    metric_name: str,
+    mean_metrics: dict[str, Any],
+) -> tuple[float, dict[str, Any]]:
+    if "pinball" not in mean_metrics:
+        raise VeldraValidationError("Tuning metric 'pinball' is missing from training output.")
+    pinball = float(mean_metrics["pinball"])
+    coverage = (
+        float(mean_metrics["coverage"])
+        if "coverage" in mean_metrics
+        else None
+    )
+    coverage_target, coverage_tolerance, penalty_weight = _resolve_frontier_tuning_terms(config)
+    if metric_name == "pinball_coverage_penalty" and coverage is None:
+        raise VeldraValidationError(
+            "Tuning metric 'coverage' is required for objective 'pinball_coverage_penalty'."
+        )
+    coverage_gap = abs(coverage - coverage_target) if coverage is not None else 0.0
+    penalty = penalty_weight * max(0.0, coverage_gap - coverage_tolerance)
+    objective_value = pinball
+    if metric_name == "pinball_coverage_penalty":
+        objective_value = pinball + penalty
+
+    components = {
+        "pinball": pinball,
+        "coverage": coverage,
+        "coverage_target": coverage_target,
+        "coverage_tolerance": coverage_tolerance,
+        "coverage_gap": coverage_gap,
+        "penalty_weight": penalty_weight,
+        "penalty": penalty,
+        "objective_value": objective_value,
+    }
+    return float(objective_value), components
+
+
+def _score_for_task_with_components(
+    config: RunConfig,
+    data: pd.DataFrame,
+    metric_name: str,
+) -> tuple[float, dict[str, Any]]:
     if config.task.type == "regression":
         output = train_regression_with_cv(config=config, data=data)
     elif config.task.type == "binary":
@@ -149,11 +203,23 @@ def _score_for_task(config: RunConfig, data: pd.DataFrame, metric_name: str) -> 
         raise VeldraValidationError(f"Unsupported tuning task type '{config.task.type}'.")
 
     mean_metrics = output.metrics.get("mean", {})
+    if (
+        config.task.type == "frontier"
+        and metric_name in {"pinball", "pinball_coverage_penalty"}
+    ):
+        return _frontier_objective_from_metrics(config, metric_name, mean_metrics)
+
     if metric_name not in mean_metrics:
         raise VeldraValidationError(
             f"Tuning metric '{metric_name}' is missing from training output."
         )
-    return float(mean_metrics[metric_name])
+    objective_value = float(mean_metrics[metric_name])
+    return objective_value, {"objective_value": objective_value}
+
+
+def _score_for_task(config: RunConfig, data: pd.DataFrame, metric_name: str) -> float:
+    objective_value, _ = _score_for_task_with_components(config, data, metric_name)
+    return objective_value
 
 
 def _study_trials_dataframe(study: optuna.Study) -> pd.DataFrame:
@@ -166,18 +232,25 @@ def _study_trials_dataframe(study: optuna.Study) -> pd.DataFrame:
         }
         for key, value in trial.params.items():
             row[f"param_{key}"] = value
+        for key, value in trial.user_attrs.items():
+            row[key] = value
         records.append(row)
     return pd.DataFrame.from_records(records)
 
 
-def _best_snapshot(study: optuna.Study) -> tuple[float | None, dict[str, Any]]:
+def _best_snapshot(study: optuna.Study) -> tuple[float | None, dict[str, Any], dict[str, Any]]:
     try:
         trial = study.best_trial
     except ValueError:
-        return None, {}
+        return None, {}, {}
     if trial.value is None:
-        return None, {}
-    return float(trial.value), dict(trial.params)
+        return None, {}, {}
+    components = {
+        str(key): value
+        for key, value in trial.user_attrs.items()
+        if isinstance(value, (int, float, bool, str))
+    }
+    return float(trial.value), dict(trial.params), components
 
 
 def _write_tuning_artifacts(
@@ -229,7 +302,7 @@ def run_tuning(
         ) from exc
 
     def callback(study_obj: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
-        best_value, best_params = _best_snapshot(study_obj)
+        best_value, best_params, best_components = _best_snapshot(study_obj)
         trials_df = _study_trials_dataframe(study_obj)
         summary = {
             "run_id": run_id,
@@ -240,18 +313,27 @@ def run_tuning(
             "direction": direction,
             "best_score": best_value,
             "best_params": best_params,
+            "objective_components": best_components,
             "n_trials": int(len(study_obj.trials)),
             "seed": config.train.seed,
         }
         _write_tuning_artifacts(output_dir, summary, trials_df)
         if on_trial_complete is not None:
-            on_trial_complete(
+            payload = {
+                "trial_number": int(trial.number),
+                "trial_value": None if trial.value is None else float(trial.value),
+                "best_value": best_value,
+                "n_trials_done": int(len(study_obj.trials)),
+            }
+            payload.update(
                 {
-                    "trial_number": int(trial.number),
-                    "trial_value": None if trial.value is None else float(trial.value),
-                    "best_value": best_value,
-                    "n_trials_done": int(len(study_obj.trials)),
+                    str(key): value
+                    for key, value in trial.user_attrs.items()
+                    if isinstance(value, (int, float, bool, str))
                 }
+            )
+            on_trial_complete(
+                payload
             )
 
     def objective(trial: optuna.Trial) -> float:
@@ -259,11 +341,14 @@ def run_tuning(
         for name, spec in search_space.items():
             params[name] = _suggest_from_spec(trial, name, spec)
         trial_cfg = _build_trial_config(config, params)
-        return _score_for_task(trial_cfg, data, metric_name)
+        objective_value, components = _score_for_task_with_components(trial_cfg, data, metric_name)
+        for key, value in components.items():
+            trial.set_user_attr(key, value)
+        return objective_value
 
     study.optimize(objective, n_trials=config.tuning.n_trials, callbacks=[callback])
 
-    best_value, best_params = _best_snapshot(study)
+    best_value, best_params, best_components = _best_snapshot(study)
     if best_value is None:
         raise VeldraValidationError("Tuning finished without a completed trial.")
 
@@ -277,6 +362,7 @@ def run_tuning(
         "direction": direction,
         "best_score": best_value,
         "best_params": best_params,
+        "objective_components": best_components,
         "n_trials": int(len(study.trials)),
         "seed": config.train.seed,
     }
@@ -290,4 +376,5 @@ def run_tuning(
         trials=trials,
         study_name=study_name,
         storage_url=storage_url,
+        best_components=best_components,
     )
