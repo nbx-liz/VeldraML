@@ -57,6 +57,16 @@ def test_binary_build_feature_frame_validation_errors() -> None:
         binary._build_feature_frame(config, frame)
 
 
+def test_binary_to_python_scalar_and_encoding_failure(monkeypatch) -> None:
+    assert binary._to_python_scalar(np.int64(3)) == 3
+
+    cfg = _build_config()
+    frame = _build_frame()
+    monkeypatch.setattr(binary, "_to_python_scalar", lambda value: "same")
+    with pytest.raises(VeldraValidationError, match="Failed to encode"):
+        binary._build_feature_frame(cfg, frame)
+
+
 def test_binary_iter_cv_splits_validation_errors() -> None:
     config = _build_config()
     frame = _build_frame()
@@ -80,6 +90,28 @@ def test_binary_iter_cv_splits_validation_errors() -> None:
     config.split.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraValidationError):
         binary._iter_cv_splits(config, frame, x, y)
+
+
+def test_binary_iter_cv_splits_success_paths() -> None:
+    config = _build_config()
+    frame = _build_frame()
+    x = frame[["x1", "x2"]]
+    y = pd.Series([0, 0, 0, 1, 1, 1])
+
+    config.split.type = "kfold"  # type: ignore[assignment]
+    kfold_splits = binary._iter_cv_splits(config, frame, x, y)
+    assert kfold_splits
+
+    config.split.type = "group"  # type: ignore[assignment]
+    config.split.group_col = "group"
+    config.split.n_splits = 2
+    group_splits = binary._iter_cv_splits(config, frame, x, y)
+    assert group_splits
+
+    config.split.type = "timeseries"  # type: ignore[assignment]
+    config.split.time_col = "ts"
+    ts_splits = binary._iter_cv_splits(config, frame, x, y)
+    assert ts_splits
 
 
 def test_train_binary_with_cv_early_validation() -> None:
@@ -142,3 +174,27 @@ def test_train_binary_with_cv_rejects_nan_oof(monkeypatch) -> None:
     )
     with pytest.raises(VeldraValidationError):
         binary.train_binary_with_cv(cfg, frame)
+
+
+def test_train_binary_with_cv_timeseries_path(monkeypatch) -> None:
+    cfg = _build_config()
+    cfg.split.type = "timeseries"  # type: ignore[assignment]
+    cfg.split.time_col = "ts"
+    frame = _build_frame().sample(frac=1.0, random_state=4).reset_index(drop=True)
+
+    monkeypatch.setattr(
+        binary,
+        "_iter_cv_splits",
+        lambda config, data, x, y: [
+            (np.array([0, 1, 2], dtype=int), np.array([3, 4, 5], dtype=int)),
+            (np.array([3, 4, 5], dtype=int), np.array([0, 1, 2], dtype=int)),
+        ],
+    )
+    monkeypatch.setattr(
+        binary,
+        "_train_single_booster",
+        lambda **kwargs: _FakeBooster(pred_value=0.4),
+    )
+
+    output = binary.train_binary_with_cv(cfg, frame)
+    assert output.metrics["mean"]["auc"] >= 0.0

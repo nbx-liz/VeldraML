@@ -56,6 +56,16 @@ def test_build_feature_frame_validation_errors() -> None:
         multiclass._build_feature_frame(config, frame)
 
 
+def test_multiclass_to_python_scalar_and_encoding_failure(monkeypatch) -> None:
+    assert multiclass._to_python_scalar(np.int64(5)) == 5
+
+    cfg = _build_config()
+    frame = _build_frame()
+    monkeypatch.setattr(multiclass, "_to_python_scalar", lambda value: "same")
+    with pytest.raises(VeldraValidationError, match="Failed to encode"):
+        multiclass._build_feature_frame(cfg, frame)
+
+
 def test_iter_cv_splits_validation_errors() -> None:
     config = _build_config()
     frame = _build_frame()
@@ -79,6 +89,28 @@ def test_iter_cv_splits_validation_errors() -> None:
     config.split.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraValidationError):
         multiclass._iter_cv_splits(config, frame, x, y)
+
+
+def test_iter_cv_splits_success_paths() -> None:
+    config = _build_config()
+    frame = _build_frame()
+    x = frame[["x1", "x2"]]
+    y = pd.Series([0, 0, 0, 1, 1, 1, 2, 2, 2])
+
+    config.split.type = "kfold"  # type: ignore[assignment]
+    kfold_splits = multiclass._iter_cv_splits(config, frame, x, y)
+    assert kfold_splits
+
+    config.split.type = "group"  # type: ignore[assignment]
+    config.split.group_col = "group"
+    config.split.n_splits = 3
+    group_splits = multiclass._iter_cv_splits(config, frame, x, y)
+    assert group_splits
+
+    config.split.type = "timeseries"  # type: ignore[assignment]
+    config.split.time_col = "ts"
+    ts_splits = multiclass._iter_cv_splits(config, frame, x, y)
+    assert ts_splits
 
 
 def test_normalize_proba_validation_errors() -> None:
@@ -150,3 +182,28 @@ def test_train_multiclass_with_cv_rejects_nan_oof(monkeypatch) -> None:
 
     with pytest.raises(VeldraValidationError):
         multiclass.train_multiclass_with_cv(cfg, frame)
+
+
+def test_train_multiclass_with_cv_timeseries_path(monkeypatch) -> None:
+    cfg = _build_config()
+    cfg.split.type = "timeseries"  # type: ignore[assignment]
+    cfg.split.time_col = "ts"
+    frame = _build_frame().sample(frac=1.0, random_state=5).reset_index(drop=True)
+
+    monkeypatch.setattr(
+        multiclass,
+        "_iter_cv_splits",
+        lambda config, data, x, y: [
+            (np.array([0, 1, 2, 3, 4, 5], dtype=int), np.array([6, 7, 8], dtype=int)),
+            (np.array([3, 4, 5, 6, 7, 8], dtype=int), np.array([0, 1, 2], dtype=int)),
+            (np.array([0, 1, 2, 6, 7, 8], dtype=int), np.array([3, 4, 5], dtype=int)),
+        ],
+    )
+    monkeypatch.setattr(
+        multiclass,
+        "_train_single_booster",
+        lambda **kwargs: _FakeBooster(n_class=3, pred_row=[0.2, 0.3, 0.5]),
+    )
+
+    output = multiclass.train_multiclass_with_cv(cfg, frame)
+    assert output.metrics["mean"]["accuracy"] >= 0.0

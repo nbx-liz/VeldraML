@@ -735,3 +735,107 @@
       variants from the first release?
 - [ ] Should frontier prediction always return `u_hat` when target is absent by allowing explicit
       target argument, or keep current implicit contract?
+
+### 2026-02-10 (Session/PR: phase10-simulate-mvp-scenario-dsl)
+**Context**
+- Implement `simulate` MVP as the next runtime feature while keeping stable API signatures unchanged.
+- Keep delivery non-intrusive: no behavior change in existing `fit/predict/evaluate/tune`.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/simulate/engine.py`:
+    - scenario normalization (`dict` / `list[dict]`)
+    - action application (`set/add/mul/clip`)
+    - task-specific simulation output builder
+  - Updated `src/veldra/simulate/__init__.py` exports.
+  - Updated `src/veldra/api/runner.py`:
+    - implemented `simulate(artifact, data, scenarios)` for regression/binary/multiclass/frontier
+    - added structured completion log (`simulate completed`)
+  - Updated `src/veldra/api/artifact.py`:
+    - implemented `Artifact.simulate(df, scenario)` single-scenario shortcut
+  - Added `examples/run_demo_simulate.py`.
+- Tests added:
+  - `tests/test_simulate_engine_actions.py`
+  - `tests/test_simulate_runner_regression.py`
+  - `tests/test_simulate_runner_binary.py`
+  - `tests/test_simulate_runner_multiclass.py`
+  - `tests/test_simulate_runner_frontier.py`
+  - `tests/test_examples_run_demo_simulate.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_runner_additional.py`
+  - `tests/test_artifact_additional.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `simulate` MVP is delivered for all implemented task runtimes
+      (regression/binary/multiclass/frontier).
+  - Reason:
+    - Closes major runtime gap with minimal API surface change.
+  - Impact area:
+    - API behavior / Scenario runtime
+
+- Decision: confirmed
+  - Policy:
+    - Scenario DSL action set is fixed to `set/add/mul/clip` for MVP.
+  - Reason:
+    - Covers common scenario operations while minimizing complexity and risk.
+  - Impact area:
+    - Validation / Operability
+
+- Decision: confirmed
+  - Policy:
+    - Simulation output contract is long-form with shared keys
+      (`row_id`, `scenario`, `task_type`) plus task-specific comparison columns.
+  - Reason:
+    - Keeps downstream processing consistent across tasks.
+  - Impact area:
+    - API contract / Analytics usability
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`150 passed`).
+
+**Risks / Notes**
+- Simulation operations currently target numeric columns only.
+- `export` and `tune(frontier)` remain intentionally unimplemented.
+
+**Open Questions**
+- [ ] Should Phase 11 `export` MVP start with python-only inference package, or include ONNX in first release?
+- [ ] Should `tune(frontier)` start with pinball-only objective, or include coverage-constrained variants?
+
+### 2026-02-10 (Session planning: phase10-simulate-mvp)
+**Context**
+- Implement `simulate` MVP as the next runtime capability after frontier and tuning expansions.
+- Preserve stable API signatures and keep existing task behavior unchanged.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Phase 10 scope is `simulate` only, using one PR with non-intrusive changes.
+  - Reason:
+    - Close the largest remaining runtime gap while isolating risk from `export` and `tune(frontier)`.
+  - Impact area:
+    - API behavior / Scenario runtime / Examples
+
+- Decision: provisional
+  - Policy:
+    - Scenario DSL minimal operations are `set/add/mul/clip`.
+  - Reason:
+    - Provides practical simulation controls without introducing search/optimization complexity.
+  - Impact area:
+    - Config/runtime contract / Validation
+
+- Decision: provisional
+  - Policy:
+    - `SimulationResult.data` is long-form with shared keys (`row_id`, `scenario`, `task_type`) and
+      task-specific comparison columns.
+  - Reason:
+    - Keeps downstream analysis format stable while supporting all implemented task types.
+  - Impact area:
+    - API contract / Operability

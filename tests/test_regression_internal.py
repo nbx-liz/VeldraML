@@ -74,6 +74,22 @@ def test_iter_cv_splits_validation_errors() -> None:
         regression._iter_cv_splits(config, frame, x)
 
 
+def test_iter_cv_splits_group_and_timeseries_success() -> None:
+    config = _build_config()
+    frame = _build_frame()
+    x = frame[["x1", "x2"]]
+
+    config.split.type = "group"  # type: ignore[assignment]
+    config.split.group_col = "group"
+    group_splits = regression._iter_cv_splits(config, frame, x)
+    assert group_splits
+
+    config.split.type = "timeseries"  # type: ignore[assignment]
+    config.split.time_col = "ts"
+    ts_splits = regression._iter_cv_splits(config, frame, x)
+    assert ts_splits
+
+
 def test_train_regression_with_cv_early_validation() -> None:
     frame = _build_frame()
 
@@ -133,3 +149,27 @@ def test_train_regression_with_cv_rejects_nan_oof(monkeypatch) -> None:
 
     with pytest.raises(VeldraValidationError):
         regression.train_regression_with_cv(cfg, frame)
+
+
+def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
+    cfg = _build_config()
+    cfg.split.type = "timeseries"  # type: ignore[assignment]
+    cfg.split.time_col = "ts"
+    frame = _build_frame().sample(frac=1.0, random_state=3).reset_index(drop=True)
+
+    monkeypatch.setattr(
+        regression,
+        "_train_single_booster",
+        lambda **kwargs: _FakeBooster(pred_value=2.4),
+    )
+    monkeypatch.setattr(
+        regression,
+        "_iter_cv_splits",
+        lambda config, data, x: [
+            (np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int)),
+            (np.array([2, 3, 4], dtype=int), np.array([0, 1], dtype=int)),
+            (np.array([0, 1, 3, 4], dtype=int), np.array([2], dtype=int)),
+        ],
+    )
+    output = regression.train_regression_with_cv(cfg, frame)
+    assert output.metrics["mean"]["rmse"] >= 0.0

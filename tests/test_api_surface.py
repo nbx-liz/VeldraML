@@ -58,8 +58,15 @@ def test_runner_endpoints_raise_consistent_error_for_unimplemented_only(tmp_path
         predict(artifact, data=None)
     pred = predict(artifact, data=frame[["x1"]])
     assert len(pred.data) == len(frame)
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError):
         simulate(artifact, data=None, scenarios=None)
+    sim = simulate(
+        artifact,
+        data=frame,
+        scenarios={"name": "x1_shift", "actions": [{"op": "add", "column": "x1", "value": 0.2}]},
+    )
+    assert len(sim.data) == len(frame)
+    assert {"row_id", "scenario", "task_type"} <= set(sim.data.columns)
     with pytest.raises(VeldraNotImplementedError):
         export(artifact, format="python")
 

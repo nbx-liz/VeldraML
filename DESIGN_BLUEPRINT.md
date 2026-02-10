@@ -393,7 +393,7 @@ export（任意）：
 | `predict` | Implemented | regression, binary, multiclass |
 | `evaluate` | Implemented | Artifact input path for regression, binary, multiclass, frontier |
 | `tune` | Implemented (Phase 8 MVP) | regression, binary, multiclass (Optuna TPE) |
-| `simulate` | Not implemented | Kept as stable API stub |
+| `simulate` | Implemented (Phase 10 MVP) | Scenario DSL (`set/add/mul/clip`) for regression, binary, multiclass, frontier |
 | `export` | Not implemented | Kept as stable API stub |
 | `frontier` task runtime | Implemented (Phase 9 MVP) | fit/predict/evaluate with quantile baseline |
 
@@ -535,3 +535,85 @@ export（任意）：
   - `feature_schema.json` (`frontier_alpha`)
   - `metrics.json`
 - `tune(frontier)`, `simulate`, and `export` remain intentionally unimplemented.
+
+## 29. 2026-02-10 Simulation MVP Proposal (Phase 10)
+### 29.1 Goal
+- Activate `simulate` runtime while preserving stable API signatures and existing task behavior.
+- Keep scope minimal and operationally safe for regression/binary/multiclass/frontier.
+
+### 29.2 Scope
+- Implement:
+  - `runner.simulate(artifact, data, scenarios)`
+  - `Artifact.simulate(df, scenario)`
+  - Scenario DSL with minimal operations: `set/add/mul/clip`
+- Keep out of scope:
+  - `export` implementation
+  - `tune(frontier)` implementation
+  - optimization-style search/solver behavior
+
+### 29.3 Scenario DSL contract
+- Scenario base shape:
+  - `{"name": str, "actions": list[Action]}`
+- Action variants:
+  - `{"op":"set","column":"<col>","value":<number>}`
+  - `{"op":"add","column":"<col>","value":<number>}`
+  - `{"op":"mul","column":"<col>","value":<number>}`
+  - `{"op":"clip","column":"<col>","min":<number|None>,"max":<number|None>}`
+- Validation:
+  - input data must be non-empty `pandas.DataFrame`
+  - target/id/non-existing columns are rejected
+  - operations are applied sequentially in provided order
+
+### 29.4 Output contract
+- `SimulationResult.data` is a long-form `DataFrame` with common columns:
+  - `row_id`, `scenario`, `task_type`
+- Task-specific outputs:
+  - regression/frontier:
+    - `base_pred`, `scenario_pred`, `delta_pred`
+    - frontier includes `base_u_hat/scenario_u_hat/delta_u_hat` only when target is present
+  - binary:
+    - `base_p_cal`, `scenario_p_cal`, `delta_p_cal`
+    - `base_label_pred`, `scenario_label_pred`, `label_changed`
+  - multiclass:
+    - `base_label_pred`, `scenario_label_pred`, `label_changed`
+    - `base_proba_<class>`, `scenario_proba_<class>`, `delta_proba_<class>`
+
+### 29.5 Logging and compatibility
+- Structured log event:
+  - `simulate completed` with `run_id`, `artifact_path`, `task_type`, `n_rows`, `n_scenarios`
+- Compatibility:
+  - No changes to API signatures
+  - No behavior change for `fit/predict/evaluate/tune`
+
+## 30. 2026-02-10 Simulation MVP (Phase 10, implemented)
+### 30.1 Added capabilities
+- `runner.simulate(artifact, data, scenarios)` now executes on:
+  - regression
+  - binary
+  - multiclass
+  - frontier
+- `Artifact.simulate(df, scenario)` now executes single-scenario simulation.
+- Added Scenario DSL engine with validated operations:
+  - `set`, `add`, `mul`, `clip`
+
+### 30.2 Runtime contract
+- Inputs:
+  - `data` must be non-empty `DataFrame`
+  - `scenarios` accepts `dict` or `list[dict]`
+- Column constraints:
+  - target, id, and non-existing columns are rejected
+  - action columns must be numeric
+- Output:
+  - `SimulationResult.data` is long-form with shared columns:
+    - `row_id`, `scenario`, `task_type`
+  - Task-specific comparison columns:
+    - regression/frontier: `base_pred/scenario_pred/delta_pred`
+    - frontier adds `base_u_hat/scenario_u_hat/delta_u_hat` when target is present
+    - binary: `base_p_cal/scenario_p_cal/delta_p_cal`, labels and `label_changed`
+    - multiclass: labels and per-class probability deltas
+
+### 30.3 Compatibility notes
+- Existing `fit/predict/evaluate/tune` behavior remains unchanged.
+- Remaining unimplemented runtime APIs:
+  - `export`
+  - `tune(frontier)`
