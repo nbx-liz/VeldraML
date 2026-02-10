@@ -103,3 +103,23 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
     )
     assert frontier.metadata["metric_name"] == "pinball"
 
+    frontier_penalty = tune(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(fr_path), "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 1},
+            "frontier": {"alpha": 0.90},
+            "tuning": {
+                "enabled": True,
+                "n_trials": 1,
+                "objective": "pinball_coverage_penalty",
+                "coverage_target": 0.91,
+                "coverage_tolerance": 0.02,
+                "penalty_weight": 1.5,
+            },
+            "export": {"artifact_dir": str(tmp_path / "artifacts")},
+        }
+    )
+    assert frontier_penalty.metadata["metric_name"] == "pinball_coverage_penalty"
+

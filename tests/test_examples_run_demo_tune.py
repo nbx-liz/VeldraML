@@ -154,3 +154,37 @@ def test_run_demo_tune_applies_search_space_and_resume(tmp_path) -> None:
     assert used_config["tuning"]["resume"] is True
     assert used_config["tuning"]["log_level"] == "DEBUG"
 
+
+def test_run_demo_tune_frontier_accepts_coverage_penalty_options(tmp_path) -> None:
+    data_path = tmp_path / "frontier.csv"
+    out_dir = tmp_path / "out_frontier_penalty"
+    _frontier_frame().to_csv(data_path, index=False)
+
+    exit_code = run_demo_tune.main(
+        [
+            "--task",
+            "frontier",
+            "--data-path",
+            str(data_path),
+            "--out-dir",
+            str(out_dir),
+            "--n-trials",
+            "1",
+            "--objective",
+            "pinball_coverage_penalty",
+            "--coverage-target",
+            "0.92",
+            "--coverage-tolerance",
+            "0.02",
+            "--penalty-weight",
+            "2.5",
+        ]
+    )
+    assert exit_code == 0
+    run_dir = sorted([p for p in out_dir.iterdir() if p.is_dir()])[-1]
+    used_config = yaml.safe_load((run_dir / "used_config.yaml").read_text(encoding="utf-8"))
+    assert used_config["tuning"]["objective"] == "pinball_coverage_penalty"
+    assert used_config["tuning"]["coverage_target"] == 0.92
+    assert used_config["tuning"]["coverage_tolerance"] == 0.02
+    assert used_config["tuning"]["penalty_weight"] == 2.5
+
