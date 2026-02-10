@@ -138,7 +138,47 @@ def test_tuning_objective_is_task_constrained() -> None:
     payload["tuning"]["objective"] = "pinball"
     RunConfig.model_validate(payload)
 
+    payload["tuning"]["objective"] = "pinball_coverage_penalty"
+    RunConfig.model_validate(payload)
+
     payload["tuning"]["objective"] = "rmse"
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_frontier_tuning_coverage_fields_validation() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "frontier"}
+    payload["split"] = {"type": "kfold", "n_splits": 2, "seed": 42}
+    payload["frontier"] = {"alpha": 0.90}
+    payload["tuning"] = {
+        "enabled": True,
+        "n_trials": 1,
+        "objective": "pinball_coverage_penalty",
+        "coverage_target": 0.92,
+        "coverage_tolerance": 0.02,
+        "penalty_weight": 2.0,
+    }
+    RunConfig.model_validate(payload)
+
+    payload["tuning"]["coverage_target"] = 1.2
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+    payload["tuning"]["coverage_target"] = 0.92
+    payload["tuning"]["coverage_tolerance"] = -0.1
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+    payload["tuning"]["coverage_tolerance"] = 0.02
+    payload["tuning"]["penalty_weight"] = -1.0
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_non_frontier_disallows_frontier_tuning_coverage_fields() -> None:
+    payload = _minimal_payload()
+    payload["tuning"] = {"enabled": True, "n_trials": 1, "coverage_target": 0.9}
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
 

@@ -17,7 +17,7 @@ _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
     "regression": {"rmse", "mae", "r2"},
     "binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall"},
     "multiclass": {"accuracy", "macro_f1", "logloss"},
-    "frontier": {"pinball"},
+    "frontier": {"pinball", "pinball_coverage_penalty"},
 }
 _TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
     "regression": "rmse",
@@ -72,6 +72,9 @@ class TuningConfig(BaseModel):
     resume: bool = False
     study_name: str | None = None
     log_level: TuningLogLevel = "INFO"
+    coverage_target: float | None = None
+    coverage_tolerance: float = 0.01
+    penalty_weight: float = 1.0
 
 
 class PostprocessConfig(BaseModel):
@@ -240,6 +243,37 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     f"tuning.objective '{objective}' is not allowed for task.type="
                     f"'{self.task.type}'. Allowed: {allowed}"
+                )
+
+        if self.task.type == "frontier":
+            resolved_target = (
+                self.frontier.alpha
+                if self.tuning.coverage_target is None
+                else self.tuning.coverage_target
+            )
+            if not (0.0 < resolved_target < 1.0):
+                raise ValueError(
+                    "tuning.coverage_target must satisfy 0 < value < 1 for frontier task"
+                )
+            if self.tuning.coverage_tolerance < 0:
+                raise ValueError(
+                    "tuning.coverage_tolerance must be >= 0 for frontier task"
+                )
+            if self.tuning.penalty_weight < 0:
+                raise ValueError("tuning.penalty_weight must be >= 0 for frontier task")
+        else:
+            if self.tuning.coverage_target is not None:
+                raise ValueError(
+                    "tuning.coverage_target can only be set when task.type='frontier'"
+                )
+            if self.tuning.coverage_tolerance != 0.01:
+                raise ValueError(
+                    "tuning.coverage_tolerance can only be customized when "
+                    "task.type='frontier'"
+                )
+            if self.tuning.penalty_weight != 1.0:
+                raise ValueError(
+                    "tuning.penalty_weight can only be customized when task.type='frontier'"
                 )
 
         return self

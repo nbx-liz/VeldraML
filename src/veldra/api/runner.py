@@ -166,6 +166,21 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     storage_url = f"sqlite:///{storage_path.resolve()}"
     summary_path = tuning_path / "study_summary.json"
     trials_path = tuning_path / "trials.parquet"
+    coverage_target = (
+        float(parsed.frontier.alpha)
+        if parsed.task.type == "frontier" and parsed.tuning.coverage_target is None
+        else (
+            float(parsed.tuning.coverage_target)
+            if parsed.task.type == "frontier"
+            else None
+        )
+    )
+    coverage_tolerance = (
+        float(parsed.tuning.coverage_tolerance) if parsed.task.type == "frontier" else None
+    )
+    penalty_weight = (
+        float(parsed.tuning.penalty_weight) if parsed.task.type == "frontier" else None
+    )
 
     def _trial_progress(payload: dict[str, Any]) -> None:
         log_event(
@@ -200,6 +215,9 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
         metric_name=tuning_output.metric_name,
         study_name=study_name,
         resume=parsed.tuning.resume,
+        coverage_target=coverage_target,
+        coverage_tolerance=coverage_tolerance,
+        penalty_weight=penalty_weight,
     )
     return TuneResult(
         run_id=run_id,
@@ -217,6 +235,10 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
             "study_name": study_name,
             "storage_url": storage_url,
             "resume": parsed.tuning.resume,
+            "coverage_target": coverage_target,
+            "coverage_tolerance": coverage_tolerance,
+            "penalty_weight": penalty_weight,
+            "objective_components": tuning_output.best_components,
         },
     )
 

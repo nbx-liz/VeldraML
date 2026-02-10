@@ -1370,3 +1370,106 @@
     - Avoids ambiguous blocked-window behavior and keeps configuration explicit.
   - Impact area:
     - Config contract / Operability
+
+### 2026-02-10 (Session planning: phase17-frontier-tune-coverage-objective-mvp)
+**Context**
+- Extend frontier tuning objective depth while preserving non-invasive defaults.
+- Keep stable API signatures unchanged.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Frontier tuning keeps `pinball` as default objective and adds opt-in
+      `pinball_coverage_penalty`.
+  - Reason:
+    - Improves operational alignment to target coverage without changing existing workflows.
+  - Impact area:
+    - Frontier tuning quality / Backward compatibility
+
+- Decision: provisional
+  - Policy:
+    - Coverage-aware objective uses:
+      `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`.
+    - `coverage_target` defaults to `frontier.alpha` when not set.
+  - Reason:
+    - Keeps configuration concise while making constraint strength explicit.
+  - Impact area:
+    - Objective design / Operability
+
+### 2026-02-10 (Session/PR: phase17-frontier-tune-coverage-objective-mvp)
+**Context**
+- Extend frontier tuning objective depth while preserving backward compatibility.
+- Keep default frontier tuning objective as `pinball`.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - frontier objective set expanded to include `pinball_coverage_penalty`
+    - added tuning fields:
+      - `coverage_target`
+      - `coverage_tolerance`
+      - `penalty_weight`
+    - added frontier/non-frontier validation rules for the new fields
+  - Updated `src/veldra/modeling/tuning.py`:
+    - added coverage-aware objective calculation:
+      `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`
+    - added trial user-attrs persistence for objective components
+    - enriched `study_summary.json` / `trials.parquet` with objective component details
+  - Updated `src/veldra/api/runner.py`:
+    - added frontier coverage objective metadata to `TuneResult.metadata`
+    - extended tune logging context with coverage tuning fields
+  - Updated `examples/run_demo_tune.py`:
+    - added CLI options:
+      - `--coverage-target`
+      - `--coverage-tolerance`
+      - `--penalty-weight`
+- Tests added:
+  - `tests/test_tune_frontier_objective_selection.py`
+  - `tests/test_tune_frontier_coverage_penalty.py`
+  - `tests/test_tune_frontier_validation_additional.py`
+- Tests updated:
+  - `tests/test_tune_smoke_frontier.py`
+  - `tests/test_examples_run_demo_tune.py`
+  - `tests/test_tune_artifacts.py`
+  - `tests/test_tune_objective_selection.py`
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_tuning_internal.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Frontier tuning keeps `pinball` as default and adds opt-in
+      `pinball_coverage_penalty`.
+  - Reason:
+    - Preserves existing workflows while enabling stronger operational alignment.
+  - Impact area:
+    - Backward compatibility / Frontier tuning quality
+
+- Decision: confirmed
+  - Policy:
+    - `coverage_target` defaults to `frontier.alpha` when omitted.
+    - Coverage penalty uses `coverage_tolerance` and `penalty_weight` as explicit controls.
+  - Reason:
+    - Keeps defaults simple but allows deterministic objective shaping when needed.
+  - Impact area:
+    - Config contract / Operability
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`230 passed`).
+
+### 2026-02-10 (History hygiene: superseded planning tails)
+**Context**
+- Some planning entries remained at the end of the file after corresponding implementation entries
+  were already confirmed.
+
+**Changes**
+- Added superseded mapping notes (append-only; no historical deletion):
+  - `Session planning: phase16-timeseries-split-advanced-mvp`
+    - superseded by `Session/PR: phase16-timeseries-split-advanced-mvp` (`Decision: confirmed`)
+  - `Session planning: phase17-frontier-tune-coverage-objective-mvp`
+    - superseded by `Session/PR: phase17-frontier-tune-coverage-objective-mvp` (`Decision: confirmed`)

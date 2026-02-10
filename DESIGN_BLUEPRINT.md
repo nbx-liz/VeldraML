@@ -408,8 +408,13 @@ export（任意）：
 - [Closed] Frontier alpha default and objective finalization
   - Status: Phase 9 sets default `alpha=0.90`, objective `quantile`, and metric contract
     (`pinball`, `mae`, `mean_u_hat`, `coverage`).
-- [P1] Time-series split advanced options (`blocked/gap/embargo`) timeline.
-- [P2] Export ONNX support prioritization.
+- [Closed] Time-series split advanced options (`blocked/gap/embargo`) timeline
+  - Status: implemented in Phase 16.
+- [Closed] Export ONNX support prioritization
+  - Status: implemented in Phase 13 with optional dependency policy.
+- [Closed] Frontier tuning objective depth (`pinball` only vs coverage-constrained objective)
+  - Status: implemented in Phase 17 with opt-in `pinball_coverage_penalty`.
+- [P1] ONNX graph optimization strategy and safety fallback policy.
 
 ## 24. 2026-02-10 Hyperparameter Tuning MVP (Phase 8)
 ### 24.1 Goal
@@ -969,3 +974,62 @@ export（任意）：
 - Existing default split behavior remains non-invasive:
   - `timeseries_mode='expanding'`
   - `gap=0`, `embargo=0`, `test_size=None`.
+
+## 43. 2026-02-10 Frontier Coverage-Constrained Tuning Proposal (Phase 17)
+### 43.1 Goal
+- Extend `tune(frontier)` from pinball-only objective to an opt-in coverage-aware objective.
+- Preserve stable API signatures and keep default behavior unchanged.
+
+### 43.2 Scope
+- In scope:
+  - add objective `pinball_coverage_penalty` for `task.type='frontier'`
+  - add tuning parameters:
+    - `coverage_target`
+    - `coverage_tolerance`
+    - `penalty_weight`
+  - enrich `TuneResult.metadata` and trial artifacts with objective component details
+  - update `examples/run_demo_tune.py` for frontier options
+- Out of scope:
+  - API signature changes
+  - ONNX graph optimization
+  - changes to `fit/predict/evaluate/simulate/export` behavior
+
+### 43.3 Objective contract
+- Existing frontier default remains:
+  - `tuning.objective='pinball'`
+- New opt-in objective:
+  - `tuning.objective='pinball_coverage_penalty'`
+- Objective formula:
+  - `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`
+- `coverage_target` resolves to `frontier.alpha` when omitted.
+
+### 43.4 Compatibility notes
+- No changes to stable API function signatures.
+- No behavior change for non-frontier tasks.
+- Frontier tuning remains backward compatible with prior pinball-default behavior.
+
+## 44. 2026-02-10 Frontier Coverage-Constrained Tuning MVP (Phase 17, implemented)
+### 44.1 Added capabilities
+- `tune(frontier)` now supports:
+  - `pinball` (existing default)
+  - `pinball_coverage_penalty` (new opt-in objective)
+- `TuningConfig` adds frontier tuning controls:
+  - `coverage_target: float | None`
+  - `coverage_tolerance: float`
+  - `penalty_weight: float`
+- Trial artifacts now include objective-component columns for frontier runs:
+  - `pinball`, `coverage`, `coverage_gap`, `penalty`, `objective_value`
+- `TuneResult.metadata` now includes:
+  - `coverage_target`, `coverage_tolerance`, `penalty_weight`, `objective_components`
+
+### 44.2 Objective contract
+- Coverage-aware objective:
+  - `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`
+- `coverage_target` defaults to `frontier.alpha` when omitted.
+- Default behavior remains unchanged:
+  - if `objective` is omitted for frontier tuning, metric remains `pinball`.
+
+### 44.3 Compatibility notes
+- Stable API signatures remain unchanged.
+- Non-frontier tuning behavior is unchanged.
+- Existing frontier pinball tuning workflows continue to run without config changes.

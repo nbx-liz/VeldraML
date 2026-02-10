@@ -45,6 +45,10 @@ def test_objective_and_default_search_space_validation() -> None:
     assert tuning._objective_spec("binary", "logloss") == ("logloss", "minimize")
     assert tuning._objective_spec("multiclass", "logloss") == ("logloss", "minimize")
     assert tuning._objective_spec("frontier", "pinball") == ("pinball", "minimize")
+    assert tuning._objective_spec("frontier", "pinball_coverage_penalty") == (
+        "pinball_coverage_penalty",
+        "minimize",
+    )
     with pytest.raises(VeldraValidationError):
         tuning._objective_spec("binary", "r2")
     with pytest.raises(VeldraValidationError):
