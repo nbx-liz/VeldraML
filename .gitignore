@@ -50,6 +50,8 @@ dmypy.json
 
 # Jupyter
 .ipynb_checkpoints/
+.jupyter/
+.jupyter_data/
 
 # Environments
 .env
