@@ -177,6 +177,10 @@ Export demo:
 uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --format python
 ```
 
+Export writes a machine-readable validation report at:
+- `<export_dir>/validation_report.json`
+- `ExportResult.metadata` includes `validation_passed`, `validation_report`, and `validation_mode`.
+
 ONNX export (requires optional dependencies):
 
 ```bash

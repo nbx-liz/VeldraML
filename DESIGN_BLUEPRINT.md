@@ -801,3 +801,60 @@ export（任意）：
 ### 36.3 Compatibility notes
 - Stable API signatures remain unchanged.
 - No behavior change for `fit/predict/evaluate/tune/simulate`.
+
+## 37. 2026-02-10 Export Validation Tooling Proposal (Phase 14)
+### 37.1 Goal
+- Add machine-verifiable post-export checks to increase operational reliability without changing stable
+  API signatures.
+- Prioritize export validation tooling before ONNX optimization work.
+
+### 37.2 Scope
+- In scope:
+  - validation report generation for `python` and `onnx` export outputs
+  - runner-level validation metadata and structured completion logging
+  - example output enrichment for export validation visibility
+- Out of scope:
+  - ONNX quantization/graph optimization
+  - changes to `ExportResult` type signature
+
+### 37.3 Contract changes (behavior only)
+- `runner.export(...)` remains signature-compatible.
+- `ExportResult.metadata` is extended with:
+  - `validation_passed: bool`
+  - `validation_report: str`
+  - `validation_mode: "python" | "onnx"`
+- `validation_report.json` is written in each export directory.
+
+### 37.4 Compatibility notes
+- No behavior change for `fit/predict/evaluate/tune/simulate`.
+- Existing export formats (`python`, `onnx`) remain unchanged.
+
+## 38. 2026-02-10 Export Validation Tooling MVP (Phase 14, implemented)
+### 38.1 Added capabilities
+- Added export validation helpers in `src/veldra/artifact/exporter.py`:
+  - `_validate_python_export(export_dir, artifact)`
+  - `_validate_onnx_export(export_dir, artifact)`
+- Added persisted validation report:
+  - `validation_report.json` in export output directory
+- Updated `runner.export(...)` to:
+  - run validation immediately after export
+  - emit structured log event `export validation completed`
+  - include validation metadata in `ExportResult.metadata`
+
+### 38.2 Validation behavior
+- Python export validation:
+  - required file checks
+  - runtime prediction smoke execution via exported `runtime_predict.py`
+- ONNX export validation:
+  - required file checks
+  - `onnx.checker` model validation
+  - `onnxruntime` single-row inference smoke execution
+- Validation failures are surfaced as metadata/report status; they do not alter API signatures.
+
+### 38.3 Examples and docs
+- `examples/run_demo_export.py` now prints validation status/report path.
+- README documents that export writes `validation_report.json`.
+
+### 38.4 Compatibility notes
+- Stable API signatures remain unchanged.
+- Existing runtime behavior of non-export APIs remains unchanged.

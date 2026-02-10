@@ -1142,3 +1142,86 @@
 **Open Questions**
 - [ ] Should Phase 14 prioritize ONNX optimization (quantization/graph optimization) or export package
       validation tooling (smoke-runner generation)?
+
+### 2026-02-10 (Session planning: phase14-export-validation-tooling-mvp)
+**Context**
+- Close remaining operational-quality gap after runtime parity by validating export outputs automatically.
+- Keep stable API signatures unchanged and avoid coupling with ONNX optimization.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Phase 14 prioritizes export validation tooling over ONNX optimization.
+  - Reason:
+    - Improves reliability immediately with minimal compatibility risk.
+  - Impact area:
+    - Export operability / QA
+
+- Decision: provisional
+  - Policy:
+    - `ExportResult.metadata` is extended with validation status/report fields only.
+  - Reason:
+    - Preserves stable API signatures while exposing actionable validation outcomes.
+  - Impact area:
+    - API behavior / Compatibility
+
+### 2026-02-10 (Session/PR: phase14-export-validation-tooling-mvp)
+**Context**
+- Implement export validation reports and runner-level validation metadata/logging.
+- Keep `fit/predict/evaluate/tune/simulate` behavior unchanged.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/artifact/exporter.py`:
+    - added `_validate_python_export(...)`
+    - added `_validate_onnx_export(...)`
+    - added `validation_report.json` writer
+  - Updated `src/veldra/api/runner.py`:
+    - run export validation immediately after export
+    - emit `export validation completed` structured event
+    - include validation metadata in `ExportResult.metadata`
+  - Updated `examples/run_demo_export.py`:
+    - print validation status and report path
+- Tests added:
+  - `tests/test_export_validation_python.py`
+  - `tests/test_export_validation_onnx.py`
+  - `tests/test_export_runner_validation_contract.py`
+- Tests updated:
+  - `tests/test_export_runner_contract.py`
+  - `tests/test_examples_run_demo_export.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Export writes machine-readable validation reports for both `python` and `onnx` outputs.
+  - Reason:
+    - Ensures exported artifacts are operationally verifiable, not only structurally present.
+  - Impact area:
+    - Export reliability / QA
+
+- Decision: confirmed
+  - Policy:
+    - Validation outcomes are exposed via `ExportResult.metadata` (`validation_passed`,
+      `validation_report`, `validation_mode`).
+  - Reason:
+    - Provides non-breaking visibility to downstream tools and operators.
+  - Impact area:
+    - API behavior / Operability
+
+**Results**
+- `uv run pytest -q tests/test_export_validation_python.py tests/test_export_validation_onnx.py`
+  `tests/test_export_runner_validation_contract.py tests/test_export_runner_contract.py`
+  `tests/test_examples_run_demo_export.py` : passed (`11 passed`).
+- Full regression run planned in this branch before merge.
+
+**Risks / Notes**
+- ONNX validation runtime checks depend on optional dependencies (`export-onnx`).
+- ONNX graph optimization/quantization remains out of scope for this phase.
+
+**Open Questions**
+- [ ] Should Phase 15 prioritize ONNX quantization first or graph optimization first for better
+      default trade-off?
