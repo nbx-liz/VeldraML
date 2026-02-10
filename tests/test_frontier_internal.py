@@ -180,3 +180,49 @@ def test_train_frontier_timeseries_sort_branch(monkeypatch) -> None:
     result = frontier.train_frontier_with_cv(cfg, df)
     assert np.array_equal(captured["times"], sorted_time)
     assert result.metrics["mean"]["mae"] >= 0.0
+
+
+def test_frontier_timeseries_splitter_receives_extended_params(monkeypatch) -> None:
+    cfg = _config("timeseries")
+    cfg.split.timeseries_mode = "blocked"
+    cfg.split.test_size = 2
+    cfg.split.gap = 1
+    cfg.split.embargo = 2
+    cfg.split.train_size = 3
+
+    df = _frame()
+    x = df[["x1", "x2"]]
+    captured: dict[str, int | str | None] = {}
+
+    class _FakeSplitter:
+        def __init__(
+            self,
+            n_splits: int,
+            test_size: int | None,
+            gap: int,
+            embargo: int,
+            mode: str,
+            train_size: int | None,
+        ) -> None:
+            captured["n_splits"] = n_splits
+            captured["test_size"] = test_size
+            captured["gap"] = gap
+            captured["embargo"] = embargo
+            captured["mode"] = mode
+            captured["train_size"] = train_size
+
+        def split(self, data: int) -> list[tuple[np.ndarray, np.ndarray]]:
+            _ = data
+            return [(np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int))]
+
+    monkeypatch.setattr(frontier, "TimeSeriesSplitter", _FakeSplitter)
+    splits = frontier._iter_cv_splits(cfg, df, x)
+    assert splits
+    assert captured == {
+        "n_splits": cfg.split.n_splits,
+        "test_size": 2,
+        "gap": 1,
+        "embargo": 2,
+        "mode": "blocked",
+        "train_size": 3,
+    }

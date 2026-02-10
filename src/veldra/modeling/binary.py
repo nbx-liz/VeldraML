@@ -118,7 +118,14 @@ def _iter_cv_splits(
             raise VeldraValidationError("split.time_col is required for timeseries split.")
         ordered = data.sort_values(split_cfg.time_col).reset_index(drop=True)
         x_ordered = ordered.loc[:, x.columns]
-        splitter = TimeSeriesSplitter(n_splits=split_cfg.n_splits)
+        splitter = TimeSeriesSplitter(
+            n_splits=split_cfg.n_splits,
+            test_size=split_cfg.test_size,
+            gap=split_cfg.gap,
+            embargo=split_cfg.embargo,
+            mode=split_cfg.timeseries_mode,
+            train_size=split_cfg.train_size,
+        )
         return list(splitter.split(len(x_ordered)))
 
     raise VeldraValidationError(f"Unsupported split type '{split_cfg.type}' for binary task.")

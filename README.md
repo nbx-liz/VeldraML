@@ -79,6 +79,27 @@ pred = predict(artifact, frame.drop(columns=["target"]))
 ev = evaluate(artifact, frame)
 ```
 
+Advanced time-series split options (non-default, opt-in):
+
+```python
+config = {
+    "config_version": 1,
+    "task": {"type": "regression"},
+    "data": {"path": "train.csv", "target": "target"},
+    "split": {
+        "type": "timeseries",
+        "time_col": "timestamp",
+        "n_splits": 5,
+        "timeseries_mode": "blocked",   # expanding | blocked
+        "train_size": 200,              # required for blocked
+        "test_size": 50,
+        "gap": 5,
+        "embargo": 10,
+    },
+    "export": {"artifact_dir": "artifacts"},
+}
+```
+
 ### API usage (tuning)
 
 ```python

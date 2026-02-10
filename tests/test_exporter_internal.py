@@ -298,19 +298,28 @@ def test_optimize_onnx_model_success_with_mocked_quantizer(monkeypatch, tmp_path
 
 def test_validate_python_export_marks_invalid_feature_names_when_runtime_exists(tmp_path) -> None:
     artifact = _artifact()
-    export_dir = exporter.export_python_package(artifact, tmp_path / "python_validate_invalid_schema")
+    export_dir = exporter.export_python_package(
+        artifact,
+        tmp_path / "python_validate_invalid_schema",
+    )
     artifact.feature_schema = {"target": "target"}  # runtime file exists, but schema is invalid
 
     report = exporter._validate_python_export(export_dir, artifact)
     payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
     checks = {item["name"]: item for item in payload["checks"]}
     assert checks["runtime_predict"]["ok"] is False
-    assert "feature_schema.feature_names is missing or invalid" in checks["runtime_predict"]["detail"]
+    assert (
+        "feature_schema.feature_names is missing or invalid"
+        in checks["runtime_predict"]["detail"]
+    )
 
 
 def test_validate_python_export_records_subprocess_exception(monkeypatch, tmp_path) -> None:
     artifact = _artifact()
-    export_dir = exporter.export_python_package(artifact, tmp_path / "python_validate_subprocess_error")
+    export_dir = exporter.export_python_package(
+        artifact,
+        tmp_path / "python_validate_subprocess_error",
+    )
 
     def _raise(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
@@ -388,4 +397,7 @@ def test_validate_onnx_export_handles_missing_feature_names_with_mocked_runtime(
     checks = {item["name"]: item for item in payload["checks"]}
     assert checks["onnx_model_check"]["ok"] is True
     assert checks["onnx_runtime_inference"]["ok"] is False
-    assert "feature_schema.feature_names is missing or invalid" in checks["onnx_runtime_inference"]["detail"]
+    assert (
+        "feature_schema.feature_names is missing or invalid"
+        in checks["onnx_runtime_inference"]["detail"]
+    )

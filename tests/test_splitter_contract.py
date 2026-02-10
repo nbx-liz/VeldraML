@@ -5,7 +5,13 @@ from veldra.split import TimeSeriesSplitter
 
 
 def test_timeseries_splitter_is_ordered_and_non_overlapping() -> None:
-    splitter = TimeSeriesSplitter(n_splits=3, test_size=5, gap=1)
+    splitter = TimeSeriesSplitter(
+        n_splits=3,
+        test_size=5,
+        gap=1,
+        embargo=0,
+        mode="expanding",
+    )
     splits = list(splitter.split(30))
 
     assert len(splits) == 3
@@ -18,7 +24,7 @@ def test_timeseries_splitter_is_ordered_and_non_overlapping() -> None:
 
 
 def test_timeseries_splitter_rejects_too_small_dataset() -> None:
-    splitter = TimeSeriesSplitter(n_splits=3, test_size=2)
+    splitter = TimeSeriesSplitter(n_splits=3, test_size=2, mode="expanding")
 
     with pytest.raises(ValueError):
         list(splitter.split(4))

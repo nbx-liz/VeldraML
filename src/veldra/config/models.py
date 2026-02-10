@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TaskType = Literal["regression", "binary", "multiclass", "frontier"]
 SplitType = Literal["kfold", "stratified", "group", "timeseries"]
+TimeSeriesMode = Literal["expanding", "blocked"]
 CalibrationType = Literal["platt", "isotonic"]
 TuningPreset = Literal["fast", "standard"]
 TuningLogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
@@ -47,6 +48,11 @@ class SplitConfig(BaseModel):
     time_col: str | None = None
     group_col: str | None = None
     seed: int = 42
+    timeseries_mode: TimeSeriesMode = "expanding"
+    test_size: int | None = None
+    gap: int = 0
+    embargo: int = 0
+    train_size: int | None = None
 
 
 class TrainConfig(BaseModel):
@@ -142,6 +148,49 @@ class RunConfig(BaseModel):
 
         if self.split.type == "group" and not self.split.group_col:
             raise ValueError("split.group_col is required when split.type='group'")
+
+        if self.split.type == "timeseries":
+            if self.split.gap < 0:
+                raise ValueError("split.gap must be >= 0 when split.type='timeseries'")
+            if self.split.embargo < 0:
+                raise ValueError("split.embargo must be >= 0 when split.type='timeseries'")
+            if self.split.test_size is not None and self.split.test_size < 1:
+                raise ValueError(
+                    "split.test_size must be >= 1 when split.type='timeseries'"
+                )
+            if self.split.timeseries_mode == "blocked":
+                if self.split.train_size is None or self.split.train_size < 1:
+                    raise ValueError(
+                        "split.train_size must be >= 1 when "
+                        "split.type='timeseries' and split.timeseries_mode='blocked'"
+                    )
+            else:
+                if self.split.train_size is not None:
+                    raise ValueError(
+                        "split.train_size can be set only when "
+                        "split.type='timeseries' and split.timeseries_mode='blocked'"
+                    )
+        else:
+            if self.split.timeseries_mode != "expanding":
+                raise ValueError(
+                    "split.timeseries_mode can be customized only when split.type='timeseries'"
+                )
+            if self.split.test_size is not None:
+                raise ValueError(
+                    "split.test_size can be customized only when split.type='timeseries'"
+                )
+            if self.split.gap != 0:
+                raise ValueError(
+                    "split.gap can be customized only when split.type='timeseries'"
+                )
+            if self.split.embargo != 0:
+                raise ValueError(
+                    "split.embargo can be customized only when split.type='timeseries'"
+                )
+            if self.split.train_size is not None:
+                raise ValueError(
+                    "split.train_size can be customized only when split.type='timeseries'"
+                )
 
         if self.task.type == "frontier":
             if not (0.0 < self.frontier.alpha < 1.0):

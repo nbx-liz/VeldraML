@@ -1294,3 +1294,79 @@
     - Makes optimization effects auditable in automation and operations.
   - Impact area:
     - Observability / Export QA
+
+### 2026-02-10 (Session/PR: phase16-timeseries-split-advanced-mvp)
+**Context**
+- Prioritize leakage-resistant and reproducible time-series evaluation.
+- Keep default behavior and stable API signatures unchanged.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - extended `SplitConfig` with `timeseries_mode`, `test_size`, `gap`, `embargo`, `train_size`
+    - added cross-field validation for timeseries-only settings and blocked-mode contract
+  - Updated `src/veldra/split/time_series.py`:
+    - added `mode='expanding'|'blocked'`
+    - added `embargo` support
+    - added explicit `train_size` contract for blocked mode
+    - added future-train exclusion for prior test+embargo windows
+  - Updated timeseries split wiring in:
+    - `src/veldra/modeling/regression.py`
+    - `src/veldra/modeling/binary.py`
+    - `src/veldra/modeling/multiclass.py`
+    - `src/veldra/modeling/frontier.py`
+- Tests updated:
+  - `tests/test_splitter_contract.py`
+  - `tests/test_time_series_splitter_additional.py`
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_regression_internal.py`
+  - `tests/test_binary_internal.py`
+  - `tests/test_multiclass_internal.py`
+  - `tests/test_frontier_internal.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Advanced timeseries controls are opt-in and only active for `split.type='timeseries'`.
+  - Reason:
+    - Improves leakage resistance while preserving existing non-timeseries behavior.
+  - Impact area:
+    - Split reliability / Backward compatibility
+
+- Decision: confirmed
+  - Policy:
+    - `blocked` mode requires explicit `train_size`.
+  - Reason:
+    - Makes blocked-window semantics explicit and reproducible.
+  - Impact area:
+    - Config contract / Operability
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`217 passed`).
+
+### 2026-02-10 (Session planning: phase16-timeseries-split-advanced-mvp)
+**Context**
+- Prioritize time-series split quality after core runtime parity and export/onxx enhancements.
+- Improve leakage resistance while keeping existing defaults unchanged.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Introduce advanced timeseries controls with non-invasive defaults.
+  - Reason:
+    - Strengthens evaluation reliability across all task trainers without API signature change.
+  - Impact area:
+    - Data splitting / Reproducibility
+
+- Decision: provisional
+  - Policy:
+    - `timeseries_mode='blocked'` uses explicit `train_size` contract.
+  - Reason:
+    - Avoids ambiguous blocked-window behavior and keeps configuration explicit.
+  - Impact area:
+    - Config contract / Operability
