@@ -23,11 +23,11 @@ def _build_config() -> RunConfig:
 def _build_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "x1": [0.1, 0.2, 0.3, 0.4, 0.5],
-            "x2": [1.0, 1.2, 1.1, 0.9, 1.3],
-            "group": [0, 0, 1, 1, 1],
-            "ts": [1, 2, 3, 4, 5],
-            "target": [2.0, 2.2, 2.4, 2.6, 2.8],
+            "x1": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "x2": [1.0, 1.2, 1.1, 0.9, 1.3, 1.4],
+            "group": [0, 0, 1, 1, 1, 2],
+            "ts": [1, 2, 3, 4, 5, 6],
+            "target": [2.0, 2.2, 2.4, 2.6, 2.8, 3.0],
         }
     )
 
@@ -166,9 +166,9 @@ def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
         regression,
         "_iter_cv_splits",
         lambda config, data, x: [
-            (np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int)),
-            (np.array([2, 3, 4], dtype=int), np.array([0, 1], dtype=int)),
-            (np.array([0, 1, 3, 4], dtype=int), np.array([2], dtype=int)),
+            (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5], dtype=int)),
+            (np.array([2, 3, 4, 5], dtype=int), np.array([0, 1], dtype=int)),
+            (np.array([0, 1, 4, 5], dtype=int), np.array([2, 3], dtype=int)),
         ],
     )
     output = regression.train_regression_with_cv(cfg, frame)

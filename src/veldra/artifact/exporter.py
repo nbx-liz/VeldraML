@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from veldra.api.artifact import Artifact
-from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
+from veldra.api.exceptions import VeldraValidationError
 from veldra.config.io import save_run_config
 
 _RUNTIME_PREDICT_PY = """\
@@ -60,7 +60,7 @@ print(pred[:5])
 
 
 def _metadata_payload(artifact: Artifact, *, export_format: str) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "run_id": artifact.manifest.run_id,
         "task_type": artifact.run_config.task.type,
         "export_format": export_format,
@@ -69,6 +69,11 @@ def _metadata_payload(artifact: Artifact, *, export_format: str) -> dict[str, An
         "manifest_version": artifact.manifest.manifest_version,
         "config_version": artifact.run_config.config_version,
     }
+    if artifact.run_config.task.type == "frontier":
+        payload["frontier_alpha"] = float(
+            artifact.feature_schema.get("frontier_alpha", artifact.run_config.frontier.alpha)
+        )
+    return payload
 
 
 def export_python_package(artifact: Artifact, out_dir: str | Path) -> Path:
@@ -117,8 +122,6 @@ def export_onnx_model(artifact: Artifact, out_dir: str | Path) -> Path:
     """Export artifact model into ONNX format when optional deps are available."""
     if artifact.model_text is None:
         raise VeldraValidationError("Artifact model is missing and cannot be exported.")
-    if artifact.run_config.task.type == "frontier":
-        raise VeldraNotImplementedError("ONNX export is not supported for frontier task in MVP.")
 
     feature_names = artifact.feature_schema.get("feature_names")
     if not isinstance(feature_names, list) or not feature_names:
@@ -132,10 +135,24 @@ def export_onnx_model(artifact: Artifact, out_dir: str | Path) -> Path:
 
     booster = artifact._get_booster()
     initial_types = [("input", float_tensor_type([None, len(feature_names)]))]
-    onnx_model = onnxmltools.convert_lightgbm(booster, initial_types=initial_types)
+    try:
+        onnx_model = onnxmltools.convert_lightgbm(booster, initial_types=initial_types)
+    except Exception as exc:
+        raise VeldraValidationError(
+            "ONNX conversion failed"
+            f" for task.type='{artifact.run_config.task.type}'. "
+            "Check converter compatibility for the current LightGBM model and "
+            "ensure optional dependencies are installed with: uv sync --extra export-onnx"
+        ) from exc
     model_path = target / "model.onnx"
-    with model_path.open("wb") as fp:
-        fp.write(onnx_model.SerializeToString())
+    try:
+        with model_path.open("wb") as fp:
+            fp.write(onnx_model.SerializeToString())
+    except Exception as exc:
+        raise VeldraValidationError(
+            "Failed to serialize/write ONNX model artifact. "
+            "Verify converter output compatibility and filesystem permissions."
+        ) from exc
 
     (target / "metadata.json").write_text(
         json.dumps(_metadata_payload(artifact, export_format="onnx"), indent=2, sort_keys=True),

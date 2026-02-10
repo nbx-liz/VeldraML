@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
 from veldra.api import Artifact, export, fit
+from veldra.api import runner as runner_module
 from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
 from veldra.config.models import RunConfig
 
@@ -80,3 +83,40 @@ def test_export_runner_rejects_unknown_task(tmp_path) -> None:
     artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraNotImplementedError):
         export(artifact, format="python")
+
+
+def test_export_runner_supports_frontier_onnx_path(monkeypatch, tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "x1": [0.1, 0.2, 0.3, 1.1, 1.2, 1.3],
+            "x2": [1.0, 0.9, 1.1, 0.2, 0.1, 0.3],
+            "target": [0.8, 0.9, 1.0, 1.8, 1.9, 2.1],
+        }
+    )
+    data_path = tmp_path / "frontier.csv"
+    frame.to_csv(data_path, index=False)
+    run = fit(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(data_path), "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 42},
+            "frontier": {"alpha": 0.90},
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    artifact = Artifact.load(run.artifact_path)
+
+    def _fake_export_onnx_model(local_artifact, out_dir):  # type: ignore[no-untyped-def]
+        _ = local_artifact
+        target = Path(out_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "model.onnx").write_bytes(b"onnx-bytes")
+        (target / "metadata.json").write_text("{}", encoding="utf-8")
+        return target
+
+    monkeypatch.setattr(runner_module, "export_onnx_model", _fake_export_onnx_model)
+    result = export(artifact, format="onnx")
+    assert result.format == "onnx"
+    assert Path(result.path).exists()
+    assert "model.onnx" in result.metadata["files"]
