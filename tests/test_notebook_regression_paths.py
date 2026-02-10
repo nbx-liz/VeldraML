@@ -23,7 +23,8 @@ def test_notebook_generates_data_internally() -> None:
     assert "generate_drifted_data(" in source
 
 
-def test_notebook_uses_generated_model_csv_for_fit() -> None:
+def test_notebook_uses_generated_model_file_for_fit() -> None:
     source = _notebook_source()
-    assert "TRAIN_MODEL_PATH = OUT_DIR / \"train_model_prepared.csv\"" in source
+    assert "TRAIN_MODEL_PATH = OUT_DIR / \"train_model_prepared.parquet\"" in source
+    assert "to_parquet(" in source
     assert "\"data\": {\"path\": str(TRAIN_MODEL_PATH), \"target\": TARGET_COL}" in source

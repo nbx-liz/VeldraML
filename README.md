@@ -208,6 +208,45 @@ Notebook includes:
 - SHAP-style contribution summary via LightGBM `pred_contrib=True` (table + bar chart)
 - Simulation and export cells
 
+Notebook sample (frontier workflow with diagnostics):
+
+```bash
+# Open and run notebooks/frontier_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- In-notebook synthetic frontier data generation (base/drift)
+- Train/Test frontier prediction vs actual comparison
+- `u_hat`, `coverage`, and `pinball` diagnostics
+- LightGBM feature importance and pred_contrib-based SHAP summary
+- Simulation and export cells
+
+Notebook sample (simulate-focused what-if analysis):
+
+```bash
+# Open and run notebooks/simulate_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- In-notebook synthetic SaaS data generation
+- Scenario design for intervention analysis
+- Scenario KPI table (`mean_uplift`, `uplift_win_rate`, `downside_rate`)
+- Segment-level uplift analysis
+- Top impacted account shortlist for operational rollout
+
+Notebook sample (binary + tune analysis):
+
+```bash
+# Open and run notebooks/binary_tuning_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- In-notebook synthetic binary data generation (base + drift)
+- Baseline binary fit/evaluate with calibrated probability outputs
+- Hyperparameter tuning (`tune`) and trial history visualization
+- Baseline vs tuned metric comparison
+- ROC / confusion matrix / error-distribution diagnostics
+
 Export demo:
 
 ```bash
