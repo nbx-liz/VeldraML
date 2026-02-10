@@ -81,3 +81,9 @@ examples/data/*.csv
 examples/data/*.parquet
 examples/data/sklearn_data/
 **/.veldra_tuning_artifacts/
+
+# Local temporary files
+tmp*.json
+uv-*.lock
+notebooks/.uv_cache/
+notebooks/examples/out/
