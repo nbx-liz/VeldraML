@@ -92,6 +92,24 @@ class ExportConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     artifact_dir: str = "artifacts"
     inference_package: bool = False
+    onnx_optimization: "OnnxOptimizationConfig" = Field(
+        default_factory=lambda: OnnxOptimizationConfig()
+    )
+
+    @model_validator(mode="after")
+    def _validate_onnx_optimization(self) -> "ExportConfig":
+        if self.onnx_optimization.enabled and self.onnx_optimization.mode is None:
+            raise ValueError(
+                "export.onnx_optimization.mode is required when "
+                "export.onnx_optimization.enabled=true"
+            )
+        return self
+
+
+class OnnxOptimizationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    mode: Literal["dynamic_quant"] | None = "dynamic_quant"
 
 
 class FrontierConfig(BaseModel):

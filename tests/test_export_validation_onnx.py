@@ -45,6 +45,8 @@ def test_validate_onnx_export_passes_when_dependencies_are_available(tmp_path) -
     assert report["validation_mode"] == "onnx"
     assert report["validation_passed"] is True
     assert Path(report["validation_report"]).exists()
+    assert "onnx_optimized" in report
+    assert "onnx_optimization_mode" in report
 
 
 def test_validate_onnx_export_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> None:
@@ -65,6 +67,7 @@ def test_validate_onnx_export_reports_missing_runtime_dependency(monkeypatch, tm
     report = exporter._validate_onnx_export(export_dir, artifact)
     assert report["validation_mode"] == "onnx"
     assert report["validation_passed"] is False
+    assert report["onnx_optimized"] is False
 
     payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
     checks = {item["name"]: item for item in payload["checks"]}

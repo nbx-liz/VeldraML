@@ -4,6 +4,7 @@ from veldra.config.io import load_run_config, save_run_config
 from veldra.config.models import (
     DataConfig,
     ExportConfig,
+    OnnxOptimizationConfig,
     PostprocessConfig,
     RunConfig,
     SimulationConfig,
@@ -16,6 +17,7 @@ from veldra.config.models import (
 __all__ = [
     "DataConfig",
     "ExportConfig",
+    "OnnxOptimizationConfig",
     "PostprocessConfig",
     "RunConfig",
     "SimulationConfig",

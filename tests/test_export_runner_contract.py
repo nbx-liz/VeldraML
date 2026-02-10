@@ -43,6 +43,11 @@ def test_export_runner_returns_contract(tmp_path) -> None:
     assert result.metadata["validation_mode"] == "python"
     assert isinstance(result.metadata["validation_passed"], bool)
     assert Path(result.metadata["validation_report"]).exists()
+    assert result.metadata["onnx_optimized"] is False
+    assert result.metadata["onnx_optimization_mode"] is None
+    assert result.metadata["optimized_model_path"] is None
+    assert result.metadata["size_before_bytes"] is None
+    assert result.metadata["size_after_bytes"] is None
 
 
 def test_export_runner_validates_format_and_artifact_model(tmp_path) -> None:
@@ -123,3 +128,4 @@ def test_export_runner_supports_frontier_onnx_path(monkeypatch, tmp_path) -> Non
     assert result.format == "onnx"
     assert Path(result.path).exists()
     assert "model.onnx" in result.metadata["files"]
+    assert "onnx_optimized" in result.metadata

@@ -858,3 +858,48 @@ export（任意）：
 ### 38.4 Compatibility notes
 - Stable API signatures remain unchanged.
 - Existing runtime behavior of non-export APIs remains unchanged.
+
+## 39. 2026-02-10 ONNX Optimization MVP Proposal (Phase 15)
+### 39.1 Goal
+- Add optional ONNX dynamic quantization on top of existing export validation tooling.
+- Keep stable API signatures unchanged and preserve default behavior.
+
+### 39.2 Scope
+- In scope:
+  - opt-in dynamic quantization during `export(format="onnx")`
+  - optimization metadata/report expansion
+  - config contract for `export.onnx_optimization`
+- Out of scope:
+  - graph optimization
+  - static quantization variants
+
+### 39.3 Contract changes (behavior only)
+- `runner.export(...)` signature unchanged.
+- `ExportResult.metadata` adds:
+  - `onnx_optimized`
+  - `onnx_optimization_mode`
+  - `optimized_model_path`
+  - `size_before_bytes`
+  - `size_after_bytes`
+- default remains non-invasive:
+  - optimization disabled unless explicitly enabled.
+
+## 40. 2026-02-10 ONNX Optimization MVP (Phase 15, implemented)
+### 40.1 Added capabilities
+- Added `export.onnx_optimization` config:
+  - `enabled: bool = false`
+  - `mode: "dynamic_quant"`
+- ONNX export now optionally writes:
+  - `model.optimized.onnx`
+- Validation report includes optimization status and model size comparison.
+
+### 40.2 Runtime behavior
+- When `enabled=false`:
+  - ONNX export behavior is unchanged.
+- When `enabled=true`:
+  - dynamic quantization is applied after ONNX export.
+  - optimization failures raise explicit `VeldraValidationError` with install guidance.
+
+### 40.3 Compatibility notes
+- Stable API signatures remain unchanged.
+- `fit/predict/evaluate/tune/simulate` behavior is unchanged.

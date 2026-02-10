@@ -158,11 +158,82 @@ def export_onnx_model(artifact: Artifact, out_dir: str | Path) -> Path:
             "Verify converter output compatibility and filesystem permissions."
         ) from exc
 
+    optimization = {
+        "onnx_optimized": False,
+        "onnx_optimization_mode": None,
+        "optimized_model_path": None,
+        "size_before_bytes": int(model_path.stat().st_size),
+        "size_after_bytes": None,
+    }
+    opt_cfg = artifact.run_config.export.onnx_optimization
+    if opt_cfg.enabled:
+        optimization = _optimize_onnx_model(
+            model_path=model_path,
+            mode=opt_cfg.mode or "dynamic_quant",
+            out_dir=target,
+        )
+
     (target / "metadata.json").write_text(
-        json.dumps(_metadata_payload(artifact, export_format="onnx"), indent=2, sort_keys=True),
+        json.dumps(
+            {
+                **_metadata_payload(artifact, export_format="onnx"),
+                **optimization,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     return target
+
+
+def _optimize_onnx_model(
+    *,
+    model_path: Path,
+    mode: str,
+    out_dir: Path,
+) -> dict[str, Any]:
+    if mode != "dynamic_quant":
+        raise VeldraValidationError(
+            f"Unsupported ONNX optimization mode '{mode}'. Supported: dynamic_quant"
+        )
+
+    try:
+        from onnxruntime.quantization import QuantType, quantize_dynamic
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", "onnxruntime")
+        raise VeldraValidationError(
+            "ONNX dynamic quantization requires optional dependencies. "
+            f"Missing package: '{missing}'. "
+            "Install with: uv sync --extra export-onnx"
+        ) from exc
+
+    optimized_path = out_dir / "model.optimized.onnx"
+    try:
+        quantize_dynamic(
+            model_input=str(model_path),
+            model_output=str(optimized_path),
+            weight_type=QuantType.QInt8,
+        )
+    except Exception as exc:
+        raise VeldraValidationError(
+            "ONNX dynamic quantization failed. "
+            "Verify converter/runtime compatibility for this model and ensure "
+            "optional dependencies are installed with: uv sync --extra export-onnx"
+        ) from exc
+
+    if not optimized_path.exists():
+        raise VeldraValidationError("ONNX optimization did not produce model.optimized.onnx.")
+
+    size_before = int(model_path.stat().st_size)
+    size_after = int(optimized_path.stat().st_size)
+    return {
+        "onnx_optimized": True,
+        "onnx_optimization_mode": mode,
+        "optimized_model_path": str(optimized_path),
+        "size_before_bytes": size_before,
+        "size_after_bytes": size_after,
+    }
 
 
 def _write_validation_report(
@@ -170,6 +241,7 @@ def _write_validation_report(
     *,
     mode: str,
     checks: list[dict[str, Any]],
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = Path(out_dir)
     passed = all(bool(item.get("ok")) for item in checks)
@@ -179,16 +251,21 @@ def _write_validation_report(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
     }
+    if extra:
+        payload.update(extra)
     report_path = target / "validation_report.json"
     report_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    return {
+    summary = {
         "validation_mode": mode,
         "validation_passed": passed,
         "validation_report": str(report_path),
     }
+    if extra:
+        summary.update(extra)
+    return summary
 
 
 def _validate_python_export(export_dir: str | Path, artifact: Artifact) -> dict[str, Any]:
@@ -277,6 +354,40 @@ def _validate_onnx_export(export_dir: str | Path, artifact: Artifact) -> dict[st
     metadata_path = target / "metadata.json"
     checks.append({"name": "required_file:model.onnx", "ok": model_path.exists()})
     checks.append({"name": "required_file:metadata.json", "ok": metadata_path.exists()})
+    optimized_path = target / "model.optimized.onnx"
+    checks.append(
+        {
+            "name": "optional_file:model.optimized.onnx",
+            "ok": True,
+            "detail": "present" if optimized_path.exists() else "not_present",
+        }
+    )
+
+    optimization_extra: dict[str, Any] = {
+        "onnx_optimized": False,
+        "onnx_optimization_mode": None,
+        "optimized_model_path": None,
+        "size_before_bytes": int(model_path.stat().st_size) if model_path.exists() else None,
+        "size_after_bytes": int(optimized_path.stat().st_size) if optimized_path.exists() else None,
+    }
+    if metadata_path.exists():
+        try:
+            meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+            optimization_extra["onnx_optimized"] = bool(meta.get("onnx_optimized", False))
+            optimization_extra["onnx_optimization_mode"] = meta.get("onnx_optimization_mode")
+            optimization_extra["optimized_model_path"] = meta.get("optimized_model_path")
+            if meta.get("size_before_bytes") is not None:
+                optimization_extra["size_before_bytes"] = int(meta["size_before_bytes"])
+            if meta.get("size_after_bytes") is not None:
+                optimization_extra["size_after_bytes"] = int(meta["size_after_bytes"])
+        except Exception:
+            checks.append(
+                {
+                    "name": "metadata_parse",
+                    "ok": False,
+                    "detail": "Failed to parse metadata.json",
+                }
+            )
 
     try:
         import onnx
@@ -292,7 +403,9 @@ def _validate_onnx_export(export_dir: str | Path, artifact: Artifact) -> dict[st
                 ),
             }
         )
-        return _write_validation_report(target, mode="onnx", checks=checks)
+        return _write_validation_report(
+            target, mode="onnx", checks=checks, extra=optimization_extra
+        )
 
     if model_path.exists():
         try:
@@ -336,4 +449,4 @@ def _validate_onnx_export(export_dir: str | Path, artifact: Artifact) -> dict[st
                     }
                 )
 
-    return _write_validation_report(target, mode="onnx", checks=checks)
+    return _write_validation_report(target, mode="onnx", checks=checks, extra=optimization_extra)

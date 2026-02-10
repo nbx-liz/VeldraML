@@ -39,6 +39,11 @@ def test_export_runner_metadata_contains_validation_contract(tmp_path) -> None:
     report_path = Path(result.metadata["validation_report"])
     assert report_path.exists()
     assert "validation_report.json" in result.metadata["files"]
+    assert "onnx_optimized" in result.metadata
+    assert "onnx_optimization_mode" in result.metadata
+    assert "optimized_model_path" in result.metadata
+    assert "size_before_bytes" in result.metadata
+    assert "size_after_bytes" in result.metadata
 
 
 def test_export_runner_propagates_validation_failure_status(monkeypatch, tmp_path) -> None:

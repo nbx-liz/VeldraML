@@ -135,3 +135,17 @@ def test_non_frontier_disallows_custom_frontier_settings() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_export_onnx_optimization_defaults_to_disabled() -> None:
+    cfg = RunConfig.model_validate(_minimal_payload())
+    assert cfg.export.onnx_optimization.enabled is False
+    assert cfg.export.onnx_optimization.mode == "dynamic_quant"
+
+
+def test_export_onnx_optimization_requires_mode_when_enabled() -> None:
+    payload = _minimal_payload()
+    payload["export"] = {"onnx_optimization": {"enabled": True, "mode": None}}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

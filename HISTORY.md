@@ -1225,3 +1225,72 @@
 **Open Questions**
 - [ ] Should Phase 15 prioritize ONNX quantization first or graph optimization first for better
       default trade-off?
+
+### 2026-02-10 (Session planning: phase15-onnx-quantization-mvp)
+**Context**
+- Add optional ONNX optimization on top of existing export validation foundation.
+- Preserve stable API signatures and default export behavior.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Phase 15 uses quantization-first (`dynamic_quant`) and keeps graph optimization out of scope.
+  - Reason:
+    - Provides immediate practical optimization with low compatibility risk.
+  - Impact area:
+    - Export performance / Operability
+
+- Decision: provisional
+  - Policy:
+    - ONNX optimization is opt-in via `export.onnx_optimization.enabled`.
+  - Reason:
+    - Guarantees non-invasive defaults for existing users.
+  - Impact area:
+    - Backward compatibility / Runtime stability
+
+### 2026-02-10 (Session/PR: phase15-onnx-quantization-mvp)
+**Context**
+- Implement optional ONNX dynamic quantization without changing stable API signatures.
+- Keep ONNX optional dependency policy and explicit failure guidance.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - added `OnnxOptimizationConfig`
+    - added `export.onnx_optimization` contract and validation
+  - Updated `src/veldra/artifact/exporter.py`:
+    - added `_optimize_onnx_model(...)` for dynamic quantization
+    - added optional `model.optimized.onnx` generation
+    - extended ONNX validation report payload with optimization metadata
+  - Updated `src/veldra/api/runner.py`:
+    - extended `ExportResult.metadata` with optimization fields
+    - added structured event `onnx optimization completed`
+- Tests added:
+  - `tests/test_export_onnx_optimization.py`
+  - `tests/test_export_onnx_optimization_errors.py`
+- Tests updated:
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_export_runner_contract.py`
+  - `tests/test_export_runner_validation_contract.py`
+  - `tests/test_export_validation_onnx.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - ONNX dynamic quantization is opt-in and disabled by default.
+  - Reason:
+    - Prevents behavior changes in existing export workflows.
+  - Impact area:
+    - Backward compatibility / Runtime stability
+
+- Decision: confirmed
+  - Policy:
+    - Export metadata and validation report include optimization result and size comparison.
+  - Reason:
+    - Makes optimization effects auditable in automation and operations.
+  - Impact area:
+    - Observability / Export QA
