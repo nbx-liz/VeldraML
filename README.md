@@ -195,6 +195,19 @@ Simulate demo (regression baseline with scenario actions):
 uv run python examples/run_demo_simulate.py --data-path examples/data/california_housing.csv
 ```
 
+Notebook sample (regression workflow with diagnostics):
+
+```bash
+# Open and run notebooks/regression_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- Train/Test prediction vs actual comparison (table + plots)
+- Error analysis (histogram/boxplot)
+- LightGBM feature importance (table + bar chart)
+- SHAP-style contribution summary via LightGBM `pred_contrib=True` (table + bar chart)
+- Simulation and export cells
+
 Export demo:
 
 ```bash
