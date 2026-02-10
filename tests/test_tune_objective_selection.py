@@ -35,13 +35,24 @@ def _multiclass_frame(rows_per_class: int = 12, seed: int = 204) -> pd.DataFrame
     return pd.concat(chunks, ignore_index=True)
 
 
+def _frontier_frame(rows: int = 30, seed: int = 205) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    x1 = rng.uniform(-2.0, 2.0, size=rows)
+    x2 = rng.normal(size=rows)
+    y = 1.3 + 1.1 * x1 - 0.5 * x2 + rng.normal(scale=0.2, size=rows)
+    y = y + rng.exponential(scale=0.2, size=rows)
+    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
+
+
 def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
     reg_path = tmp_path / "reg.csv"
     bin_path = tmp_path / "bin.csv"
     mc_path = tmp_path / "mc.csv"
+    fr_path = tmp_path / "fr.csv"
     _regression_frame().to_csv(reg_path, index=False)
     _binary_frame().to_csv(bin_path, index=False)
     _multiclass_frame().to_csv(mc_path, index=False)
+    _frontier_frame().to_csv(fr_path, index=False)
 
     reg = tune(
         {
@@ -78,4 +89,17 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
         }
     )
     assert multiclass.metadata["metric_name"] == "accuracy"
+
+    frontier = tune(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(fr_path), "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 1},
+            "frontier": {"alpha": 0.90},
+            "tuning": {"enabled": True, "n_trials": 1, "objective": "pinball"},
+            "export": {"artifact_dir": str(tmp_path / "artifacts")},
+        }
+    )
+    assert frontier.metadata["metric_name"] == "pinball"
 

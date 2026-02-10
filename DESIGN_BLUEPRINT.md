@@ -389,10 +389,10 @@ export（任意）：
 ## 21. Current Capability Matrix (2026-02-10)
 | Area | Status | Notes |
 | --- | --- | --- |
-| `fit` | Implemented | regression, binary, multiclass |
-| `predict` | Implemented | regression, binary, multiclass |
+| `fit` | Implemented | regression, binary, multiclass, frontier |
+| `predict` | Implemented | regression, binary, multiclass, frontier |
 | `evaluate` | Implemented | Artifact input path for regression, binary, multiclass, frontier |
-| `tune` | Implemented (Phase 8 MVP) | regression, binary, multiclass (Optuna TPE) |
+| `tune` | Implemented (Phase 12 MVP) | regression, binary, multiclass, frontier (Optuna TPE) |
 | `simulate` | Implemented (Phase 10 MVP) | Scenario DSL (`set/add/mul/clip`) for regression, binary, multiclass, frontier |
 | `export` | Implemented (Phase 11 MVP) | `python` export + optional `onnx` export |
 | `frontier` task runtime | Implemented (Phase 9 MVP) | fit/predict/evaluate with quantile baseline |
@@ -685,4 +685,67 @@ export（任意）：
 ### 32.4 Compatibility notes
 - Stable API signatures remain unchanged.
 - Existing `fit/predict/evaluate/tune/simulate` behavior remains unchanged.
-- `tune(frontier)` remains intentionally unimplemented.
+- `frontier` ONNX export remains intentionally unimplemented.
+
+## 33. 2026-02-10 Frontier Tune MVP Proposal (Phase 12)
+### 33.1 Goal
+- Activate `runner.tune(config)` for `task.type="frontier"` while preserving stable API signatures.
+- Reuse existing tuning engine (Optuna + SQLite resume + progress logging) with minimal surface change.
+
+### 33.2 Scope
+- In scope:
+  - frontier support in `runner.tune` and `modeling.tuning.run_tuning`
+  - objective support for `pinball` only in Phase 12 MVP
+  - frontier support in `examples/run_demo_tune.py`
+  - tune tests for frontier smoke/validation/resume
+- Out of scope:
+  - coverage-constrained tuning objective
+  - frontier ONNX export support
+
+### 33.3 Objective and direction contract
+- allowed tuning objective for frontier:
+  - `pinball`
+- default objective for frontier:
+  - `pinball`
+- optimization direction:
+  - `pinball` -> `minimize`
+
+### 33.4 Compatibility notes
+- no signature change:
+  - `tune(config) -> TuneResult`
+- no behavior change for:
+  - `fit/predict/evaluate/simulate/export`
+- existing tuning features remain:
+  - `resume`, `study_name`, `search_space`, `log_level`, per-trial artifact snapshots
+
+## 34. 2026-02-10 Frontier Tune MVP (Phase 12, implemented)
+### 34.1 Added capabilities
+- `runner.tune(config)` now supports:
+  - `task.type="frontier"`
+- `modeling.tuning.run_tuning` now supports frontier scoring via:
+  - `train_frontier_with_cv`
+- `resolve_tuning_objective` now supports frontier objective contract:
+  - default objective: `pinball`
+  - allowed objective set: `{pinball}`
+
+### 34.2 Runtime contract
+- Stable API signature unchanged:
+  - `tune(config) -> TuneResult`
+- Frontier tuning metric contract:
+  - `metric_name="pinball"`
+  - `direction="minimize"`
+- Existing tuning runtime behavior is reused:
+  - SQLite-backed study resume
+  - trial-level artifact snapshots (`study_summary.json`, `trials.parquet`)
+  - structured trial progress logs
+
+### 34.3 Examples and docs
+- `examples/run_demo_tune.py` now supports:
+  - `--task frontier`
+  - `--objective pinball`
+  - default data path `examples/data/frontier_demo.csv`
+
+### 34.4 Compatibility notes
+- `fit/predict/evaluate/simulate/export` behavior remains unchanged.
+- Remaining known gap:
+  - frontier ONNX export path (`export(format=\"onnx\")`) is intentionally unsupported in MVP.

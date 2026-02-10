@@ -100,6 +100,16 @@ def test_tuning_objective_is_task_constrained() -> None:
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
 
+    payload["task"] = {"type": "frontier"}
+    payload["split"] = {"type": "kfold", "n_splits": 2, "seed": 42}
+    payload["frontier"] = {"alpha": 0.90}
+    payload["tuning"]["objective"] = "pinball"
+    RunConfig.model_validate(payload)
+
+    payload["tuning"]["objective"] = "rmse"
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
 
 def test_frontier_alpha_must_be_in_open_interval() -> None:
     payload = _minimal_payload()

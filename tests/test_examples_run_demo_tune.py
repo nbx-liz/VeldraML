@@ -38,16 +38,27 @@ def _multiclass_frame(rows_per_class: int = 10, seed: int = 903) -> pd.DataFrame
     return pd.concat(frames, ignore_index=True)
 
 
+def _frontier_frame(rows: int = 30, seed: int = 904) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    x1 = rng.uniform(-2.0, 2.0, size=rows)
+    x2 = rng.normal(size=rows)
+    y = 1.4 + 1.2 * x1 - 0.4 * x2 + rng.normal(scale=0.2, size=rows)
+    y = y + rng.exponential(scale=0.15, size=rows)
+    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
+
+
 def _data_for_task(task: str) -> pd.DataFrame:
     if task == "regression":
         return _regression_frame()
     if task == "binary":
         return _binary_frame()
+    if task == "frontier":
+        return _frontier_frame()
     return _multiclass_frame()
 
 
 def test_run_demo_tune_supports_all_tasks(tmp_path) -> None:
-    for task in ("regression", "binary", "multiclass"):
+    for task in ("regression", "binary", "multiclass", "frontier"):
         data_path = tmp_path / f"{task}.csv"
         out_dir = tmp_path / f"out_{task}"
         _data_for_task(task).to_csv(data_path, index=False)
