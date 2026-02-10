@@ -18,6 +18,7 @@ from veldra.api.exceptions import (
 from veldra.artifact.manifest import Manifest, build_manifest
 from veldra.artifact.store import load_artifact, save_artifact
 from veldra.config.models import RunConfig
+from veldra.simulate import apply_scenario, build_simulation_frame
 
 
 class Artifact:
@@ -219,6 +220,39 @@ class Artifact:
         )
 
     def simulate(self, df: Any, scenario: dict[str, Any]) -> Any:
-        raise VeldraNotImplementedError(
-            "Artifact.simulate is not implemented in MVP scaffold."
+        if self.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
+            raise VeldraNotImplementedError(
+                "Artifact.simulate is currently implemented only for regression, binary, "
+                "multiclass, and frontier tasks."
+            )
+        if not isinstance(df, pd.DataFrame):
+            raise VeldraValidationError("simulate input must be a pandas.DataFrame.")
+        if df.empty:
+            raise VeldraValidationError("simulate input DataFrame is empty.")
+        if not isinstance(scenario, dict):
+            raise VeldraValidationError("scenario must be a dict.")
+
+        scenario_name = scenario.get("name")
+        if not isinstance(scenario_name, str) or not scenario_name.strip():
+            scenario_name = "scenario_1"
+        scenario_payload = {
+            "name": scenario_name,
+            "actions": scenario.get("actions"),
+        }
+        modified = apply_scenario(
+            df,
+            scenario_payload,
+            target_col=self.run_config.data.target,
+            id_cols=self.run_config.data.id_cols,
+        )
+
+        base_pred = self.predict(df)
+        scenario_pred = self.predict(modified)
+        return build_simulation_frame(
+            task_type=self.run_config.task.type,
+            row_ids=df.index,
+            scenario_name=scenario_name,
+            base_pred=base_pred,
+            scenario_pred=scenario_pred,
+            target_classes=self.feature_schema.get("target_classes"),
         )

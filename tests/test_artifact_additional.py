@@ -88,17 +88,32 @@ def test_predict_multiclass_validation_errors(monkeypatch) -> None:
         artifact._predict_multiclass(pd.DataFrame({"x1": [1.0, 2.0]}))
 
 
-def test_predict_and_simulate_unimplemented_paths() -> None:
+def test_predict_and_simulate_paths() -> None:
     artifact = _artifact("frontier")
     with pytest.raises(VeldraValidationError, match="pandas.DataFrame"):
         artifact.predict([1, 2, 3])
     with pytest.raises(VeldraValidationError, match="model is missing"):
         artifact.predict(pd.DataFrame({"x1": [1.0]}))
+
+    artifact.run_config.task.type = "regression"  # type: ignore[assignment]
+    artifact.predict = lambda df: np.asarray(df["x1"], dtype=float)  # type: ignore[method-assign]
+    sim = artifact.simulate(
+        pd.DataFrame({"x1": [1.0, 2.0], "target": [0.2, 0.4]}),
+        scenario={"name": "boost", "actions": [{"op": "add", "column": "x1", "value": 1.0}]},
+    )
+    assert {"row_id", "scenario", "task_type", "base_pred", "scenario_pred", "delta_pred"} <= set(
+        sim.columns
+    )
+    delattr(artifact, "predict")
+
     artifact.run_config.task.type = "unknown"  # type: ignore[assignment]
     with pytest.raises(VeldraNotImplementedError, match="implemented only"):
         artifact.predict(pd.DataFrame({"x1": [1.0]}))
-    with pytest.raises(VeldraNotImplementedError, match="not implemented"):
-        artifact.simulate(pd.DataFrame({"x1": [1.0]}), scenario={})
+    with pytest.raises(VeldraNotImplementedError, match="implemented only"):
+        artifact.simulate(
+            pd.DataFrame({"x1": [1.0], "target": [0.2]}),
+            scenario={"name": "noop", "actions": [{"op": "set", "column": "x1", "value": 1.0}]},
+        )
 
 
 def test_predict_multiclass_accepts_flat_output_with_expected_size(monkeypatch) -> None:

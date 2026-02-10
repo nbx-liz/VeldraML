@@ -13,6 +13,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Multiclass workflow: `fit`, `predict`, `evaluate`
 - Frontier workflow: `fit`, `predict`, `evaluate` (quantile baseline)
 - Hyperparameter tuning workflow: `tune` (regression/binary/multiclass)
+- Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
 
 ## Project Status
 
@@ -22,9 +23,10 @@ Implemented:
 - `fit`, `predict`, `evaluate` for `task.type=multiclass`
 - `fit`, `predict`, `evaluate` for `task.type=frontier`
 - `tune` for `task.type=regression|binary|multiclass` (Optuna-based MVP)
+- `simulate` for `task.type=regression|binary|multiclass|frontier` (Scenario DSL MVP)
 
 Not implemented yet:
-- `simulate`, `export`
+- `export`
 - `tune` for `task.type=frontier`
 - threshold optimization is optional for binary classification (default is fixed `0.5`)
 
@@ -155,6 +157,12 @@ uv run python examples/run_demo_tune.py \
   --search-space-file examples/search_space_regression.yaml
 ```
 
+Simulate demo (regression baseline with scenario actions):
+
+```bash
+uv run python examples/run_demo_simulate.py --data-path examples/data/california_housing.csv
+```
+
 ## Development
 
 Run quality checks:
@@ -181,6 +189,7 @@ src/veldra/
   artifact/     # artifact persistence
   data/         # data loaders
   split/        # split strategies
+  simulate/     # scenario simulation engine
 examples/       # runnable demos
 tests/          # unit tests
 ```

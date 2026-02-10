@@ -64,10 +64,19 @@ def test_fit_validation_and_notimplemented_paths(tmp_path) -> None:
         fit(_config_payload("regression", path=None))
 
 
-def test_simulate_and_export_are_unimplemented() -> None:
+def test_simulate_implemented_and_export_unimplemented() -> None:
     artifact = _artifact_for_task("regression")
-    with pytest.raises(VeldraNotImplementedError):
+    artifact.predict = lambda df: np.asarray(df["x1"], dtype=float)  # type: ignore[method-assign]
+    with pytest.raises(VeldraValidationError):
         simulate(artifact, data=None, scenarios=None)
+    simulated = simulate(
+        artifact,
+        data=pd.DataFrame({"x1": [1.0, 2.0], "target": [1.0, 2.0]}),
+        scenarios={"name": "scale", "actions": [{"op": "mul", "column": "x1", "value": 2.0}]},
+    )
+    assert {"row_id", "scenario", "task_type", "base_pred", "scenario_pred", "delta_pred"} <= set(
+        simulated.data.columns
+    )
     with pytest.raises(VeldraNotImplementedError):
         export(artifact, format="python")
 

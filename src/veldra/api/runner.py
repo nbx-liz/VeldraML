@@ -45,6 +45,7 @@ from veldra.modeling import (
     train_multiclass_with_cv,
     train_regression_with_cv,
 )
+from veldra.simulate import apply_scenario, build_simulation_frame, normalize_scenarios
 
 LOGGER = logging.getLogger("veldra")
 
@@ -410,8 +411,60 @@ def predict(artifact: Artifact, data: Any) -> Prediction:
 
 
 def simulate(artifact: Artifact, data: Any, scenarios: Any) -> SimulationResult:
-    _ = artifact, data, scenarios
-    raise VeldraNotImplementedError("simulate is not implemented in MVP scaffold.")
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
+        raise VeldraNotImplementedError(
+            "simulate is currently implemented only for task.type='regression', 'binary', "
+            "'multiclass', or 'frontier'."
+        )
+    if not isinstance(data, pd.DataFrame):
+        raise VeldraValidationError("simulate input must be a pandas.DataFrame.")
+    if data.empty:
+        raise VeldraValidationError("simulate input DataFrame is empty.")
+
+    parsed_scenarios = normalize_scenarios(scenarios)
+    base_pred = artifact.predict(data)
+    outputs: list[pd.DataFrame] = []
+
+    for scenario in parsed_scenarios:
+        modified = apply_scenario(
+            data,
+            scenario,
+            target_col=artifact.run_config.data.target,
+            id_cols=artifact.run_config.data.id_cols,
+        )
+        scenario_pred = artifact.predict(modified)
+        outputs.append(
+            build_simulation_frame(
+                task_type=artifact.run_config.task.type,
+                row_ids=data.index,
+                scenario_name=scenario["name"],
+                base_pred=base_pred,
+                scenario_pred=scenario_pred,
+                target_classes=artifact.feature_schema.get("target_classes"),
+            )
+        )
+
+    merged = pd.concat(outputs, ignore_index=True)
+    metadata = {
+        "n_rows": int(len(data)),
+        "n_scenarios": int(len(parsed_scenarios)),
+        "artifact_run_id": artifact.manifest.run_id,
+    }
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "simulate completed",
+        run_id=artifact.manifest.run_id,
+        artifact_path=None,
+        task_type=artifact.run_config.task.type,
+        n_rows=metadata["n_rows"],
+        n_scenarios=metadata["n_scenarios"],
+    )
+    return SimulationResult(
+        task_type=artifact.run_config.task.type,
+        data=merged,
+        metadata=metadata,
+    )
 
 
 def export(artifact: Artifact, format: str = "python") -> ExportResult:
