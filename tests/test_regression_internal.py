@@ -173,3 +173,51 @@ def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
     )
     output = regression.train_regression_with_cv(cfg, frame)
     assert output.metrics["mean"]["rmse"] >= 0.0
+
+
+def test_regression_timeseries_splitter_receives_extended_params(monkeypatch) -> None:
+    cfg = _build_config()
+    cfg.split.type = "timeseries"  # type: ignore[assignment]
+    cfg.split.time_col = "ts"
+    cfg.split.timeseries_mode = "blocked"
+    cfg.split.test_size = 2
+    cfg.split.gap = 1
+    cfg.split.embargo = 2
+    cfg.split.train_size = 3
+
+    frame = _build_frame()
+    x = frame[["x1", "x2"]]
+    captured: dict[str, int | str | None] = {}
+
+    class _FakeSplitter:
+        def __init__(
+            self,
+            n_splits: int,
+            test_size: int | None,
+            gap: int,
+            embargo: int,
+            mode: str,
+            train_size: int | None,
+        ) -> None:
+            captured["n_splits"] = n_splits
+            captured["test_size"] = test_size
+            captured["gap"] = gap
+            captured["embargo"] = embargo
+            captured["mode"] = mode
+            captured["train_size"] = train_size
+
+        def split(self, data: int) -> list[tuple[np.ndarray, np.ndarray]]:
+            _ = data
+            return [(np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int))]
+
+    monkeypatch.setattr(regression, "TimeSeriesSplitter", _FakeSplitter)
+    splits = regression._iter_cv_splits(cfg, frame, x)
+    assert splits
+    assert captured == {
+        "n_splits": cfg.split.n_splits,
+        "test_size": 2,
+        "gap": 1,
+        "embargo": 2,
+        "mode": "blocked",
+        "train_size": 3,
+    }

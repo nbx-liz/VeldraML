@@ -207,3 +207,52 @@ def test_train_multiclass_with_cv_timeseries_path(monkeypatch) -> None:
 
     output = multiclass.train_multiclass_with_cv(cfg, frame)
     assert output.metrics["mean"]["accuracy"] >= 0.0
+
+
+def test_multiclass_timeseries_splitter_receives_extended_params(monkeypatch) -> None:
+    config = _build_config()
+    config.split.type = "timeseries"  # type: ignore[assignment]
+    config.split.time_col = "ts"
+    config.split.timeseries_mode = "blocked"
+    config.split.test_size = 2
+    config.split.gap = 1
+    config.split.embargo = 2
+    config.split.train_size = 3
+
+    frame = _build_frame()
+    x = frame[["x1", "x2"]]
+    y = pd.Series([0, 0, 0, 1, 1, 1, 2, 2, 2])
+    captured: dict[str, int | str | None] = {}
+
+    class _FakeSplitter:
+        def __init__(
+            self,
+            n_splits: int,
+            test_size: int | None,
+            gap: int,
+            embargo: int,
+            mode: str,
+            train_size: int | None,
+        ) -> None:
+            captured["n_splits"] = n_splits
+            captured["test_size"] = test_size
+            captured["gap"] = gap
+            captured["embargo"] = embargo
+            captured["mode"] = mode
+            captured["train_size"] = train_size
+
+        def split(self, data: int) -> list[tuple[np.ndarray, np.ndarray]]:
+            _ = data
+            return [(np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int))]
+
+    monkeypatch.setattr(multiclass, "TimeSeriesSplitter", _FakeSplitter)
+    splits = multiclass._iter_cv_splits(config, frame, x, y)
+    assert splits
+    assert captured == {
+        "n_splits": config.split.n_splits,
+        "test_size": 2,
+        "gap": 1,
+        "embargo": 2,
+        "mode": "blocked",
+        "train_size": 3,
+    }

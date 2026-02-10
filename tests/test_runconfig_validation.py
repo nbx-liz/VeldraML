@@ -44,6 +44,38 @@ def test_group_split_requires_group_col() -> None:
         RunConfig.model_validate(payload)
 
 
+def test_timeseries_blocked_requires_train_size() -> None:
+    payload = _minimal_payload()
+    payload["split"] = {
+        "type": "timeseries",
+        "n_splits": 3,
+        "time_col": "ts",
+        "timeseries_mode": "blocked",
+    }
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_timeseries_expanding_disallows_train_size() -> None:
+    payload = _minimal_payload()
+    payload["split"] = {
+        "type": "timeseries",
+        "n_splits": 3,
+        "time_col": "ts",
+        "timeseries_mode": "expanding",
+        "train_size": 10,
+    }
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_non_timeseries_disallows_timeseries_specific_split_params() -> None:
+    payload = _minimal_payload()
+    payload["split"] = {"type": "kfold", "n_splits": 3, "gap": 1}
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
 def test_binary_calibration_allows_only_platt_in_current_phase() -> None:
     payload = _minimal_payload()
     payload["task"] = {"type": "binary"}

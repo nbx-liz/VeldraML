@@ -903,3 +903,69 @@ export（任意）：
 ### 40.3 Compatibility notes
 - Stable API signatures remain unchanged.
 - `fit/predict/evaluate/tune/simulate` behavior is unchanged.
+
+## 41. 2026-02-10 Time Series Split Advanced MVP Proposal (Phase 16)
+### 41.1 Goal
+- Improve leakage resistance and reproducibility for time-series CV by adding
+  `blocked/gap/embargo` controls.
+- Keep default behavior non-invasive and preserve existing API signatures.
+
+### 41.2 Scope
+- In scope:
+  - `SplitConfig` extension for advanced time-series controls
+  - `TimeSeriesSplitter` support for:
+    - `timeseries_mode: expanding|blocked`
+    - `test_size`
+    - `gap`
+    - `embargo`
+    - `train_size` (required for `blocked`)
+  - wiring into regression/binary/multiclass/frontier timeseries paths
+- Out of scope:
+  - ONNX graph optimization
+  - frontier coverage-constrained tuning objectives
+
+### 41.3 Contract changes (behavior only)
+- API signatures unchanged:
+  - `fit/predict/evaluate/tune/simulate/export`
+- `SplitConfig` adds:
+  - `timeseries_mode: "expanding" | "blocked" = "expanding"`
+  - `test_size: int | None = None`
+  - `gap: int = 0`
+  - `embargo: int = 0`
+  - `train_size: int | None = None`
+- validation policy:
+  - if `split.type="timeseries"`:
+    - `time_col` required
+    - `gap/embargo >= 0`
+    - `test_size` must be `>=1` when specified
+    - `blocked` requires `train_size>=1`
+    - `expanding` disallows explicit `train_size`
+  - if `split.type!="timeseries"`:
+    - timeseries-only parameters must remain default
+
+## 42. 2026-02-10 Time Series Split Advanced MVP (Phase 16, implemented)
+### 42.1 Added capabilities
+- `SplitConfig` now supports advanced timeseries controls:
+  - `timeseries_mode: expanding|blocked`
+  - `test_size`, `gap`, `embargo`, `train_size`
+- `TimeSeriesSplitter` now supports:
+  - expanding mode with optional `gap/embargo`
+  - blocked mode with explicit `train_size`
+  - fold-time embargo exclusion from future training windows
+- regression/binary/multiclass/frontier timeseries paths now forward advanced split settings.
+
+### 42.2 Validation behavior
+- When `split.type='timeseries'`:
+  - `time_col` remains required
+  - `gap/embargo >= 0`
+  - `test_size >= 1` when specified
+  - `blocked` requires `train_size >= 1`
+  - `expanding` disallows explicit `train_size`
+- When `split.type!='timeseries'`:
+  - timeseries-only parameters must remain default values.
+
+### 42.3 Compatibility notes
+- Stable API signatures are unchanged.
+- Existing default split behavior remains non-invasive:
+  - `timeseries_mode='expanding'`
+  - `gap=0`, `embargo=0`, `test_size=None`.
