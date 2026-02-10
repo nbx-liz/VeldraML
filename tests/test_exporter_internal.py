@@ -54,6 +54,39 @@ def test_export_python_package_validates_required_fields(tmp_path) -> None:
         exporter.export_python_package(artifact_missing_schema, tmp_path / "python_missing_schema")
 
 
+def test_export_python_package_writes_expected_files_and_metadata(tmp_path) -> None:
+    artifact = _artifact()
+    out_dir = tmp_path / "python_export"
+    result_dir = exporter.export_python_package(artifact, out_dir)
+
+    assert result_dir == out_dir
+    expected_files = {
+        "manifest.json",
+        "run_config.yaml",
+        "feature_schema.json",
+        "model.lgb.txt",
+        "metadata.json",
+        "runtime_predict.py",
+        "README.md",
+    }
+    assert expected_files.issubset({p.name for p in out_dir.iterdir()})
+
+    metadata = json.loads((out_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["task_type"] == "regression"
+    assert metadata["export_format"] == "python"
+    assert metadata["run_id"] == "rid_exporter_test"
+
+
+def test_metadata_payload_frontier_uses_config_alpha_fallback() -> None:
+    artifact = _artifact(
+        task_type="frontier",
+        feature_schema={"feature_names": ["x1"], "target": "target"},
+    )
+    payload = exporter._metadata_payload(artifact, export_format="onnx")
+    assert payload["task_type"] == "frontier"
+    assert payload["frontier_alpha"] == pytest.approx(artifact.run_config.frontier.alpha)
+
+
 def test_load_onnx_toolchain_missing_dependency_returns_guidance(monkeypatch) -> None:
     original_import = builtins.__import__
 
@@ -65,6 +98,14 @@ def test_load_onnx_toolchain_missing_dependency_returns_guidance(monkeypatch) ->
     monkeypatch.setattr(builtins, "__import__", _fake_import)
     with pytest.raises(VeldraValidationError, match="uv sync --extra export-onnx"):
         exporter._load_onnx_toolchain()
+
+
+def test_load_onnx_toolchain_success_when_optional_deps_installed() -> None:
+    pytest.importorskip("onnxmltools")
+    pytest.importorskip("onnxconverter_common")
+    onnx_tools, tensor_type = exporter._load_onnx_toolchain()
+    assert onnx_tools is not None
+    assert tensor_type is not None
 
 
 def test_export_onnx_model_validates_required_inputs(tmp_path) -> None:
@@ -180,3 +221,30 @@ def test_export_onnx_model_converter_failure_has_actionable_message(monkeypatch,
 
     with pytest.raises(VeldraValidationError, match="ONNX conversion failed"):
         exporter.export_onnx_model(artifact, tmp_path / "onnx_export_fail")
+
+
+def test_export_onnx_model_write_failure_has_actionable_message(monkeypatch, tmp_path) -> None:
+    artifact = _artifact()
+
+    class _FakeONNXModel:
+        def SerializeToString(self) -> bytes:
+            raise OSError("serialize failure")
+
+    class _FakeOnnxTools:
+        def convert_lightgbm(self, booster, initial_types):  # type: ignore[no-untyped-def]
+            _ = booster, initial_types
+            return _FakeONNXModel()
+
+    class _FakeFloatTensorType:
+        def __init__(self, shape):  # type: ignore[no-untyped-def]
+            self.shape = shape
+
+    monkeypatch.setattr(
+        exporter,
+        "_load_onnx_toolchain",
+        lambda: (_FakeOnnxTools(), _FakeFloatTensorType),
+    )
+    artifact._get_booster = MethodType(lambda self: object(), artifact)  # type: ignore[method-assign]
+
+    with pytest.raises(VeldraValidationError, match="Failed to serialize/write ONNX model artifact"):
+        exporter.export_onnx_model(artifact, tmp_path / "onnx_export_write_fail")
