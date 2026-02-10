@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import builtins
 import json
-from types import MethodType
+import sys
+from pathlib import Path
+from types import MethodType, ModuleType
 from typing import Any
 
 import pytest
@@ -251,3 +253,139 @@ def test_export_onnx_model_write_failure_has_actionable_message(monkeypatch, tmp
         match="Failed to serialize/write ONNX model artifact",
     ):
         exporter.export_onnx_model(artifact, tmp_path / "onnx_export_write_fail")
+
+
+def test_optimize_onnx_model_rejects_unknown_mode(tmp_path) -> None:
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"onnx-bytes")
+
+    with pytest.raises(VeldraValidationError, match="Unsupported ONNX optimization mode"):
+        exporter._optimize_onnx_model(
+            model_path=model_path,
+            mode="static_quant",
+            out_dir=tmp_path,
+        )
+
+
+def test_optimize_onnx_model_success_with_mocked_quantizer(monkeypatch, tmp_path) -> None:
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"raw-onnx-bytes")
+
+    quant_mod = ModuleType("onnxruntime.quantization")
+
+    class _QuantType:
+        QInt8 = "QInt8"
+
+    def _quantize_dynamic(*, model_input: str, model_output: str, weight_type: Any) -> None:
+        _ = model_input, weight_type
+        Path(model_output).write_bytes(b"optimized-onnx")
+
+    quant_mod.QuantType = _QuantType
+    quant_mod.quantize_dynamic = _quantize_dynamic
+    monkeypatch.setitem(sys.modules, "onnxruntime.quantization", quant_mod)
+
+    result = exporter._optimize_onnx_model(
+        model_path=model_path,
+        mode="dynamic_quant",
+        out_dir=tmp_path,
+    )
+    assert result["onnx_optimized"] is True
+    assert result["onnx_optimization_mode"] == "dynamic_quant"
+    assert Path(result["optimized_model_path"]).exists()
+    assert result["size_before_bytes"] == len(b"raw-onnx-bytes")
+    assert result["size_after_bytes"] == len(b"optimized-onnx")
+
+
+def test_validate_python_export_marks_invalid_feature_names_when_runtime_exists(tmp_path) -> None:
+    artifact = _artifact()
+    export_dir = exporter.export_python_package(artifact, tmp_path / "python_validate_invalid_schema")
+    artifact.feature_schema = {"target": "target"}  # runtime file exists, but schema is invalid
+
+    report = exporter._validate_python_export(export_dir, artifact)
+    payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["runtime_predict"]["ok"] is False
+    assert "feature_schema.feature_names is missing or invalid" in checks["runtime_predict"]["detail"]
+
+
+def test_validate_python_export_records_subprocess_exception(monkeypatch, tmp_path) -> None:
+    artifact = _artifact()
+    export_dir = exporter.export_python_package(artifact, tmp_path / "python_validate_subprocess_error")
+
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise RuntimeError("probe boom")
+
+    monkeypatch.setattr(exporter.subprocess, "run", _raise)
+    report = exporter._validate_python_export(export_dir, artifact)
+    payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["runtime_predict"]["ok"] is False
+    assert "probe boom" in checks["runtime_predict"]["detail"]
+
+
+def test_validate_onnx_export_records_metadata_parse_failure(monkeypatch, tmp_path) -> None:
+    artifact = _artifact()
+    export_dir = tmp_path / "onnx_bad_metadata"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "model.onnx").write_bytes(b"onnx-bytes")
+    (export_dir / "metadata.json").write_text("{bad_json", encoding="utf-8")
+
+    original_import = builtins.__import__
+
+    def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "onnxruntime":
+            raise ModuleNotFoundError("No module named 'onnxruntime'", name="onnxruntime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    report = exporter._validate_onnx_export(export_dir, artifact)
+    payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["metadata_parse"]["ok"] is False
+    assert checks["metadata_parse"]["detail"] == "Failed to parse metadata.json"
+
+
+def test_validate_onnx_export_handles_missing_feature_names_with_mocked_runtime(
+    monkeypatch, tmp_path
+) -> None:
+    artifact = _artifact(feature_schema={"target": "target"})
+    export_dir = tmp_path / "onnx_missing_feature_names"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "model.onnx").write_bytes(b"onnx-bytes")
+    (export_dir / "metadata.json").write_text("{}", encoding="utf-8")
+
+    fake_onnx = ModuleType("onnx")
+
+    class _FakeChecker:
+        @staticmethod
+        def check_model(model: Any) -> None:
+            _ = model
+
+    fake_onnx.load = lambda path: object()  # type: ignore[assignment]
+    fake_onnx.checker = _FakeChecker()
+
+    fake_ort = ModuleType("onnxruntime")
+
+    class _FakeSession:
+        def __init__(self, path: str, providers: list[str]) -> None:
+            _ = path, providers
+
+    fake_ort.InferenceSession = _FakeSession  # type: ignore[assignment]
+
+    original_import = builtins.__import__
+
+    def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "onnx":
+            return fake_onnx
+        if name == "onnxruntime":
+            return fake_ort
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    report = exporter._validate_onnx_export(export_dir, artifact)
+    payload = json.loads(Path(report["validation_report"]).read_text(encoding="utf-8"))
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert checks["onnx_model_check"]["ok"] is True
+    assert checks["onnx_runtime_inference"]["ok"] is False
+    assert "feature_schema.feature_names is missing or invalid" in checks["onnx_runtime_inference"]["detail"]
