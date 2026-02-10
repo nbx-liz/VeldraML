@@ -243,13 +243,47 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     )
 
 
-def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
-    if not isinstance(artifact_or_config, Artifact):
+def _build_ephemeral_artifact_from_config(config: RunConfig) -> Artifact:
+    if not config.data.path:
+        raise VeldraValidationError("data.path is required for evaluate(config, data).")
+
+    frame = load_tabular_data(config.data.path)
+    if config.task.type == "regression":
+        training_output = train_regression_with_cv(config=config, data=frame)
+    elif config.task.type == "binary":
+        training_output = train_binary_with_cv(config=config, data=frame)
+    elif config.task.type == "multiclass":
+        training_output = train_multiclass_with_cv(config=config, data=frame)
+    elif config.task.type == "frontier":
+        training_output = train_frontier_with_cv(config=config, data=frame)
+    else:
         raise VeldraNotImplementedError(
-            "evaluate currently supports Artifact input only."
+            "evaluate(config, data) is currently implemented only for task.type='regression', "
+            "'binary', 'multiclass', or 'frontier'."
         )
 
-    artifact = artifact_or_config
+    return Artifact.from_config(
+        run_config=config,
+        run_id=f"ephemeral_eval_{uuid4().hex}",
+        feature_schema=training_output.feature_schema,
+        model_text=training_output.model_text,
+        metrics=training_output.metrics,
+        cv_results=training_output.cv_results,
+        calibrator=getattr(training_output, "calibrator", None),
+        calibration_curve=getattr(training_output, "calibration_curve", None),
+        threshold=getattr(training_output, "threshold", None),
+        threshold_curve=getattr(training_output, "threshold_curve", None),
+    )
+
+
+def _evaluate_with_artifact(
+    artifact: Artifact,
+    data: Any,
+    *,
+    evaluation_mode: str,
+    train_source_path: str | None,
+    ephemeral_run: bool,
+) -> EvalResult:
     if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
             "evaluate is currently implemented only for task.type='regression', 'binary', "
@@ -383,6 +417,9 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         "n_rows": int(len(data)),
         "target": target_col,
         "artifact_run_id": artifact.manifest.run_id,
+        "evaluation_mode": evaluation_mode,
+        "train_source_path": train_source_path,
+        "ephemeral_run": ephemeral_run,
         "threshold_policy": (
             artifact.threshold.get("policy")
             if artifact.run_config.task.type == "binary" and artifact.threshold
@@ -408,11 +445,34 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
         artifact_path=None,
         task_type=artifact.run_config.task.type,
         n_rows=metadata["n_rows"],
+        evaluation_mode=evaluation_mode,
+        ephemeral_run=ephemeral_run,
     )
     return EvalResult(
         task_type=artifact.run_config.task.type,
         metrics=metrics,
         metadata=metadata,
+    )
+
+
+def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
+    if isinstance(artifact_or_config, Artifact):
+        return _evaluate_with_artifact(
+            artifact_or_config,
+            data,
+            evaluation_mode="artifact",
+            train_source_path=None,
+            ephemeral_run=False,
+        )
+
+    parsed = _ensure_config(artifact_or_config)
+    artifact = _build_ephemeral_artifact_from_config(parsed)
+    return _evaluate_with_artifact(
+        artifact,
+        data,
+        evaluation_mode="config",
+        train_source_path=parsed.data.path,
+        ephemeral_run=True,
     )
 
 

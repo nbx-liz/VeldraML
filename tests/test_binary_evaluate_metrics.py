@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from veldra.api import Artifact, evaluate, fit
-from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
+from veldra.api.exceptions import VeldraValidationError
 
 
 def _binary_frame(rows: int = 100, seed: int = 12) -> pd.DataFrame:
@@ -61,7 +61,7 @@ def test_binary_evaluate_validation_errors(tmp_path) -> None:
     with pytest.raises(VeldraValidationError):
         evaluate(artifact, frame.iloc[0:0])
 
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError):
         evaluate(
             {
                 "config_version": 1,

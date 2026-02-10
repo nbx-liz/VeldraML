@@ -1,4 +1,4 @@
-﻿# VeldraML
+# VeldraML
 
 VeldraML is a config-driven LightGBM analysis library.
 Current implemented tasks are regression, binary classification, multiclass classification, and frontier.
@@ -27,9 +27,8 @@ Implemented:
 - `simulate` for `task.type=regression|binary|multiclass|frontier` (Scenario DSL MVP)
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
 
-Not implemented yet:
+Backlog:
 - ONNX graph optimization pipeline (quantization is available as opt-in)
-- threshold optimization is optional for binary classification (default is fixed `0.5`)
 
 ## Requirements
 
@@ -77,6 +76,8 @@ artifact = Artifact.load(run.artifact_path)
 frame = load_tabular_data("test.csv")
 pred = predict(artifact, frame.drop(columns=["target"]))
 ev = evaluate(artifact, frame)
+# or evaluate directly from config (ephemeral train + evaluate, no artifact save):
+ev_cfg = evaluate(config, frame)
 ```
 
 Advanced time-series split options (non-default, opt-in):
@@ -260,3 +261,4 @@ tests/          # unit tests
 
 - Root `README.md` is the single source of truth for project documentation.
 - Design decisions and phase logs are tracked in `DESIGN_BLUEPRINT.md` and `HISTORY.md`.
+

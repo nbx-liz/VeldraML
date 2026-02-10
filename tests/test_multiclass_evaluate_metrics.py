@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from veldra.api import Artifact, evaluate, fit
-from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
+from veldra.api.exceptions import VeldraValidationError
 
 
 def _multiclass_frame(rows_per_class: int = 30, seed: int = 31) -> pd.DataFrame:
@@ -54,9 +54,9 @@ def test_multiclass_evaluate_validation_errors(tmp_path) -> None:
         evaluate(artifact, data="not-a-dataframe")
 
 
-def test_multiclass_evaluate_config_input_is_not_supported(tmp_path) -> None:
+def test_multiclass_evaluate_config_input_validation(tmp_path) -> None:
     artifact = _train_artifact(tmp_path)
     frame = _multiclass_frame(rows_per_class=5, seed=34)
     _ = artifact
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError):
         evaluate({"task": {"type": "multiclass"}}, frame)
