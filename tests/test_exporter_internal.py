@@ -246,5 +246,8 @@ def test_export_onnx_model_write_failure_has_actionable_message(monkeypatch, tmp
     )
     artifact._get_booster = MethodType(lambda self: object(), artifact)  # type: ignore[method-assign]
 
-    with pytest.raises(VeldraValidationError, match="Failed to serialize/write ONNX model artifact"):
+    with pytest.raises(
+        VeldraValidationError,
+        match="Failed to serialize/write ONNX model artifact",
+    ):
         exporter.export_onnx_model(artifact, tmp_path / "onnx_export_write_fail")

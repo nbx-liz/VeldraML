@@ -40,6 +40,9 @@ def test_export_runner_returns_contract(tmp_path) -> None:
     assert result.metadata["task_type"] == "regression"
     assert result.metadata["run_id"] == artifact.manifest.run_id
     assert result.metadata["files"]
+    assert result.metadata["validation_mode"] == "python"
+    assert isinstance(result.metadata["validation_passed"], bool)
+    assert Path(result.metadata["validation_report"]).exists()
 
 
 def test_export_runner_validates_format_and_artifact_model(tmp_path) -> None:
