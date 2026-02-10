@@ -66,6 +66,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n-trials", type=int, default=5, help="Number of tuning trials.")
     parser.add_argument("--objective", default=None, help="Task-allowed objective metric.")
+    parser.add_argument(
+        "--coverage-target",
+        type=float,
+        default=None,
+        help="Frontier-only target coverage for pinball_coverage_penalty objective.",
+    )
+    parser.add_argument(
+        "--coverage-tolerance",
+        type=float,
+        default=None,
+        help="Frontier-only tolerance band around target coverage.",
+    )
+    parser.add_argument(
+        "--penalty-weight",
+        type=float,
+        default=None,
+        help="Frontier-only penalty weight for coverage deviation.",
+    )
     parser.add_argument("--resume", action="store_true", help="Resume existing study if present.")
     parser.add_argument("--study-name", default=None, help="Explicit Optuna study name.")
     parser.add_argument(
@@ -113,6 +131,12 @@ def _build_tune_config(
     }
     if args.objective:
         tuning_cfg["objective"] = args.objective
+    if args.coverage_target is not None:
+        tuning_cfg["coverage_target"] = args.coverage_target
+    if args.coverage_tolerance is not None:
+        tuning_cfg["coverage_tolerance"] = args.coverage_tolerance
+    if args.penalty_weight is not None:
+        tuning_cfg["penalty_weight"] = args.penalty_weight
     if args.study_name:
         tuning_cfg["study_name"] = args.study_name
 
