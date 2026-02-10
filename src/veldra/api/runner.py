@@ -35,6 +35,7 @@ from veldra.api.types import (
     SimulationResult,
     TuneResult,
 )
+from veldra.artifact.exporter import export_onnx_model, export_python_package
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
@@ -468,5 +469,51 @@ def simulate(artifact: Artifact, data: Any, scenarios: Any) -> SimulationResult:
 
 
 def export(artifact: Artifact, format: str = "python") -> ExportResult:
-    _ = artifact, format
-    raise VeldraNotImplementedError("export is not implemented in MVP scaffold.")
+    if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
+        raise VeldraNotImplementedError(
+            "export is currently implemented only for task.type='regression', 'binary', "
+            "'multiclass', or 'frontier'."
+        )
+    if artifact.model_text is None:
+        raise VeldraValidationError("Artifact model is missing and cannot be exported.")
+    if not artifact.feature_schema:
+        raise VeldraValidationError("Artifact feature_schema is missing and cannot be exported.")
+
+    fmt = format.lower().strip()
+    if fmt not in {"python", "onnx"}:
+        raise VeldraValidationError(
+            f"Unsupported export format '{format}'. Supported formats are: python, onnx."
+        )
+
+    run_id = artifact.manifest.run_id
+    artifact_root = Path(artifact.run_config.export.artifact_dir)
+    export_path = artifact_root / "exports" / run_id / fmt
+    source_artifact_path = artifact_root / run_id
+
+    if fmt == "python":
+        output_dir = export_python_package(artifact, export_path)
+    else:
+        output_dir = export_onnx_model(artifact, export_path)
+
+    files = sorted([p.name for p in output_dir.iterdir() if p.is_file()])
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "export completed",
+        run_id=run_id,
+        artifact_path=str(source_artifact_path),
+        task_type=artifact.run_config.task.type,
+        format=fmt,
+        export_path=str(output_dir),
+    )
+    return ExportResult(
+        path=str(output_dir),
+        format=fmt,
+        metadata={
+            "task_type": artifact.run_config.task.type,
+            "run_id": run_id,
+            "files": files,
+            "source_artifact_path": str(source_artifact_path),
+            "onnx_optional_dependency": True,
+        },
+    )

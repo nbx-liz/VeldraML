@@ -77,7 +77,7 @@ def test_simulate_implemented_and_export_unimplemented() -> None:
     assert {"row_id", "scenario", "task_type", "base_pred", "scenario_pred", "delta_pred"} <= set(
         simulated.data.columns
     )
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError):
         export(artifact, format="python")
 
 
