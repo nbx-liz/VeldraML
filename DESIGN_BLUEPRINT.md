@@ -969,3 +969,36 @@ export（任意）：
 - Existing default split behavior remains non-invasive:
   - `timeseries_mode='expanding'`
   - `gap=0`, `embargo=0`, `test_size=None`.
+
+## 43. 2026-02-10 Frontier Coverage-Constrained Tuning Proposal (Phase 17)
+### 43.1 Goal
+- Extend `tune(frontier)` from pinball-only objective to an opt-in coverage-aware objective.
+- Preserve stable API signatures and keep default behavior unchanged.
+
+### 43.2 Scope
+- In scope:
+  - add objective `pinball_coverage_penalty` for `task.type='frontier'`
+  - add tuning parameters:
+    - `coverage_target`
+    - `coverage_tolerance`
+    - `penalty_weight`
+  - enrich `TuneResult.metadata` and trial artifacts with objective component details
+  - update `examples/run_demo_tune.py` for frontier options
+- Out of scope:
+  - API signature changes
+  - ONNX graph optimization
+  - changes to `fit/predict/evaluate/simulate/export` behavior
+
+### 43.3 Objective contract
+- Existing frontier default remains:
+  - `tuning.objective='pinball'`
+- New opt-in objective:
+  - `tuning.objective='pinball_coverage_penalty'`
+- Objective formula:
+  - `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`
+- `coverage_target` resolves to `frontier.alpha` when omitted.
+
+### 43.4 Compatibility notes
+- No changes to stable API function signatures.
+- No behavior change for non-frontier tasks.
+- Frontier tuning remains backward compatible with prior pinball-default behavior.

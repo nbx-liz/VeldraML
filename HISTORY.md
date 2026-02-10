@@ -1370,3 +1370,28 @@
     - Avoids ambiguous blocked-window behavior and keeps configuration explicit.
   - Impact area:
     - Config contract / Operability
+
+### 2026-02-10 (Session planning: phase17-frontier-tune-coverage-objective-mvp)
+**Context**
+- Extend frontier tuning objective depth while preserving non-invasive defaults.
+- Keep stable API signatures unchanged.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Frontier tuning keeps `pinball` as default objective and adds opt-in
+      `pinball_coverage_penalty`.
+  - Reason:
+    - Improves operational alignment to target coverage without changing existing workflows.
+  - Impact area:
+    - Frontier tuning quality / Backward compatibility
+
+- Decision: provisional
+  - Policy:
+    - Coverage-aware objective uses:
+      `pinball + penalty_weight * max(0, abs(coverage - coverage_target) - coverage_tolerance)`.
+    - `coverage_target` defaults to `frontier.alpha` when not set.
+  - Reason:
+    - Keeps configuration concise while making constraint strength explicit.
+  - Impact area:
+    - Objective design / Operability
