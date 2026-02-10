@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"format: {export_result.format}")
     print(f"export_path: {export_result.path}")
+    print(f"validation_passed: {export_result.metadata.get('validation_passed')}")
+    print(f"validation_report: {export_result.metadata.get('validation_report')}")
     print(f"output_dir: {run_dir}")
     return 0
 
