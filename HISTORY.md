@@ -929,8 +929,8 @@
     - API contract / Reliability
 
 **Results**
-- `uv run ruff check .` : pending
-- `uv run pytest -q` : pending
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed.
 
 **Risks / Notes**
 - ONNX conversion success depends on optional toolchain availability and converter compatibility.
@@ -938,3 +938,109 @@
 
 **Open Questions**
 - [ ] Should Phase 12 prioritize `tune(frontier)` or frontier ONNX export support first?
+
+### 2026-02-10 (Session planning: phase12-tune-frontier-mvp)
+**Context**
+- Implement `tune(frontier)` as the next runtime capability after Phase 11 export MVP.
+- Keep existing behavior stable for `fit/predict/evaluate/simulate/export`.
+- Status:
+  - Superseded by `Session/PR: phase12-tune-frontier-mvp` with `Decision: confirmed`.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Enable `runner.tune` for `task.type="frontier"` in Phase 12 MVP.
+  - Reason:
+    - Closes the final stable API runtime gap without broad interface changes.
+  - Impact area:
+    - API behavior / Tuning runtime
+
+- Decision: provisional
+  - Policy:
+    - Frontier tuning objective is fixed to `pinball` in MVP.
+  - Reason:
+    - Minimizes risk and keeps optimization behavior aligned with frontier training metric.
+  - Impact area:
+    - Objective contract / Reproducibility
+
+- Decision: provisional
+  - Policy:
+    - Reuse existing tuning infrastructure (`search_space`, SQLite resume, logging, artifacts).
+  - Reason:
+    - Non-intrusive implementation with lower maintenance cost and consistent UX.
+  - Impact area:
+    - Operability / Compatibility
+
+### 2026-02-10 (Session/PR: phase12-tune-frontier-mvp)
+**Context**
+- Implement `tune(frontier)` as the next runtime capability after Phase 11 export MVP.
+- Keep existing behavior stable for `fit/predict/evaluate/simulate/export`.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - added frontier tuning objective contract (`pinball`)
+    - added frontier tuning default objective (`pinball`)
+  - Updated `src/veldra/modeling/tuning.py`:
+    - frontier branch in `_score_for_task` using `train_frontier_with_cv`
+    - added `pinball -> minimize` direction mapping
+    - extended `run_tuning` task support to include frontier
+  - Updated `src/veldra/api/runner.py`:
+    - removed frontier `NotImplemented` branch in `tune()`
+    - enabled `task.type='frontier'` for tune runtime path
+  - Updated `examples/run_demo_tune.py`:
+    - added `--task frontier`
+    - default frontier data path support (`examples/data/frontier_demo.csv`)
+    - uses `kfold` for frontier tune split
+- Tests added:
+  - `tests/test_tune_smoke_frontier.py`
+  - `tests/test_tune_frontier_validation.py`
+  - `tests/test_tune_resume_frontier.py`
+- Tests updated:
+  - `tests/test_examples_run_demo_tune.py`
+  - `tests/test_tune_validation.py`
+  - `tests/test_tune_objective_selection.py`
+  - `tests/test_tuning_internal.py`
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_api_surface.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `runner.tune` supports `task.type='frontier'` in Phase 12 MVP.
+  - Reason:
+    - Completes stable API runtime availability for tune with minimal interface change.
+  - Impact area:
+    - API behavior / Tuning runtime
+
+- Decision: confirmed
+  - Policy:
+    - Frontier tuning objective is fixed to `pinball` in MVP.
+  - Reason:
+    - Aligns tune objective with frontier training metric while minimizing risk.
+  - Impact area:
+    - Objective contract / Reproducibility
+
+- Decision: confirmed
+  - Policy:
+    - Frontier tuning reuses existing tune infrastructure (`search_space`, resume, logging, artifacts).
+  - Reason:
+    - Keeps implementation non-intrusive and operationally consistent with existing tasks.
+  - Impact area:
+    - Operability / Compatibility
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed (`178 passed, 1 skipped`).
+
+**Risks / Notes**
+- Frontier tuning currently supports only `pinball`; coverage-constrained objectives are not in MVP.
+- Frontier ONNX export remains intentionally unsupported in export MVP.
+
+**Open Questions**
+- [ ] Should Phase 13 prioritize frontier ONNX export support or frontier tuning objective expansion
+      (coverage-constrained variants)?

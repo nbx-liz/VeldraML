@@ -16,11 +16,13 @@ _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
     "regression": {"rmse", "mae", "r2"},
     "binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall"},
     "multiclass": {"accuracy", "macro_f1", "logloss"},
+    "frontier": {"pinball"},
 }
 _TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
     "regression": "rmse",
     "binary": "auc",
     "multiclass": "macro_f1",
+    "frontier": "pinball",
 }
 
 

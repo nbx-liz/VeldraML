@@ -15,6 +15,7 @@ from optuna.exceptions import DuplicatedStudyError
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig, resolve_tuning_objective
 from veldra.modeling.binary import train_binary_with_cv
+from veldra.modeling.frontier import train_frontier_with_cv
 from veldra.modeling.multiclass import train_multiclass_with_cv
 from veldra.modeling.regression import train_regression_with_cv
 
@@ -40,6 +41,7 @@ def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
         "rmse": "minimize",
         "mae": "minimize",
         "r2": "maximize",
+        "pinball": "minimize",
         "auc": "maximize",
         "logloss": "minimize",
         "brier": "minimize",
@@ -141,6 +143,8 @@ def _score_for_task(config: RunConfig, data: pd.DataFrame, metric_name: str) -> 
         output = train_binary_with_cv(config=config, data=data)
     elif config.task.type == "multiclass":
         output = train_multiclass_with_cv(config=config, data=data)
+    elif config.task.type == "frontier":
+        output = train_frontier_with_cv(config=config, data=data)
     else:
         raise VeldraValidationError(f"Unsupported tuning task type '{config.task.type}'.")
 
@@ -201,9 +205,9 @@ def run_tuning(
     on_trial_complete: Callable[[dict[str, Any]], None] | None = None,
 ) -> TuningOutput:
     """Run Optuna tuning and return summary payload for API adapter layer."""
-    if config.task.type not in {"regression", "binary", "multiclass"}:
+    if config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(
-            "run_tuning supports only regression/binary/multiclass tasks."
+            "run_tuning supports only regression/binary/multiclass/frontier tasks."
         )
 
     metric_name, direction = _objective_spec(config.task.type, config.tuning.objective)

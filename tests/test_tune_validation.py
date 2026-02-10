@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from veldra.api import tune
-from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
+from veldra.api.exceptions import VeldraValidationError
 from veldra.modeling import tuning as tuning_module
 
 
@@ -30,21 +30,6 @@ def test_tune_requires_enabled_flag(tmp_path) -> None:
                 "task": {"type": "regression"},
                 "data": {"path": str(path), "target": "target"},
                 "tuning": {"enabled": False, "n_trials": 1},
-            }
-        )
-
-
-def test_tune_frontier_is_not_implemented(tmp_path) -> None:
-    frame = pd.DataFrame({"x1": [0.0, 1.0], "target": [0.0, 1.0]})
-    path = tmp_path / "frontier.csv"
-    frame.to_csv(path, index=False)
-    with pytest.raises(VeldraNotImplementedError):
-        tune(
-            {
-                "config_version": 1,
-                "task": {"type": "frontier"},
-                "data": {"path": str(path), "target": "target"},
-                "tuning": {"enabled": True, "n_trials": 1},
             }
         )
 
@@ -116,3 +101,20 @@ def test_binary_tune_forces_threshold_optimization_off(monkeypatch, tmp_path) ->
 
     assert result.best_score == 0.75
     assert seen["enabled"] is False
+
+
+def test_frontier_tune_rejects_non_pinball_objective(tmp_path) -> None:
+    frame = pd.DataFrame({"x1": [0.0, 1.0, 2.0], "target": [0.4, 1.2, 1.8]})
+    path = tmp_path / "frontier.csv"
+    frame.to_csv(path, index=False)
+
+    with pytest.raises(VeldraValidationError, match="Invalid RunConfig"):
+        tune(
+            {
+                "config_version": 1,
+                "task": {"type": "frontier"},
+                "data": {"path": str(path), "target": "target"},
+                "split": {"type": "kfold", "n_splits": 2, "seed": 13},
+                "tuning": {"enabled": True, "n_trials": 1, "objective": "auc"},
+            }
+        )

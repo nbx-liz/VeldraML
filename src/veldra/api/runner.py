@@ -140,12 +140,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
 
 def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     parsed = _ensure_config(config)
-    if parsed.task.type == "frontier":
-        raise VeldraNotImplementedError(
-            "tune is currently implemented only for task.type='regression', 'binary', or "
-            "'multiclass'."
-        )
-    if parsed.task.type not in {"regression", "binary", "multiclass"}:
+    if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(f"Unsupported task type for tune: '{parsed.task.type}'.")
     if not parsed.tuning.enabled:
         raise VeldraValidationError("tuning.enabled must be true to run tune().")

@@ -12,6 +12,7 @@ import yaml
 try:  # pragma: no cover - import path depends on launch style
     from examples.common import (
         DEFAULT_BINARY_DATA_PATH,
+        DEFAULT_FRONTIER_DATA_PATH,
         DEFAULT_MULTICLASS_DATA_PATH,
         DEFAULT_OUT_DIR,
         DEFAULT_TARGET,
@@ -23,6 +24,7 @@ try:  # pragma: no cover - import path depends on launch style
 except ModuleNotFoundError:  # pragma: no cover
     from common import (
         DEFAULT_BINARY_DATA_PATH,
+        DEFAULT_FRONTIER_DATA_PATH,
         DEFAULT_MULTICLASS_DATA_PATH,
         DEFAULT_OUT_DIR,
         DEFAULT_TARGET,
@@ -38,11 +40,13 @@ DEFAULT_DATA_BY_TASK = {
     "regression": Path(__file__).resolve().parent / "data" / "california_housing.csv",
     "binary": DEFAULT_BINARY_DATA_PATH,
     "multiclass": DEFAULT_MULTICLASS_DATA_PATH,
+    "frontier": DEFAULT_FRONTIER_DATA_PATH,
 }
 PREPARE_HINT_BY_TASK = {
     "regression": "prepare_demo_data.py",
     "binary": "prepare_demo_data_binary.py",
     "multiclass": "prepare_demo_data_multiclass.py",
+    "frontier": "prepare_demo_data_frontier.py",
 }
 
 
@@ -50,7 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--task",
-        choices=["regression", "binary", "multiclass"],
+        choices=["regression", "binary", "multiclass", "frontier"],
         default="regression",
         help="Task type for tuning demo.",
     )
@@ -99,7 +103,7 @@ def _build_tune_config(
     data_path: Path,
     artifact_dir: Path,
 ) -> dict[str, Any]:
-    split_type = "kfold" if args.task == "regression" else "stratified"
+    split_type = "kfold" if args.task in {"regression", "frontier"} else "stratified"
     tuning_cfg: dict[str, Any] = {
         "enabled": True,
         "n_trials": args.n_trials,

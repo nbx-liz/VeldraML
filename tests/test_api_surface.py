@@ -167,3 +167,16 @@ def test_frontier_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:
 
     eval_result = evaluate(artifact, frame)
     assert {"pinball", "mae", "mean_u_hat", "coverage"} <= set(eval_result.metrics)
+
+    tune_result = tune(
+        {
+            "config_version": 1,
+            "task": {"type": "frontier"},
+            "data": {"path": str(data_path), "target": "y"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 2},
+            "frontier": {"alpha": 0.90},
+            "tuning": {"enabled": True, "n_trials": 1, "preset": "fast"},
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    assert tune_result.metadata["metric_name"] == "pinball"
