@@ -24,11 +24,11 @@ def _build_config() -> RunConfig:
 def _build_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "x1": [0.1, 0.2, 0.3, 2.1, 2.2, 2.3],
-            "x2": [1.0, 1.1, 0.9, 0.1, 0.0, 0.2],
-            "group": [0, 0, 0, 1, 1, 1],
-            "ts": [1, 2, 3, 4, 5, 6],
-            "target": ["n", "n", "n", "y", "y", "y"],
+            "x1": [0.1, 2.1, 0.2, 2.2, 0.3, 2.3, 0.4, 2.4],
+            "x2": [1.0, 0.1, 1.1, 0.0, 0.9, 0.2, 1.2, 0.3],
+            "group": [0, 0, 0, 1, 1, 1, 2, 2],
+            "ts": [1, 2, 3, 4, 5, 6, 7, 8],
+            "target": ["n", "y", "n", "y", "n", "y", "n", "y"],
         }
     )
 
@@ -96,7 +96,7 @@ def test_binary_iter_cv_splits_success_paths() -> None:
     config = _build_config()
     frame = _build_frame()
     x = frame[["x1", "x2"]]
-    y = pd.Series([0, 0, 0, 1, 1, 1])
+    y = pd.Series([0, 1, 0, 1, 0, 1, 0, 1])
 
     config.split.type = "kfold"  # type: ignore[assignment]
     kfold_splits = binary._iter_cv_splits(config, frame, x, y)
@@ -180,14 +180,16 @@ def test_train_binary_with_cv_timeseries_path(monkeypatch) -> None:
     cfg = _build_config()
     cfg.split.type = "timeseries"  # type: ignore[assignment]
     cfg.split.time_col = "ts"
-    frame = _build_frame().sample(frac=1.0, random_state=4).reset_index(drop=True)
+    frame = _build_frame()
 
     monkeypatch.setattr(
         binary,
         "_iter_cv_splits",
         lambda config, data, x, y: [
-            (np.array([0, 1, 2], dtype=int), np.array([3, 4, 5], dtype=int)),
-            (np.array([3, 4, 5], dtype=int), np.array([0, 1, 2], dtype=int)),
+            (np.array([2, 3, 4, 5, 6, 7], dtype=int), np.array([0, 1], dtype=int)),
+            (np.array([0, 1, 4, 5, 6, 7], dtype=int), np.array([2, 3], dtype=int)),
+            (np.array([0, 1, 2, 3, 6, 7], dtype=int), np.array([4, 5], dtype=int)),
+            (np.array([0, 1, 2, 3, 4, 5], dtype=int), np.array([6, 7], dtype=int)),
         ],
     )
     monkeypatch.setattr(
