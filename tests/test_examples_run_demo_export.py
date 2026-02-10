@@ -56,3 +56,6 @@ def test_run_demo_export_writes_result_json(tmp_path) -> None:
     export_path = Path(payload["path"])
     assert payload["format"] == "python"
     assert export_path.exists()
+    assert payload["metadata"]["validation_mode"] == "python"
+    assert isinstance(payload["metadata"]["validation_passed"], bool)
+    assert Path(payload["metadata"]["validation_report"]).exists()

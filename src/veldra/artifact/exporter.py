@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from veldra.api.artifact import Artifact
 from veldra.api.exceptions import VeldraValidationError
@@ -159,3 +163,177 @@ def export_onnx_model(artifact: Artifact, out_dir: str | Path) -> Path:
         encoding="utf-8",
     )
     return target
+
+
+def _write_validation_report(
+    out_dir: str | Path,
+    *,
+    mode: str,
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target = Path(out_dir)
+    passed = all(bool(item.get("ok")) for item in checks)
+    payload: dict[str, Any] = {
+        "validation_mode": mode,
+        "validation_passed": passed,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+    }
+    report_path = target / "validation_report.json"
+    report_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return {
+        "validation_mode": mode,
+        "validation_passed": passed,
+        "validation_report": str(report_path),
+    }
+
+
+def _validate_python_export(export_dir: str | Path, artifact: Artifact) -> dict[str, Any]:
+    target = Path(export_dir)
+    checks: list[dict[str, Any]] = []
+    required = [
+        "manifest.json",
+        "run_config.yaml",
+        "feature_schema.json",
+        "model.lgb.txt",
+        "metadata.json",
+        "runtime_predict.py",
+        "README.md",
+    ]
+    for file_name in required:
+        exists = (target / file_name).exists()
+        checks.append({"name": f"required_file:{file_name}", "ok": exists})
+
+    runtime_path = target / "runtime_predict.py"
+    feature_names = artifact.feature_schema.get("feature_names")
+    if runtime_path.exists():
+        if not isinstance(feature_names, list) or not feature_names:
+            checks.append(
+                {
+                    "name": "runtime_predict",
+                    "ok": False,
+                    "detail": "feature_schema.feature_names is missing or invalid",
+                }
+            )
+        else:
+            try:
+                encoded_feature_names = json.dumps([str(name) for name in feature_names])
+                probe_script = (
+                    "import importlib.util, json, pandas as pd\n"
+                    "spec = importlib.util.spec_from_file_location(\n"
+                    "    'runtime_predict',\n"
+                    "    'runtime_predict.py',\n"
+                    ")\n"
+                    "mod = importlib.util.module_from_spec(spec)\n"
+                    "spec.loader.exec_module(mod)\n"
+                    f"names = json.loads({json.dumps(encoded_feature_names)})\n"
+                    "frame = pd.DataFrame({n: [0.0] for n in names}, columns=names)\n"
+                    "pred = mod.predict_frame('.', frame)\n"
+                    "print(len(pred) if hasattr(pred, '__len__') else -1)\n"
+                )
+                completed = subprocess.run(
+                    [sys.executable, "-c", probe_script],
+                    cwd=str(target),
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                pred_len = (
+                    int(completed.stdout.strip())
+                    if completed.returncode == 0 and completed.stdout.strip().isdigit()
+                    else None
+                )
+                detail = (
+                    f"prediction_length={pred_len}"
+                    if completed.returncode == 0
+                    else (completed.stderr.strip() or completed.stdout.strip() or "probe failed")
+                )
+                checks.append(
+                    {
+                        "name": "runtime_predict",
+                        "ok": completed.returncode == 0 and pred_len == 1,
+                        "detail": detail,
+                    }
+                )
+            except Exception as exc:
+                checks.append(
+                    {
+                        "name": "runtime_predict",
+                        "ok": False,
+                        "detail": str(exc),
+                    }
+                )
+    return _write_validation_report(target, mode="python", checks=checks)
+
+
+def _validate_onnx_export(export_dir: str | Path, artifact: Artifact) -> dict[str, Any]:
+    target = Path(export_dir)
+    checks: list[dict[str, Any]] = []
+    model_path = target / "model.onnx"
+    metadata_path = target / "metadata.json"
+    checks.append({"name": "required_file:model.onnx", "ok": model_path.exists()})
+    checks.append({"name": "required_file:metadata.json", "ok": metadata_path.exists()})
+
+    try:
+        import onnx
+        import onnxruntime as ort
+    except ModuleNotFoundError as exc:
+        checks.append(
+            {
+                "name": "onnx_runtime_import",
+                "ok": False,
+                "detail": (
+                    f"Missing package '{getattr(exc, 'name', 'onnx runtime package')}'. "
+                    "Install with: uv sync --extra export-onnx"
+                ),
+            }
+        )
+        return _write_validation_report(target, mode="onnx", checks=checks)
+
+    if model_path.exists():
+        try:
+            model = onnx.load(str(model_path))
+            onnx.checker.check_model(model)
+            checks.append({"name": "onnx_model_check", "ok": True})
+        except Exception as exc:
+            checks.append({"name": "onnx_model_check", "ok": False, "detail": str(exc)})
+
+        feature_names = artifact.feature_schema.get("feature_names")
+        if not isinstance(feature_names, list) or not feature_names:
+            checks.append(
+                {
+                    "name": "onnx_runtime_inference",
+                    "ok": False,
+                    "detail": "feature_schema.feature_names is missing or invalid",
+                }
+            )
+        else:
+            try:
+                session = ort.InferenceSession(
+                    str(model_path),
+                    providers=["CPUExecutionProvider"],
+                )
+                input_name = session.get_inputs()[0].name
+                sample = np.zeros((1, len(feature_names)), dtype=np.float32)
+                outputs = session.run(None, {input_name: sample})
+                checks.append(
+                    {
+                        "name": "onnx_runtime_inference",
+                        "ok": len(outputs) > 0,
+                        "detail": f"n_outputs={len(outputs)}",
+                    }
+                )
+            except Exception as exc:
+                checks.append(
+                    {
+                        "name": "onnx_runtime_inference",
+                        "ok": False,
+                        "detail": str(exc),
+                    }
+                )
+
+    return _write_validation_report(target, mode="onnx", checks=checks)

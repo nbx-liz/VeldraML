@@ -35,7 +35,12 @@ from veldra.api.types import (
     SimulationResult,
     TuneResult,
 )
-from veldra.artifact.exporter import export_onnx_model, export_python_package
+from veldra.artifact.exporter import (
+    _validate_onnx_export,
+    _validate_python_export,
+    export_onnx_model,
+    export_python_package,
+)
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
@@ -487,8 +492,10 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
 
     if fmt == "python":
         output_dir = export_python_package(artifact, export_path)
+        validation = _validate_python_export(output_dir, artifact)
     else:
         output_dir = export_onnx_model(artifact, export_path)
+        validation = _validate_onnx_export(output_dir, artifact)
 
     files = sorted([p.name for p in output_dir.iterdir() if p.is_file()])
     log_event(
@@ -501,6 +508,17 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
         format=fmt,
         export_path=str(output_dir),
     )
+    log_event(
+        LOGGER,
+        logging.INFO if validation["validation_passed"] else logging.WARNING,
+        "export validation completed",
+        run_id=run_id,
+        artifact_path=str(source_artifact_path),
+        task_type=artifact.run_config.task.type,
+        format=fmt,
+        validation_passed=validation["validation_passed"],
+        validation_report=validation["validation_report"],
+    )
     return ExportResult(
         path=str(output_dir),
         format=fmt,
@@ -510,5 +528,8 @@ def export(artifact: Artifact, format: str = "python") -> ExportResult:
             "files": files,
             "source_artifact_path": str(source_artifact_path),
             "onnx_optional_dependency": True,
+            "validation_passed": validation["validation_passed"],
+            "validation_report": validation["validation_report"],
+            "validation_mode": validation["validation_mode"],
         },
     )
