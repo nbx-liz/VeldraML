@@ -221,3 +221,28 @@ def test_export_onnx_optimization_requires_mode_when_enabled() -> None:
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_causal_propensity_clip_must_be_in_valid_range() -> None:
+    payload = _minimal_payload()
+    payload["causal"] = {"treatment_col": "t", "propensity_clip": 0.0}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_causal_treatment_must_differ_from_target() -> None:
+    payload = _minimal_payload()
+    payload["causal"] = {"treatment_col": "y"}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_causal_defaults_estimand_to_att() -> None:
+    payload = _minimal_payload()
+    payload["causal"] = {"treatment_col": "treatment"}
+
+    cfg = RunConfig.model_validate(payload)
+    assert cfg.causal is not None
+    assert cfg.causal.estimand == "att"

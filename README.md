@@ -15,6 +15,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Hyperparameter tuning workflow: `tune` (regression/binary/multiclass/frontier)
 - Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
 - Export workflow: `export` (`python` + optional `onnx`)
+- Causal workflow: `estimate_dr` (single-period DR, ATT default)
 
 ## Project Status
 
@@ -26,9 +27,11 @@ Implemented:
 - `tune` for `task.type=regression|binary|multiclass|frontier` (Optuna-based MVP)
 - `simulate` for `task.type=regression|binary|multiclass|frontier` (Scenario DSL MVP)
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
+- `estimate_dr` for `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
 
 Backlog:
 - ONNX graph optimization pipeline (quantization is available as opt-in)
+- DR-specific nuisance model tuning integration (`Phase 20`)
 
 ## Requirements
 
@@ -78,6 +81,28 @@ pred = predict(artifact, frame.drop(columns=["target"]))
 ev = evaluate(artifact, frame)
 # or evaluate directly from config (ephemeral train + evaluate, no artifact save):
 ev_cfg = evaluate(config, frame)
+```
+
+### API usage (causal DR, ATT default)
+
+```python
+from veldra.api import estimate_dr
+
+dr_result = estimate_dr(
+    {
+        "config_version": 1,
+        "task": {"type": "regression"},
+        "data": {"path": "dr_train.csv", "target": "outcome"},
+        "causal": {
+            "method": "dr",
+            "treatment_col": "treatment",
+            "estimand": "att",  # default
+            "propensity_calibration": "platt",  # default
+        },
+        "export": {"artifact_dir": "artifacts"},
+    }
+)
+print(dr_result.estimate, dr_result.metrics["dr"])
 ```
 
 Advanced time-series split options (non-default, opt-in):
@@ -158,6 +183,17 @@ uv run python examples/prepare_demo_data_frontier.py
 uv run python examples/run_demo_frontier.py --alpha 0.90
 uv run python examples/evaluate_demo_frontier_artifact.py --artifact-path <artifact_dir>
 ```
+
+Causal DR validation data generator:
+
+```bash
+uv run python examples/generate_data_dr.py --n-train 5000 --n-test 2000 --seed 42
+```
+
+Generated files:
+- `examples/data/dr_train.csv`
+- `examples/data/dr_test.csv`
+- `examples/data/dr_generation_summary.json`
 
 Example outputs are saved under `examples/out/<timestamp>/`:
 

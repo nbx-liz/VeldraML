@@ -48,3 +48,16 @@ class ExportResult:
     path: str
     format: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CausalResult:
+    run_id: str
+    method: str
+    estimand: str
+    estimate: float
+    std_error: float | None = None
+    ci_lower: float | None = None
+    ci_upper: float | None = None
+    metrics: dict[str, float] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)

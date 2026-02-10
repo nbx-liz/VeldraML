@@ -1092,3 +1092,55 @@ export（任意）：
 - Stable API signatures remain unchanged.
 - Existing artifact-path evaluation behavior and metric contracts remain unchanged.
 - `fit/predict/tune/simulate/export` behavior remains unchanged.
+
+## 47. 2026-02-10 DR Causal Estimation Proposal (Phase 19)
+### 47.1 Goal
+- Add doubly robust (DR) causal estimation as a RunConfig-driven capability.
+- Keep existing stable API signatures intact and avoid regressions in runtime workflows.
+
+### 47.2 Scope
+- In scope:
+  - `estimate_dr(config)` runner entrypoint.
+  - binary treatment DR for `estimand in {att, ate}`.
+  - OOF propensity estimation with calibration (`platt` default, `isotonic` optional).
+  - causal output artifacts (`dr_summary.json`, `dr_observation_table.parquet`).
+  - synthetic validation data generator for DR checks.
+- Out of scope:
+  - DR-DiD.
+  - DR-specific tuning/search-space integration (deferred to next phase).
+
+### 47.3 Config and defaults
+- `RunConfig` gains optional `causal` block for DR execution.
+- Default estimand:
+  - `att`
+- Propensity handling:
+  - calibrated probabilities are used for DR score computation.
+  - default calibration method is `platt`.
+
+### 47.4 Compatibility notes
+- Existing APIs (`fit`, `predict`, `evaluate`, `tune`, `simulate`, `export`) remain unchanged.
+- DR support is additive and opt-in through `RunConfig.causal`.
+
+## 48. 2026-02-10 DR Causal Estimation MVP (Phase 19, implemented)
+### 48.1 Added capabilities
+- Added RunConfig-driven DR estimation entrypoint:
+  - `estimate_dr(config) -> CausalResult`
+- Added optional `RunConfig.causal` block with defaults:
+  - `estimand='att'`
+  - `propensity_calibration='platt'`
+- Added calibrated propensity DR pipeline:
+  - OOF nuisance estimation with optional cross-fitting
+  - propensity calibration (`platt` / `isotonic`)
+  - clipped propensity for stable weighting
+- Added causal outputs under:
+  - `artifacts/causal/<run_id>/dr_summary.json`
+  - `artifacts/causal/<run_id>/dr_observation_table.parquet`
+  - `artifacts/causal/<run_id>/run_config.yaml`
+  - `artifacts/causal/<run_id>/manifest.json`
+- Added synthetic DR validation data generator:
+  - `examples/generate_data_dr.py`
+
+### 48.2 Compatibility notes
+- Stable API signatures remain unchanged for existing runtime endpoints.
+- Existing behavior of `fit/predict/evaluate/tune/simulate/export` is unchanged.
+- DR is opt-in and isolated in a dedicated causal execution path.

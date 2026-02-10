@@ -126,6 +126,17 @@ class FrontierConfig(BaseModel):
     alpha: float = 0.90
 
 
+class CausalConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["dr"] = "dr"
+    treatment_col: str
+    estimand: Literal["att", "ate"] = "att"
+    propensity_clip: float = 0.01
+    cross_fit: bool = True
+    propensity_calibration: Literal["platt", "isotonic"] = "platt"
+    nuisance_params: dict[str, Any] = Field(default_factory=dict)
+
+
 class RunConfig(BaseModel):
     """Single shared entrypoint configuration for all adapters."""
 
@@ -140,6 +151,7 @@ class RunConfig(BaseModel):
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     frontier: FrontierConfig = Field(default_factory=FrontierConfig)
+    causal: CausalConfig | None = None
 
     @model_validator(mode="after")
     def _validate_cross_fields(self) -> "RunConfig":
@@ -275,6 +287,12 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     "tuning.penalty_weight can only be customized when task.type='frontier'"
                 )
+
+        if self.causal is not None:
+            if not (0.0 < self.causal.propensity_clip < 0.5):
+                raise ValueError("causal.propensity_clip must satisfy 0 < value < 0.5")
+            if self.causal.treatment_col == self.data.target:
+                raise ValueError("causal.treatment_col must differ from data.target")
 
         return self
 

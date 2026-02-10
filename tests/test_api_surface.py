@@ -4,6 +4,7 @@ import pytest
 from veldra.api import (
     Artifact,
     VeldraValidationError,
+    estimate_dr,
     evaluate,
     export,
     fit,
@@ -28,6 +29,7 @@ def test_api_symbols_are_importable() -> None:
     assert callable(predict)
     assert callable(simulate)
     assert callable(export)
+    assert callable(estimate_dr)
     assert hasattr(Artifact, "load")
     assert hasattr(Artifact, "save")
     assert hasattr(Artifact, "predict")
@@ -179,3 +181,30 @@ def test_frontier_predict_and_evaluate_paths_are_implemented(tmp_path) -> None:
         }
     )
     assert tune_result.metadata["metric_name"] == "pinball"
+
+
+def test_estimate_dr_is_implemented(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "x1": [0.0, 0.2, 0.4, 0.8, 1.0, 1.2, 1.6, 1.8],
+            "x2": [1.0, 0.9, 1.1, 0.8, 0.7, 0.6, 0.4, 0.3],
+            "treatment": [0, 0, 1, 0, 1, 1, 1, 0],
+            "outcome": [1.0, 1.2, 2.2, 1.4, 2.5, 2.8, 3.0, 1.7],
+        }
+    )
+    data_path = tmp_path / "dr_train.csv"
+    frame.to_csv(data_path, index=False)
+
+    result = estimate_dr(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": str(data_path), "target": "outcome"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 11},
+            "causal": {"treatment_col": "treatment"},
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    assert result.method == "dr"
+    assert result.estimand == "att"
+    assert "dr" in result.metrics
