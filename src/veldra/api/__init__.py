@@ -7,8 +7,9 @@ from veldra.api.exceptions import (
     VeldraNotImplementedError,
     VeldraValidationError,
 )
-from veldra.api.runner import evaluate, export, fit, predict, simulate, tune
+from veldra.api.runner import estimate_dr, evaluate, export, fit, predict, simulate, tune
 from veldra.api.types import (
+    CausalResult,
     EvalResult,
     ExportResult,
     Prediction,
@@ -19,6 +20,7 @@ from veldra.api.types import (
 
 __all__ = [
     "Artifact",
+    "CausalResult",
     "EvalResult",
     "ExportResult",
     "Prediction",
@@ -29,6 +31,7 @@ __all__ = [
     "VeldraError",
     "VeldraNotImplementedError",
     "VeldraValidationError",
+    "estimate_dr",
     "evaluate",
     "export",
     "fit",

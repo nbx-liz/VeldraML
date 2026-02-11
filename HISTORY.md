@@ -1548,3 +1548,103 @@
 **Results**
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed (`238 passed`).
+
+### 2026-02-10 (Session/PR: phase19-causal-dr-mvp-att-calibrated)
+**Context**
+- Add DR causal estimation as an additive capability while keeping stable runtime APIs intact.
+- Use ATT-first defaults and calibrated propensity workflow for practical operational use.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/causal/dr.py` and `src/veldra/causal/__init__.py`:
+    - DR estimation core (`ATT` default, `ATE` optional)
+    - OOF nuisance estimation with optional cross-fitting
+    - propensity calibration (`platt` default, `isotonic` optional)
+    - summary + observation-level output payload
+  - Updated `src/veldra/config/models.py`:
+    - added `CausalConfig`
+    - added optional `RunConfig.causal`
+    - added causal validation (`propensity_clip`, treatment/target collision)
+  - Updated `src/veldra/config/__init__.py` exports:
+    - added `CausalConfig`
+  - Updated `src/veldra/api/types.py`:
+    - added `CausalResult`
+  - Updated `src/veldra/api/runner.py`:
+    - added `estimate_dr(config)` entrypoint
+    - writes causal outputs under `artifacts/causal/<run_id>/`
+    - logs `dr estimation completed` with structured payload
+  - Updated `src/veldra/api/__init__.py`:
+    - exported `estimate_dr` and `CausalResult`
+  - Added `examples/generate_data_dr.py`:
+    - synthetic confounded DR validation dataset generator
+- Tests added:
+  - `tests/test_dr_smoke.py`
+  - `tests/test_dr_validation.py`
+  - `tests/test_dr_propensity_calibration.py`
+  - `tests/test_dr_formula.py`
+  - `tests/test_dr_outputs.py`
+  - `tests/test_examples_generate_data_dr.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_runconfig_validation.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - DR MVP default estimand is `ATT`; `ATE` remains opt-in.
+  - Reason:
+    - ATT is the most common production estimand for treatment-on-treated analysis.
+  - Impact area:
+    - Causal inference behavior / Backward compatibility
+
+- Decision: confirmed
+  - Policy:
+    - DR uses calibrated propensity scores (`platt` default, `isotonic` optional).
+  - Reason:
+    - Improves probability reliability and stabilizes inverse propensity weighting terms.
+  - Impact area:
+    - Statistical robustness / Reproducibility
+
+- Decision: confirmed
+  - Policy:
+    - DR-specific hyperparameter tuning is deferred to the next phase.
+  - Reason:
+    - Keeps Phase 19 focused and low-risk while delivering a complete DR runtime path.
+  - Impact area:
+    - Delivery scope / Risk control
+
+### 2026-02-10 (Session planning: phase19-causal-dr-mvp-att-calibrated)
+**Context**
+- Add DR causal estimation while preserving stable API contracts.
+- Prioritize ATT-first estimation and calibrated propensity workflow.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Add RunConfig-driven DR with default `estimand=att`.
+    - Support optional `estimand=ate` without changing stable signatures.
+  - Reason:
+    - ATT is the most common operational estimand for treatment-on-treated analysis.
+  - Impact area:
+    - Causal inference capability / Compatibility
+
+- Decision: provisional
+  - Policy:
+    - DR uses calibrated propensity scores with OOF estimation path by default.
+    - Default propensity calibration is `platt`.
+  - Reason:
+    - Improves probability reliability and stabilizes inverse propensity weighting behavior.
+  - Impact area:
+    - Statistical robustness / Reproducibility
+
+- Decision: provisional
+  - Policy:
+    - DR-specific tuning is deferred to the next phase.
+  - Reason:
+    - Keep MVP focused and non-intrusive to existing tuning contracts.
+  - Impact area:
+    - Delivery scope / Risk control

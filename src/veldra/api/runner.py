@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,12 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from veldra import __version__
 from veldra.api.artifact import Artifact
 from veldra.api.exceptions import VeldraNotImplementedError, VeldraValidationError
 from veldra.api.logging import log_event
 from veldra.api.types import (
+    CausalResult,
     EvalResult,
     ExportResult,
     Prediction,
@@ -41,6 +44,9 @@ from veldra.artifact.exporter import (
     export_onnx_model,
     export_python_package,
 )
+from veldra.artifact.manifest import build_manifest
+from veldra.causal import run_dr_estimation
+from veldra.config.io import save_run_config
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
 from veldra.modeling import (
@@ -239,6 +245,79 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
             "coverage_tolerance": coverage_tolerance,
             "penalty_weight": penalty_weight,
             "objective_components": tuning_output.best_components,
+        },
+    )
+
+
+def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
+    parsed = _ensure_config(config)
+    if parsed.causal is None:
+        raise VeldraValidationError("causal configuration is required for estimate_dr().")
+    if parsed.task.type not in {"regression", "binary"}:
+        raise VeldraNotImplementedError(
+            "estimate_dr is currently implemented only for task.type='regression' or 'binary'."
+        )
+    if not parsed.data.path:
+        raise VeldraValidationError("data.path is required for estimate_dr().")
+
+    frame = load_tabular_data(parsed.data.path)
+    run_id = uuid4().hex
+    output_dir = Path(parsed.export.artifact_dir) / "causal" / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    estimation = run_dr_estimation(parsed, frame)
+    summary_path = output_dir / "dr_summary.json"
+    obs_path = output_dir / "dr_observation_table.parquet"
+    manifest_path = output_dir / "manifest.json"
+    run_config_path = output_dir / "run_config.yaml"
+
+    summary_payload = dict(estimation.summary)
+    summary_payload.update(
+        {
+            "run_id": run_id,
+            "task_type": parsed.task.type,
+            "train_source_path": parsed.data.path,
+        }
+    )
+    summary_path.write_text(
+        json.dumps(summary_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    estimation.observation_table.to_parquet(obs_path, index=False)
+    save_run_config(parsed, run_config_path)
+    manifest = build_manifest(parsed, run_id=run_id, project_version=__version__)
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "dr estimation completed",
+        run_id=run_id,
+        artifact_path=str(output_dir),
+        task_type=parsed.task.type,
+        estimand=estimation.estimand,
+        estimate=estimation.estimate,
+        ci_lower=estimation.ci_lower,
+        ci_upper=estimation.ci_upper,
+        n_rows=summary_payload["n_rows"],
+    )
+
+    return CausalResult(
+        run_id=run_id,
+        method=estimation.method,
+        estimand=estimation.estimand,
+        estimate=estimation.estimate,
+        std_error=estimation.std_error,
+        ci_lower=estimation.ci_lower,
+        ci_upper=estimation.ci_upper,
+        metrics=estimation.metrics,
+        metadata={
+            "task_type": parsed.task.type,
+            "train_source_path": parsed.data.path,
+            "summary_path": str(summary_path),
+            "observation_path": str(obs_path),
+            "manifest_path": str(manifest_path),
+            "ephemeral_run": False,
         },
     )
 
