@@ -1648,3 +1648,94 @@
     - Keep MVP focused and non-intrusive to existing tuning contracts.
   - Impact area:
     - Delivery scope / Risk control
+
+### 2026-02-11 (Session planning: phase19.1-lalonde-dr-analysis-notebook)
+**Context**
+- Add a practical Lalonde DR notebook with scenario-driven interpretation.
+- Keep DR runtime API unchanged and use `estimate_dr(config)` as the single entrypoint.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Lalonde data ingestion is URL-based with local cache-first rerun behavior.
+  - Reason:
+    - Keeps repository lean while preserving notebook reproducibility after first fetch.
+  - Impact area:
+    - Notebook operability / Data access
+
+- Decision: provisional
+  - Policy:
+    - Notebook explicitly uses ATT default and propensity calibration (`platt`) in config.
+  - Reason:
+    - Makes causal assumptions and defaults visible for analysts.
+  - Impact area:
+    - Causal analysis transparency / Reproducibility
+
+### 2026-02-11 (Session/PR: phase19.1-lalonde-dr-analysis-notebook)
+**Context**
+- Add a scenario-driven Lalonde DR notebook on top of the existing Phase 19 causal runtime.
+- Keep stable API signatures unchanged and focus on analysis workflow quality.
+
+**Changes**
+- Added notebook:
+  - `notebooks/lalonde_dr_analysis_workflow.ipynb`
+  - URL ingestion from Rdatasets Lalonde source with local cache reuse:
+    - `examples/out/notebook_lalonde_dr/lalonde_raw.parquet`
+  - Explicit DR config defaults in notebook:
+    - `estimand='att'`
+    - `propensity_calibration='platt'`
+  - Diagnostics included:
+    - Naive/IPW/DR comparison table + CI plot
+    - propensity distribution plots (`e_raw`, `e_hat`)
+    - balance diagnostics (SMD unweighted vs ATT-weighted)
+  - Notebook summary output:
+    - `examples/out/notebook_lalonde_dr/lalonde_analysis_summary.json`
+- Added tests:
+  - `tests/test_notebook_lalonde_structure.py`
+  - `tests/test_notebook_lalonde_paths.py`
+- Updated docs:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Lalonde notebook uses URL ingestion with cache-first reruns.
+  - Reason:
+    - Keeps repository lightweight while preserving reproducibility after first fetch.
+  - Impact area:
+    - Notebook operability / Data access
+
+- Decision: confirmed
+  - Policy:
+    - Notebook explicitly shows ATT/platt defaults even though they are runtime defaults.
+  - Reason:
+    - Makes causal assumptions transparent to analysts and reviewers.
+  - Impact area:
+    - Causal analysis transparency / Reproducibility
+
+**Results**
+- `uv run --no-sync ruff check .` : passed.
+- Notebook contract tests:
+  - `tests/test_notebook_regression_structure.py`
+  - `tests/test_notebook_regression_paths.py`
+  - `tests/test_notebook_frontier_structure.py`
+  - `tests/test_notebook_frontier_paths.py`
+  - `tests/test_notebook_simulate_structure.py`
+  - `tests/test_notebook_binary_tune_structure.py`
+  - `tests/test_notebook_lalonde_structure.py`
+  - `tests/test_notebook_lalonde_paths.py`
+  - result: `15 passed`
+- Full regression run:
+  - `uv run --no-sync pytest -q`
+  - result: `264 passed, 4 skipped, 1 warning`
+
+### 2026-02-11 (History hygiene: superseded planning tails)
+**Context**
+- The Phase 19.1 planning entry now has an implementation counterpart in the same file.
+
+**Changes**
+- Added append-only superseded note:
+  - `Session planning: phase19.1-lalonde-dr-analysis-notebook`
+    - superseded by `Session/PR: phase19.1-lalonde-dr-analysis-notebook` (`Decision: confirmed`)

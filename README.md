@@ -184,17 +184,6 @@ uv run python examples/run_demo_frontier.py --alpha 0.90
 uv run python examples/evaluate_demo_frontier_artifact.py --artifact-path <artifact_dir>
 ```
 
-Causal DR validation data generator:
-
-```bash
-uv run python examples/generate_data_dr.py --n-train 5000 --n-test 2000 --seed 42
-```
-
-Generated files:
-- `examples/data/dr_train.csv`
-- `examples/data/dr_test.csv`
-- `examples/data/dr_generation_summary.json`
-
 Example outputs are saved under `examples/out/<timestamp>/`:
 
 - `run_result.json`
@@ -282,6 +271,19 @@ Notebook includes:
 - Hyperparameter tuning (`tune`) and trial history visualization
 - Baseline vs tuned metric comparison
 - ROC / confusion matrix / error-distribution diagnostics
+
+Notebook sample (Lalonde DR causal analysis):
+
+```bash
+# Open and run notebooks/lalonde_dr_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- Public URL ingestion for Lalonde data with local cache reuse
+- DR causal estimation via `estimate_dr(config)` with explicit ATT/platt defaults
+- Naive/IPW/DR comparison table and ATT estimate chart with confidence interval
+- Propensity diagnostics (`e_raw` and `e_hat`) by treated/control
+- Balance diagnostics via SMD (unweighted vs ATT-weighted)
 
 Export demo:
 
