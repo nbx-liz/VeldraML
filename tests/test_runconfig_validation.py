@@ -246,3 +246,52 @@ def test_causal_defaults_estimand_to_att() -> None:
     cfg = RunConfig.model_validate(payload)
     assert cfg.causal is not None
     assert cfg.causal.estimand == "att"
+
+
+def test_causal_drdid_requires_design_and_columns() -> None:
+    payload = _minimal_payload()
+    payload["causal"] = {"method": "dr_did", "treatment_col": "treatment"}
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+    payload["causal"] = {
+        "method": "dr_did",
+        "treatment_col": "treatment",
+        "design": "panel",
+        "time_col": "time",
+        "post_col": "post",
+    }
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_causal_drdid_rejects_non_regression_task() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "binary"}
+    payload["causal"] = {
+        "method": "dr_did",
+        "treatment_col": "treatment",
+        "design": "panel",
+        "time_col": "time",
+        "post_col": "post",
+        "unit_id_col": "unit_id",
+    }
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_causal_tuning_objective_constraints() -> None:
+    payload = _minimal_payload()
+    payload["causal"] = {"method": "dr", "treatment_col": "treatment"}
+    payload["tuning"] = {"enabled": True, "n_trials": 1, "objective": "dr_std_error"}
+    RunConfig.model_validate(payload)
+
+    payload["tuning"]["objective"] = "rmse"
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+    payload["tuning"]["objective"] = "dr_overlap_penalty"
+    payload["tuning"]["causal_penalty_weight"] = -1.0
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

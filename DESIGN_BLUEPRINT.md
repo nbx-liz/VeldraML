@@ -1205,3 +1205,67 @@ export（任意）：
 ### 50.3 Compatibility notes
 - DR core/API behavior is unchanged; Phase 19.1 is an analysis-workflow addition.
 - URL dependency is isolated to notebook runtime and mitigated by local cache reuse.
+
+## 51. 2026-02-11 DR-DiD + Causal Tune Proposal (Phase 20)
+### 51.1 Goal
+- Extend causal runtime from single-period DR to DR-DiD (2-period MVP).
+- Add tuning support for causal workflows (`dr`, `dr_did`) without changing stable API signatures.
+
+### 51.2 Scope
+- In scope:
+  - `causal.method="dr_did"` for panel and repeated cross-section designs.
+  - causal tuning objectives for nuisance-model quality:
+    - `dr_std_error`, `dr_overlap_penalty`
+    - `drdid_std_error`, `drdid_overlap_penalty`
+  - DR-DiD synthetic data generator for validation.
+- Out of scope:
+  - multi-period / staggered-adoption DiD.
+  - new public API functions.
+
+### 51.3 Defaults and compatibility
+- Stable signatures remain unchanged:
+  - `estimate_dr(config) -> CausalResult`
+  - `tune(config) -> TuneResult`
+- Defaults preserved:
+  - `estimand="att"`
+  - `propensity_calibration="platt"`
+
+## 52. 2026-02-11 DR-DiD + Causal Tune MVP (Phase 20, implemented)
+### 52.1 Added runtime capabilities
+- Added `src/veldra/causal/dr_did.py`:
+  - supports `causal.method="dr_did"` with:
+    - `design="panel"` (2-period with `unit_id_col`)
+    - `design="repeated_cross_section"` (2-period)
+- Updated `estimate_dr(config)` dispatch:
+  - `dr` -> `run_dr_estimation`
+  - `dr_did` -> `run_dr_did_estimation`
+- Added metadata fields to causal outputs:
+  - `causal_method`, `design`, `time_col`, `post_col`, `unit_id_col`
+  - `n_pre`, `n_post`, `n_treated_pre`, `n_treated_post`
+
+### 52.2 Config and tuning contract
+- Extended `CausalConfig`:
+  - `method: "dr" | "dr_did"`
+  - `design`, `time_col`, `post_col`, `unit_id_col`
+- Added causal tuning objective validation:
+  - DR: `dr_std_error`, `dr_overlap_penalty`
+  - DR-DiD: `drdid_std_error`, `drdid_overlap_penalty`
+- Added `tuning.causal_penalty_weight` for overlap-penalty objectives.
+
+### 52.3 Causal tune runtime integration
+- Updated `modeling/tuning.py` to score causal trials via:
+  - `run_dr_estimation` / `run_dr_did_estimation`
+- Trial artifacts now include causal objective components:
+  - `estimate`, `std_error`, `overlap_metric`, `penalty`, `objective_value`
+
+### 52.4 Examples and tests
+- Added synthetic generator:
+  - `examples/generate_data_drdid.py`
+- Added/updated tests for DR-DiD and causal tuning contracts:
+  - DR-DiD smoke/validation/output tests
+  - causal tune smoke/validation/resume tests
+  - generator script test
+
+### 52.5 Compatibility notes
+- Existing `fit/predict/evaluate/simulate/export` behavior is unchanged.
+- Existing non-causal `tune` behavior is unchanged.

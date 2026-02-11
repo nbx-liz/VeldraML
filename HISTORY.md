@@ -1739,3 +1739,111 @@
 - Added append-only superseded note:
   - `Session planning: phase19.1-lalonde-dr-analysis-notebook`
     - superseded by `Session/PR: phase19.1-lalonde-dr-analysis-notebook` (`Decision: confirmed`)
+
+### 2026-02-11 (Session planning: phase20-drdid-and-causal-tune-mvp)
+**Context**
+- Extend causal support from single-period DR to DR-DiD.
+- Add tune support for causal workflows (`dr` and `dr_did`) without changing stable API signatures.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Add `causal.method="dr_did"` MVP for 2-period data with `design="panel"| "repeated_cross_section"`.
+  - Reason:
+    - Closes the next major causal capability gap while keeping scope controlled.
+  - Impact area:
+    - Causal runtime capability / Compatibility
+
+- Decision: provisional
+  - Policy:
+    - Add causal tuning objectives:
+      - DR: `dr_std_error`, `dr_overlap_penalty`
+      - DR-DiD: `drdid_std_error`, `drdid_overlap_penalty`
+  - Reason:
+    - Enables nuisance-quality optimization without introducing new public APIs.
+  - Impact area:
+    - Tuning capability / Operability
+
+- Decision: provisional
+  - Policy:
+    - Preserve defaults: `estimand='att'`, `propensity_calibration='platt'`.
+  - Reason:
+    - Maintains current behavior and minimizes migration risk.
+  - Impact area:
+    - Backward compatibility / Reproducibility
+
+### 2026-02-11 (Session/PR: phase20-drdid-and-causal-tune-mvp)
+**Context**
+- Implement DR-DiD estimation and causal tune objectives in a non-breaking way.
+- Keep all existing stable API signatures unchanged.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/causal/dr_did.py`:
+    - DR-DiD estimation for 2-period panel and repeated cross-section designs.
+  - Updated `src/veldra/causal/__init__.py`:
+    - exported `run_dr_did_estimation`.
+  - Updated `src/veldra/config/models.py`:
+    - extended `CausalConfig` with `method/design/time_col/post_col/unit_id_col`.
+    - added causal tune objective constraints and defaults.
+    - added `tuning.causal_penalty_weight`.
+  - Updated `src/veldra/api/runner.py`:
+    - `estimate_dr` dispatch now supports `dr` and `dr_did`.
+    - `CausalResult.metadata` includes design/time diagnostics fields.
+    - tune metadata/logging includes causal context when causal config is set.
+  - Updated `src/veldra/modeling/tuning.py`:
+    - added causal scoring paths:
+      - `dr_std_error`, `dr_overlap_penalty`
+      - `drdid_std_error`, `drdid_overlap_penalty`
+    - trial artifacts include causal objective components.
+  - Added `examples/generate_data_drdid.py`:
+    - synthetic DR-DiD validation datasets for panel and repeated CS.
+- Tests added:
+  - `tests/test_drdid_smoke_panel.py`
+  - `tests/test_drdid_smoke_repeated_cs.py`
+  - `tests/test_drdid_validation.py`
+  - `tests/test_drdid_outputs.py`
+  - `tests/test_tune_dr_smoke.py`
+  - `tests/test_tune_drdid_smoke.py`
+  - `tests/test_tune_causal_resume.py`
+  - `tests/test_tune_causal_validation.py`
+  - `tests/test_examples_generate_data_drdid.py`
+- Tests updated:
+  - `tests/test_api_surface.py`
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_tune_objective_selection.py`
+  - `tests/test_tuning_internal.py`
+  - `tests/test_dr_validation.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - DR-DiD MVP supports exactly 2-period panel/repeated-CS in `task.type='regression'`.
+  - Reason:
+    - Delivers the needed capability with bounded complexity.
+  - Impact area:
+    - Causal runtime capability / Risk control
+
+- Decision: confirmed
+  - Policy:
+    - Causal tuning is available for both DR and DR-DiD through objective selection.
+  - Reason:
+    - Reuses existing tune infrastructure and avoids API surface expansion.
+  - Impact area:
+    - Tuning capability / Maintainability
+
+- Decision: confirmed
+  - Policy:
+    - Defaults remain `ATT` and `platt` calibration.
+  - Reason:
+    - Ensures non-intrusive migration and behavioral continuity.
+  - Impact area:
+    - Backward compatibility / Reproducibility
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed.
