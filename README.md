@@ -323,6 +323,23 @@ Notebook includes:
 - Propensity diagnostics (`e_raw` and `e_hat`) by treated/control
 - Balance diagnostics via SMD (unweighted vs ATT-weighted)
 
+Notebook sample (Lalonde DR-DiD causal analysis):
+
+```bash
+# Open and run notebooks/lalonde_drdid_analysis_workflow.ipynb
+```
+
+Notebook includes:
+- Public URL ingestion for Lalonde data with local cache reuse
+- Panel transformation using pre=`re75` and post=`re78` outcomes
+- DR-DiD causal estimation via `estimate_dr(config)` with:
+  - `causal.method="dr_did"`
+  - `causal.design="panel"`
+  - explicit ATT/platt defaults
+- Naive/IPW/DR/DR-DiD comparison table with CI
+- Propensity diagnostics (`e_raw` and `e_hat`) and overlap summary
+- Balance diagnostics via SMD (unweighted vs ATT-weighted)
+
 Export demo:
 
 ```bash
