@@ -208,3 +208,35 @@ def test_estimate_dr_is_implemented(tmp_path) -> None:
     assert result.method == "dr"
     assert result.estimand == "att"
     assert "dr" in result.metrics
+
+    panel = pd.DataFrame(
+        {
+            "unit_id": [1, 1, 2, 2, 3, 3, 4, 4],
+            "time": [0, 1, 0, 1, 0, 1, 0, 1],
+            "post": [0, 1, 0, 1, 0, 1, 0, 1],
+            "treatment": [0, 0, 1, 1, 0, 0, 1, 1],
+            "x1": [0.1, 0.1, 0.3, 0.3, 0.2, 0.2, 0.4, 0.4],
+            "outcome": [10.0, 10.9, 12.0, 14.0, 9.7, 10.5, 13.2, 15.0],
+        }
+    )
+    panel_path = tmp_path / "drdid_panel.csv"
+    panel.to_csv(panel_path, index=False)
+    did_result = estimate_dr(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": str(panel_path), "target": "outcome"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 11},
+            "causal": {
+                "method": "dr_did",
+                "treatment_col": "treatment",
+                "design": "panel",
+                "time_col": "time",
+                "post_col": "post",
+                "unit_id_col": "unit_id",
+            },
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    assert did_result.method == "dr_did"
+    assert did_result.metadata["design"] == "panel"

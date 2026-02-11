@@ -12,6 +12,8 @@ TimeSeriesMode = Literal["expanding", "blocked"]
 CalibrationType = Literal["platt", "isotonic"]
 TuningPreset = Literal["fast", "standard"]
 TuningLogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+CausalMethod = Literal["dr", "dr_did"]
+CausalDesign = Literal["panel", "repeated_cross_section"]
 
 _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
     "regression": {"rmse", "mae", "r2"},
@@ -24,6 +26,14 @@ _TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
     "binary": "auc",
     "multiclass": "macro_f1",
     "frontier": "pinball",
+}
+_CAUSAL_TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
+    "dr": {"dr_std_error", "dr_overlap_penalty"},
+    "dr_did": {"drdid_std_error", "drdid_overlap_penalty"},
+}
+_CAUSAL_TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
+    "dr": "dr_std_error",
+    "dr_did": "drdid_std_error",
 }
 
 
@@ -75,6 +85,7 @@ class TuningConfig(BaseModel):
     coverage_target: float | None = None
     coverage_tolerance: float = 0.01
     penalty_weight: float = 1.0
+    causal_penalty_weight: float = 1.0
 
 
 class PostprocessConfig(BaseModel):
@@ -128,9 +139,13 @@ class FrontierConfig(BaseModel):
 
 class CausalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    method: Literal["dr"] = "dr"
+    method: CausalMethod = "dr"
     treatment_col: str
     estimand: Literal["att", "ate"] = "att"
+    design: CausalDesign | None = None
+    time_col: str | None = None
+    post_col: str | None = None
+    unit_id_col: str | None = None
     propensity_clip: float = 0.01
     cross_fit: bool = True
     propensity_calibration: Literal["platt", "isotonic"] = "platt"
@@ -248,14 +263,32 @@ class RunConfig(BaseModel):
                     "postprocess.threshold_optimization"
                 )
 
-        if self.task.type in _TUNE_ALLOWED_OBJECTIVES:
-            objective = self.tuning.objective
-            if objective is not None and objective not in _TUNE_ALLOWED_OBJECTIVES[self.task.type]:
-                allowed = sorted(_TUNE_ALLOWED_OBJECTIVES[self.task.type])
+        if self.causal is None:
+            if self.task.type in _TUNE_ALLOWED_OBJECTIVES:
+                objective = self.tuning.objective
+                if (
+                    objective is not None
+                    and objective not in _TUNE_ALLOWED_OBJECTIVES[self.task.type]
+                ):
+                    allowed = sorted(_TUNE_ALLOWED_OBJECTIVES[self.task.type])
+                    raise ValueError(
+                        f"tuning.objective '{objective}' is not allowed for task.type="
+                        f"'{self.task.type}'. Allowed: {allowed}"
+                    )
+            if self.tuning.causal_penalty_weight != 1.0:
                 raise ValueError(
-                    f"tuning.objective '{objective}' is not allowed for task.type="
-                    f"'{self.task.type}'. Allowed: {allowed}"
+                    "tuning.causal_penalty_weight can only be customized when causal is configured"
                 )
+        else:
+            allowed = _CAUSAL_TUNE_ALLOWED_OBJECTIVES[self.causal.method]
+            objective = self.tuning.objective
+            if objective is not None and objective not in allowed:
+                raise ValueError(
+                    f"tuning.objective '{objective}' is not allowed for causal.method="
+                    f"'{self.causal.method}'. Allowed: {sorted(allowed)}"
+                )
+            if self.tuning.causal_penalty_weight < 0:
+                raise ValueError("tuning.causal_penalty_weight must be >= 0")
 
         if self.task.type == "frontier":
             resolved_target = (
@@ -293,11 +326,66 @@ class RunConfig(BaseModel):
                 raise ValueError("causal.propensity_clip must satisfy 0 < value < 0.5")
             if self.causal.treatment_col == self.data.target:
                 raise ValueError("causal.treatment_col must differ from data.target")
+            if self.causal.method == "dr":
+                if self.task.type not in {"regression", "binary"}:
+                    raise ValueError(
+                        "causal.method='dr' supports only task.type='regression' or 'binary'"
+                    )
+                if self.causal.design is not None:
+                    raise ValueError("causal.design is only supported for causal.method='dr_did'")
+                if self.causal.time_col is not None:
+                    raise ValueError("causal.time_col is only supported for causal.method='dr_did'")
+                if self.causal.post_col is not None:
+                    raise ValueError("causal.post_col is only supported for causal.method='dr_did'")
+                if self.causal.unit_id_col is not None:
+                    raise ValueError(
+                        "causal.unit_id_col is only supported for causal.method='dr_did'"
+                    )
+            elif self.causal.method == "dr_did":
+                if self.task.type != "regression":
+                    raise ValueError(
+                        "causal.method='dr_did' supports only "
+                        "task.type='regression' in current phase"
+                    )
+                if self.causal.design is None:
+                    raise ValueError("causal.design is required when causal.method='dr_did'")
+                if self.causal.time_col is None:
+                    raise ValueError("causal.time_col is required when causal.method='dr_did'")
+                if self.causal.post_col is None:
+                    raise ValueError("causal.post_col is required when causal.method='dr_did'")
+                if (
+                    self.causal.design == "panel"
+                    and self.causal.unit_id_col is None
+                ):
+                    raise ValueError(
+                        "causal.unit_id_col is required for causal.method='dr_did' "
+                        "and causal.design='panel'"
+                    )
 
         return self
 
 
-def resolve_tuning_objective(task_type: str, objective: str | None) -> str:
+def resolve_tuning_objective(
+    task_type: str,
+    objective: str | None,
+    *,
+    causal_method: str | None = None,
+) -> str:
+    if causal_method is not None:
+        if causal_method not in _CAUSAL_TUNE_ALLOWED_OBJECTIVES:
+            raise ValueError(
+                f"Unsupported causal method for tuning objective: '{causal_method}'"
+            )
+        if objective is None:
+            return _CAUSAL_TUNE_DEFAULT_OBJECTIVES[causal_method]
+        if objective not in _CAUSAL_TUNE_ALLOWED_OBJECTIVES[causal_method]:
+            allowed = sorted(_CAUSAL_TUNE_ALLOWED_OBJECTIVES[causal_method])
+            raise ValueError(
+                f"tuning.objective '{objective}' is not allowed for causal.method="
+                f"'{causal_method}'. Allowed: {allowed}"
+            )
+        return objective
+
     if task_type not in _TUNE_ALLOWED_OBJECTIVES:
         raise ValueError(f"Unsupported task type for tuning objective: '{task_type}'")
     if objective is None:

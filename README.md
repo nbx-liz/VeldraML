@@ -15,7 +15,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Hyperparameter tuning workflow: `tune` (regression/binary/multiclass/frontier)
 - Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
 - Export workflow: `export` (`python` + optional `onnx`)
-- Causal workflow: `estimate_dr` (single-period DR, ATT default)
+- Causal workflow: `estimate_dr` (DR + DR-DiD, ATT default)
 
 ## Project Status
 
@@ -27,11 +27,13 @@ Implemented:
 - `tune` for `task.type=regression|binary|multiclass|frontier` (Optuna-based MVP)
 - `simulate` for `task.type=regression|binary|multiclass|frontier` (Scenario DSL MVP)
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
-- `estimate_dr` for `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
+- `estimate_dr` for:
+  - `causal.method=dr` with `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
+  - `causal.method=dr_did` with `task.type=regression` (2-period panel/repeated cross-section)
 
 Backlog:
 - ONNX graph optimization pipeline (quantization is available as opt-in)
-- DR-specific nuisance model tuning integration (`Phase 20`)
+- Causal DiD extensions beyond 2-period MVP (multi-period / staggered adoption)
 
 ## Requirements
 
@@ -103,6 +105,32 @@ dr_result = estimate_dr(
     }
 )
 print(dr_result.estimate, dr_result.metrics["dr"])
+```
+
+### API usage (causal DR-DiD, panel)
+
+```python
+from veldra.api import estimate_dr
+
+drdid_result = estimate_dr(
+    {
+        "config_version": 1,
+        "task": {"type": "regression"},
+        "data": {"path": "drdid_panel.csv", "target": "outcome"},
+        "causal": {
+            "method": "dr_did",
+            "treatment_col": "treatment",
+            "design": "panel",
+            "time_col": "time",
+            "post_col": "post",
+            "unit_id_col": "unit_id",
+            "estimand": "att",  # default
+            "propensity_calibration": "platt",  # default
+        },
+        "export": {"artifact_dir": "artifacts"},
+    }
+)
+print(drdid_result.estimate, drdid_result.metrics["drdid"])
 ```
 
 Advanced time-series split options (non-default, opt-in):
@@ -201,6 +229,10 @@ uv run python examples/run_demo_tune.py --task multiclass --objective accuracy -
 uv run python examples/run_demo_tune.py --task frontier --objective pinball --n-trials 20
 # opt-in coverage-aware frontier objective
 uv run python examples/run_demo_tune.py --task frontier --objective pinball_coverage_penalty --coverage-target 0.92 --coverage-tolerance 0.02 --penalty-weight 2.0 --n-trials 20
+# causal DR tuning objective (nuisance models)
+uv run python examples/run_demo_tune.py --task regression --objective dr_std_error --n-trials 20
+# causal DR-DiD tuning objective
+uv run python examples/run_demo_tune.py --task regression --objective drdid_std_error --n-trials 20
 ```
 
 Tune resume / verbosity / custom search-space:
@@ -212,6 +244,12 @@ uv run python examples/run_demo_tune.py \
   --resume \
   --log-level DEBUG \
   --search-space-file examples/search_space_regression.yaml
+```
+
+DR-DiD synthetic data generation:
+
+```bash
+uv run python examples/generate_data_drdid.py --n-units 3000 --n-pre 2500 --n-post 2500 --seed 42
 ```
 
 Simulate demo (regression baseline with scenario actions):

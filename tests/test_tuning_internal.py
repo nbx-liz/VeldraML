@@ -49,8 +49,20 @@ def test_objective_and_default_search_space_validation() -> None:
         "pinball_coverage_penalty",
         "minimize",
     )
+    assert tuning._objective_spec(
+        "regression",
+        None,
+        causal_method="dr",
+    ) == ("dr_std_error", "minimize")
+    assert tuning._objective_spec(
+        "regression",
+        "drdid_overlap_penalty",
+        causal_method="dr_did",
+    ) == ("drdid_overlap_penalty", "minimize")
     with pytest.raises(VeldraValidationError):
         tuning._objective_spec("binary", "r2")
+    with pytest.raises(VeldraValidationError):
+        tuning._objective_spec("regression", "rmse", causal_method="dr")
     with pytest.raises(VeldraValidationError):
         tuning._default_search_space("regression", "unknown")
     assert tuning._default_search_space("regression", "standard")

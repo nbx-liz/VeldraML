@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from veldra.api import VeldraNotImplementedError, VeldraValidationError, estimate_dr
+from veldra.api import VeldraValidationError, estimate_dr
 
 
 def test_estimate_dr_requires_causal_config(tmp_path) -> None:
@@ -31,7 +31,7 @@ def test_estimate_dr_rejects_unsupported_task(tmp_path) -> None:
     path = tmp_path / "train.csv"
     frame.to_csv(path, index=False)
 
-    with pytest.raises(VeldraNotImplementedError):
+    with pytest.raises(VeldraValidationError, match="Invalid RunConfig"):
         estimate_dr(
             {
                 "config_version": 1,

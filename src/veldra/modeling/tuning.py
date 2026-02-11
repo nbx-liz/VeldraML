@@ -13,6 +13,7 @@ import pandas as pd
 from optuna.exceptions import DuplicatedStudyError
 
 from veldra.api.exceptions import VeldraValidationError
+from veldra.causal import run_dr_did_estimation, run_dr_estimation
 from veldra.config.models import RunConfig, resolve_tuning_objective
 from veldra.modeling.binary import train_binary_with_cv
 from veldra.modeling.frontier import train_frontier_with_cv
@@ -33,9 +34,18 @@ class TuningOutput:
     best_components: dict[str, Any]
 
 
-def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
+def _objective_spec(
+    task_type: str,
+    objective: str | None,
+    *,
+    causal_method: str | None = None,
+) -> tuple[str, str]:
     try:
-        metric_name = resolve_tuning_objective(task_type, objective)
+        metric_name = resolve_tuning_objective(
+            task_type,
+            objective,
+            causal_method=causal_method,
+        )
     except ValueError as exc:
         raise VeldraValidationError(str(exc)) from exc
     direction_by_metric = {
@@ -52,6 +62,10 @@ def _objective_spec(task_type: str, objective: str | None) -> tuple[str, str]:
         "precision": "maximize",
         "recall": "maximize",
         "macro_f1": "maximize",
+        "dr_std_error": "minimize",
+        "dr_overlap_penalty": "minimize",
+        "drdid_std_error": "minimize",
+        "drdid_overlap_penalty": "minimize",
     }
     if metric_name not in direction_by_metric:
         raise VeldraValidationError(f"Unsupported objective metric '{metric_name}'.")
@@ -191,6 +205,36 @@ def _score_for_task_with_components(
     data: pd.DataFrame,
     metric_name: str,
 ) -> tuple[float, dict[str, Any]]:
+    if config.causal is not None:
+        if config.causal.method == "dr":
+            estimation = run_dr_estimation(config, data)
+        elif config.causal.method == "dr_did":
+            estimation = run_dr_did_estimation(config, data)
+        else:
+            raise VeldraValidationError(
+                f"Unsupported causal method '{config.causal.method}' for tuning."
+            )
+        std_error = (
+            float(estimation.std_error)
+            if estimation.std_error is not None
+            else float("inf")
+        )
+        overlap_metric = float(estimation.metrics.get("overlap_metric", 0.0))
+        penalty_weight = float(config.tuning.causal_penalty_weight)
+        penalty = 0.0
+        if metric_name in {"dr_overlap_penalty", "drdid_overlap_penalty"}:
+            penalty = penalty_weight * max(0.0, 0.1 - overlap_metric)
+        objective_value = std_error + penalty
+        components = {
+            "estimate": float(estimation.estimate),
+            "std_error": std_error,
+            "overlap_metric": overlap_metric,
+            "penalty_weight": penalty_weight,
+            "penalty": penalty,
+            "objective_value": objective_value,
+        }
+        return objective_value, components
+
     if config.task.type == "regression":
         output = train_regression_with_cv(config=config, data=data)
     elif config.task.type == "binary":
@@ -283,7 +327,11 @@ def run_tuning(
             "run_tuning supports only regression/binary/multiclass/frontier tasks."
         )
 
-    metric_name, direction = _objective_spec(config.task.type, config.tuning.objective)
+    metric_name, direction = _objective_spec(
+        config.task.type,
+        config.tuning.objective,
+        causal_method=config.causal.method if config.causal is not None else None,
+    )
     search_space = _resolve_search_space(config)
     sampler = optuna.samplers.TPESampler(seed=config.train.seed)
 

@@ -45,7 +45,7 @@ from veldra.artifact.exporter import (
     export_python_package,
 )
 from veldra.artifact.manifest import build_manifest
-from veldra.causal import run_dr_estimation
+from veldra.causal import run_dr_did_estimation, run_dr_estimation
 from veldra.config.io import save_run_config
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
@@ -187,6 +187,10 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     penalty_weight = (
         float(parsed.tuning.penalty_weight) if parsed.task.type == "frontier" else None
     )
+    causal_method = parsed.causal.method if parsed.causal is not None else None
+    causal_penalty_weight = (
+        float(parsed.tuning.causal_penalty_weight) if parsed.causal is not None else None
+    )
 
     def _trial_progress(payload: dict[str, Any]) -> None:
         log_event(
@@ -224,6 +228,8 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
         coverage_target=coverage_target,
         coverage_tolerance=coverage_tolerance,
         penalty_weight=penalty_weight,
+        causal_method=causal_method,
+        causal_penalty_weight=causal_penalty_weight,
     )
     return TuneResult(
         run_id=run_id,
@@ -244,6 +250,8 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
             "coverage_target": coverage_target,
             "coverage_tolerance": coverage_tolerance,
             "penalty_weight": penalty_weight,
+            "causal_method": causal_method,
+            "causal_penalty_weight": causal_penalty_weight,
             "objective_components": tuning_output.best_components,
         },
     )
@@ -253,10 +261,18 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
     parsed = _ensure_config(config)
     if parsed.causal is None:
         raise VeldraValidationError("causal configuration is required for estimate_dr().")
-    if parsed.task.type not in {"regression", "binary"}:
-        raise VeldraNotImplementedError(
-            "estimate_dr is currently implemented only for task.type='regression' or 'binary'."
-        )
+    if parsed.causal.method == "dr":
+        if parsed.task.type not in {"regression", "binary"}:
+            raise VeldraNotImplementedError(
+                "estimate_dr(method='dr') supports only task.type='regression' or 'binary'."
+            )
+    elif parsed.causal.method == "dr_did":
+        if parsed.task.type != "regression":
+            raise VeldraNotImplementedError(
+                "estimate_dr(method='dr_did') supports only task.type='regression'."
+            )
+    else:
+        raise VeldraValidationError(f"Unsupported causal method '{parsed.causal.method}'.")
     if not parsed.data.path:
         raise VeldraValidationError("data.path is required for estimate_dr().")
 
@@ -265,7 +281,10 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
     output_dir = Path(parsed.export.artifact_dir) / "causal" / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    estimation = run_dr_estimation(parsed, frame)
+    if parsed.causal.method == "dr":
+        estimation = run_dr_estimation(parsed, frame)
+    else:
+        estimation = run_dr_did_estimation(parsed, frame)
     summary_path = output_dir / "dr_summary.json"
     obs_path = output_dir / "dr_observation_table.parquet"
     manifest_path = output_dir / "manifest.json"
@@ -291,10 +310,11 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
     log_event(
         LOGGER,
         logging.INFO,
-        "dr estimation completed",
+        "causal estimation completed",
         run_id=run_id,
         artifact_path=str(output_dir),
         task_type=parsed.task.type,
+        method=estimation.method,
         estimand=estimation.estimand,
         estimate=estimation.estimate,
         ci_lower=estimation.ci_lower,
@@ -313,6 +333,15 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
         metrics=estimation.metrics,
         metadata={
             "task_type": parsed.task.type,
+            "causal_method": parsed.causal.method,
+            "design": parsed.causal.design,
+            "time_col": parsed.causal.time_col,
+            "post_col": parsed.causal.post_col,
+            "unit_id_col": parsed.causal.unit_id_col,
+            "n_pre": estimation.summary.get("n_pre"),
+            "n_post": estimation.summary.get("n_post"),
+            "n_treated_pre": estimation.summary.get("n_treated_pre"),
+            "n_treated_post": estimation.summary.get("n_treated_post"),
             "train_source_path": parsed.data.path,
             "summary_path": str(summary_path),
             "observation_path": str(obs_path),
