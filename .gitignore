@@ -89,3 +89,5 @@ tmp*.json
 uv-*.lock
 notebooks/.uv_cache/
 notebooks/examples/out/
+
+.ipython/

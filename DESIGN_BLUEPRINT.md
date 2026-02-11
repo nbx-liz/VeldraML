@@ -1269,3 +1269,67 @@ export（任意）：
 ### 52.5 Compatibility notes
 - Existing `fit/predict/evaluate/simulate/export` behavior is unchanged.
 - Existing non-causal `tune` behavior is unchanged.
+
+## 53. 2026-02-11 Lalonde DR-DiD Notebook Proposal (Phase 20.1)
+### 53.1 Goal
+- Add a scenario-driven Lalonde notebook dedicated to DR-DiD analysis.
+- Keep the existing single-period DR notebook intact for comparison and onboarding clarity.
+
+### 53.2 Scope
+- In scope:
+  - new notebook: `notebooks/lalonde_drdid_analysis_workflow.ipynb`
+  - URL ingestion + local cache-first rerun behavior
+  - panel DR-DiD configuration and execution via `estimate_dr(config)`
+  - diagnostics for estimate comparison, propensity, overlap, and covariate balance
+  - notebook contract tests and docs updates
+- Out of scope:
+  - repeated cross-section DR-DiD notebook variant
+  - new runtime public APIs
+
+### 53.3 Scenario contract
+- Business question:
+  - ATT of job training on post-program earnings growth.
+- Outcome mapping:
+  - pre outcome = `re75`
+  - post outcome = `re78`
+- Causal runtime contract:
+  - `causal.method="dr_did"`
+  - `causal.design="panel"`
+  - `causal.estimand="att"` (explicit)
+  - `causal.propensity_calibration="platt"` (explicit)
+
+## 54. 2026-02-11 Lalonde DR-DiD Notebook MVP (Phase 20.1, implemented)
+### 54.1 Added analysis workflow
+- Added a dedicated DR-DiD notebook:
+  - `notebooks/lalonde_drdid_analysis_workflow.ipynb`
+- Notebook flow:
+  - URL-based Lalonde ingestion with cache-first rerun behavior
+  - panel dataset construction:
+    - pre outcome from `re75`
+    - post outcome from `re78`
+    - stacked format with `time`, `post`, and `unit_id`
+  - causal config and estimation through `estimate_dr(config)`:
+    - `method="dr_did"`
+    - `design="panel"`
+    - explicit `estimand="att"` and `propensity_calibration="platt"`
+
+### 54.2 Diagnostics and outputs
+- Added result diagnostics:
+  - Naive/IPW/DR/DR-DiD comparison table
+  - confidence interval visualization
+  - propensity distributions (`e_raw`, `e_hat`)
+  - overlap summary and SMD balance checks (unweighted vs ATT-weighted)
+- Notebook output artifacts:
+  - `examples/out/notebook_lalonde_drdid/lalonde_raw.parquet`
+  - `examples/out/notebook_lalonde_drdid/lalonde_panel.parquet`
+  - `examples/out/notebook_lalonde_drdid/lalonde_drdid_summary.json`
+
+### 54.3 Contract tests
+- Added notebook contract tests:
+  - `tests/test_notebook_lalonde_drdid_structure.py`
+  - `tests/test_notebook_lalonde_drdid_paths.py`
+
+### 54.4 Compatibility notes
+- Existing single-period DR notebook is unchanged:
+  - `notebooks/lalonde_dr_analysis_workflow.ipynb`
+- No runtime API signatures changed.

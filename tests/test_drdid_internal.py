@@ -93,7 +93,8 @@ def test_panel_to_pseudo_frame_validation_paths(monkeypatch) -> None:
         dr_did._panel_to_pseudo_frame(cfg, duplicate_pre)
 
     unstable_treat = _panel_frame().copy()
-    unstable_treat.loc[(unstable_treat["unit_id"] == 2) & (unstable_treat["post"] == 1), "treatment"] = 0
+    unstable_mask = (unstable_treat["unit_id"] == 2) & (unstable_treat["post"] == 1)
+    unstable_treat.loc[unstable_mask, "treatment"] = 0
     with pytest.raises(VeldraValidationError, match="treatment to be stable"):
         dr_did._panel_to_pseudo_frame(cfg, unstable_treat)
 
@@ -103,7 +104,10 @@ def test_panel_to_pseudo_frame_validation_paths(monkeypatch) -> None:
 
     cfg = _config()
     monkeypatch.setattr(dr_did.pd, "get_dummies", lambda *_args, **_kwargs: pd.DataFrame())
-    with pytest.raises(VeldraValidationError, match="No usable feature columns remain after encoding"):
+    with pytest.raises(
+        VeldraValidationError,
+        match="No usable feature columns remain after encoding",
+    ):
         dr_did._panel_to_pseudo_frame(cfg, _panel_frame())
 
 
@@ -117,4 +121,3 @@ def test_repeated_cs_requires_pre_and_post() -> None:
     frame["post"] = 1
     with pytest.raises(VeldraValidationError, match="requires both pre and post rows"):
         dr_did._repeated_cs_to_pseudo_frame(cfg, frame)
-

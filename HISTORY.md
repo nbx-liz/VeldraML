@@ -1740,6 +1740,93 @@
   - `Session planning: phase19.1-lalonde-dr-analysis-notebook`
     - superseded by `Session/PR: phase19.1-lalonde-dr-analysis-notebook` (`Decision: confirmed`)
 
+### 2026-02-11 (Session planning: phase20.1-lalonde-drdid-analysis-notebook)
+**Context**
+- Add a dedicated Lalonde DR-DiD notebook on top of the Phase 20 runtime.
+- Keep single-period DR notebook and DR-DiD notebook as separate references.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Notebook scenario uses panel DR-DiD with pre=`re75` and post=`re78`.
+  - Reason:
+    - Matches the intended policy question (earnings growth impact) and DR-DiD assumptions.
+  - Impact area:
+    - Causal analysis workflow / Reproducibility
+
+- Decision: provisional
+  - Policy:
+    - Notebook uses URL ingestion with local cache-first reruns.
+  - Reason:
+    - Keeps repository lightweight while ensuring deterministic reruns after initial fetch.
+  - Impact area:
+    - Notebook operability / Data access
+
+- Decision: provisional
+  - Policy:
+    - ATT and platt defaults are shown explicitly in notebook config.
+  - Reason:
+    - Makes assumptions visible to analysts and reviewers.
+  - Impact area:
+    - Causal analysis transparency
+
+### 2026-02-11 (Session/PR: phase20.1-lalonde-drdid-analysis-notebook)
+**Context**
+- Add a dedicated Lalonde DR-DiD notebook to demonstrate the newly implemented DR-DiD runtime path.
+- Keep the existing Lalonde DR notebook untouched for single-period reference.
+
+**Changes**
+- Added notebook:
+  - `notebooks/lalonde_drdid_analysis_workflow.ipynb`
+  - URL ingestion + cache-first behavior:
+    - `examples/out/notebook_lalonde_drdid/lalonde_raw.parquet`
+  - panel transformation cache:
+    - `examples/out/notebook_lalonde_drdid/lalonde_panel.parquet`
+  - explicit DR-DiD config:
+    - `causal.method='dr_did'`
+    - `causal.design='panel'`
+    - `estimand='att'`
+    - `propensity_calibration='platt'`
+  - diagnostics:
+    - Naive/IPW/DR/DR-DiD comparison
+    - propensity distributions (`e_raw`, `e_hat`)
+    - overlap summary
+    - SMD balance diagnostics
+  - notebook summary output:
+    - `examples/out/notebook_lalonde_drdid/lalonde_drdid_summary.json`
+- Added tests:
+  - `tests/test_notebook_lalonde_drdid_structure.py`
+  - `tests/test_notebook_lalonde_drdid_paths.py`
+- Updated docs:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Lalonde DR-DiD notebook uses panel design with pre=`re75` and post=`re78`.
+  - Reason:
+    - Aligns the scenario with a growth-impact interpretation for ATT.
+  - Impact area:
+    - Causal analysis workflow / Reproducibility
+
+- Decision: confirmed
+  - Policy:
+    - URL ingestion is used with local cache-first reruns.
+  - Reason:
+    - Preserves lightweight repository contents while enabling deterministic reruns.
+  - Impact area:
+    - Notebook operability / Data access
+
+- Decision: confirmed
+  - Policy:
+    - ATT and platt defaults are explicitly shown in notebook config.
+  - Reason:
+    - Improves analyst transparency and reviewability.
+  - Impact area:
+    - Causal analysis transparency
+
 ### 2026-02-11 (Session planning: phase20-drdid-and-causal-tune-mvp)
 **Context**
 - Extend causal support from single-period DR to DR-DiD.
