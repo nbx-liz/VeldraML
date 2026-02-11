@@ -1144,3 +1144,64 @@ export（任意）：
 - Stable API signatures remain unchanged for existing runtime endpoints.
 - Existing behavior of `fit/predict/evaluate/tune/simulate/export` is unchanged.
 - DR is opt-in and isolated in a dedicated causal execution path.
+
+## 49. 2026-02-11 Lalonde DR Analysis Notebook Proposal (Phase 19.1)
+### 49.1 Goal
+- Add a scenario-driven notebook that reproduces DR estimation with Lalonde data.
+- Keep stable API signatures unchanged and use existing `estimate_dr(config)` as-is.
+
+### 49.2 Scope
+- In scope:
+  - new notebook: `notebooks/lalonde_dr_analysis_workflow.ipynb`
+  - URL ingestion with local cache fallback
+  - ATT-default DR execution and diagnostics (naive/IPW/DR, propensity, balance/SMD)
+  - notebook structure/path tests and docs updates
+- Out of scope:
+  - DR-DiD
+  - DR-specific tune integration
+  - new public API signatures
+
+### 49.3 Data contract
+- Source:
+  - Lalonde data from public URL at runtime
+- Cache:
+  - persist normalized frame to `examples/out/notebook_lalonde_dr/lalonde_raw.parquet`
+  - prefer cache on rerun if present
+- Required columns in normalized frame:
+  - `treat`, `re78`, `age`, `educ`, `black`, `hispan`, `married`, `nodegree`, `re74`, `re75`
+
+### 49.4 Runtime contract
+- Notebook builds RunConfig with:
+  - `task.type="regression"`
+  - `causal.method="dr"`
+  - `causal.estimand="att"` (default, explicitly shown)
+  - `causal.propensity_calibration="platt"` (default, explicitly shown)
+- Output files:
+  - `examples/out/notebook_lalonde_dr/lalonde_analysis_summary.json`
+  - `artifacts/causal/<run_id>/dr_summary.json`
+  - `artifacts/causal/<run_id>/dr_observation_table.parquet`
+
+## 50. 2026-02-11 Lalonde DR Analysis Notebook MVP (Phase 19.1, implemented)
+### 50.1 Added capabilities
+- Added scenario-driven DR analysis notebook:
+  - `notebooks/lalonde_dr_analysis_workflow.ipynb`
+- Notebook runtime flow:
+  - URL-based Lalonde ingestion
+  - local cache-first reuse via `examples/out/notebook_lalonde_dr/lalonde_raw.parquet`
+  - DR execution through `estimate_dr(config)` with explicit ATT/platt config
+  - diagnostics for:
+    - Naive/IPW/DR comparison
+    - propensity distributions (`e_raw`, `e_hat`)
+    - covariate balance via SMD (unweighted vs ATT-weighted)
+- Added notebook-specific summary output:
+  - `examples/out/notebook_lalonde_dr/lalonde_analysis_summary.json`
+
+### 50.2 Quality and contract checks
+- Added notebook structure/path contract tests:
+  - `tests/test_notebook_lalonde_structure.py`
+  - `tests/test_notebook_lalonde_paths.py`
+- Existing stable API signatures remain unchanged.
+
+### 50.3 Compatibility notes
+- DR core/API behavior is unchanged; Phase 19.1 is an analysis-workflow addition.
+- URL dependency is isolated to notebook runtime and mitigated by local cache reuse.
