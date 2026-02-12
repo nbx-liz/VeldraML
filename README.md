@@ -16,6 +16,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
 - Export workflow: `export` (`python` + optional `onnx`)
 - Causal workflow: `estimate_dr` (DR + DR-DiD, ATT default)
+- GUI workflow (optional): Dash MVP (`config`/`run`/`artifacts`)
 
 ## Project Status
 
@@ -30,9 +31,12 @@ Implemented:
 - `estimate_dr` for:
   - `causal.method=dr` with `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
   - `causal.method=dr_did` with `task.type=regression` (2-period panel/repeated cross-section)
+- Dash GUI adapter MVP:
+  - Config editor + validation
+  - Run console (`fit/evaluate/tune/simulate/export/estimate_dr`)
+  - Artifact explorer + re-evaluate
 
 Backlog:
-- GUI adapter (Dash MVP: config editor + run console + artifact explorer)
 - Config migration utility (`veldra.config.migrate`)
 - Causal DiD extensions beyond 2-period MVP (multi-period / staggered adoption)
 - Advanced simulation DSL operators (`allocate_total`, constrained allocation)
@@ -59,6 +63,12 @@ Optional ONNX export dependencies:
 
 ```bash
 uv sync --extra export-onnx
+```
+
+Optional GUI dependencies:
+
+```bash
+uv sync --extra gui
 ```
 
 ### Verify installation
@@ -377,6 +387,24 @@ export:
 ```
 
 When enabled, export also writes `model.optimized.onnx` and records size diff metadata.
+
+GUI launch:
+
+```bash
+uv run veldra-gui --host 127.0.0.1 --port 8050
+```
+
+Windows quick start (launch server + open browser):
+
+```powershell
+scripts\start_gui.ps1
+```
+
+or
+
+```bat
+scripts\start_gui.cmd
+```
 
 ## Development
 
