@@ -57,12 +57,22 @@ def test_tune_supports_drdid_objective(tmp_path) -> None:
             "tuning": {
                 "enabled": True,
                 "n_trials": 1,
-                "objective": "drdid_std_error",
+                "objective": "drdid_balance_priority",
+                "causal_balance_threshold": 0.10,
             },
             "export": {"artifact_dir": str(tmp_path / "artifacts")},
         }
     )
-    assert result.metadata["metric_name"] == "drdid_std_error"
+    assert result.metadata["metric_name"] == "drdid_balance_priority"
     trials = pd.read_parquet(Path(result.metadata["trials_path"]))
-    assert {"estimate", "std_error", "objective_value"} <= set(trials.columns)
+    assert {
+        "estimate",
+        "std_error",
+        "smd_max_unweighted",
+        "smd_max_weighted",
+        "balance_threshold",
+        "balance_violation",
+        "objective_value",
+        "objective_stage",
+    } <= set(trials.columns)
 

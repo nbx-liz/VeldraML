@@ -28,12 +28,16 @@ _TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
     "frontier": "pinball",
 }
 _CAUSAL_TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
-    "dr": {"dr_std_error", "dr_overlap_penalty"},
-    "dr_did": {"drdid_std_error", "drdid_overlap_penalty"},
+    "dr": {"dr_std_error", "dr_overlap_penalty", "dr_balance_priority"},
+    "dr_did": {
+        "drdid_std_error",
+        "drdid_overlap_penalty",
+        "drdid_balance_priority",
+    },
 }
 _CAUSAL_TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
-    "dr": "dr_std_error",
-    "dr_did": "drdid_std_error",
+    "dr": "dr_balance_priority",
+    "dr_did": "drdid_balance_priority",
 }
 
 
@@ -86,6 +90,7 @@ class TuningConfig(BaseModel):
     coverage_tolerance: float = 0.01
     penalty_weight: float = 1.0
     causal_penalty_weight: float = 1.0
+    causal_balance_threshold: float = 0.10
 
 
 class PostprocessConfig(BaseModel):
@@ -279,6 +284,11 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     "tuning.causal_penalty_weight can only be customized when causal is configured"
                 )
+            if self.tuning.causal_balance_threshold != 0.10:
+                raise ValueError(
+                    "tuning.causal_balance_threshold can only be customized when causal is "
+                    "configured"
+                )
         else:
             allowed = _CAUSAL_TUNE_ALLOWED_OBJECTIVES[self.causal.method]
             objective = self.tuning.objective
@@ -289,6 +299,8 @@ class RunConfig(BaseModel):
                 )
             if self.tuning.causal_penalty_weight < 0:
                 raise ValueError("tuning.causal_penalty_weight must be >= 0")
+            if self.tuning.causal_balance_threshold <= 0:
+                raise ValueError("tuning.causal_balance_threshold must be > 0")
 
         if self.task.type == "frontier":
             resolved_target = (

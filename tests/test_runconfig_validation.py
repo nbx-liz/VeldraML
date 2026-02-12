@@ -303,11 +303,29 @@ def test_causal_tuning_objective_constraints() -> None:
     payload["tuning"] = {"enabled": True, "n_trials": 1, "objective": "dr_std_error"}
     RunConfig.model_validate(payload)
 
+    payload["tuning"]["objective"] = "dr_balance_priority"
+    RunConfig.model_validate(payload)
+
     payload["tuning"]["objective"] = "rmse"
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
 
     payload["tuning"]["objective"] = "dr_overlap_penalty"
     payload["tuning"]["causal_penalty_weight"] = -1.0
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+
+def test_causal_balance_threshold_validation() -> None:
+    payload = _minimal_payload()
+    payload["tuning"] = {"enabled": True, "n_trials": 1, "causal_balance_threshold": 0.2}
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)
+
+    payload["causal"] = {"method": "dr", "treatment_col": "treatment"}
+    payload["tuning"] = {"enabled": True, "n_trials": 1, "causal_balance_threshold": 0.2}
+    RunConfig.model_validate(payload)
+
+    payload["tuning"]["causal_balance_threshold"] = 0.0
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)

@@ -278,11 +278,26 @@ uv run python examples/run_demo_tune.py --task multiclass --objective accuracy -
 uv run python examples/run_demo_tune.py --task frontier --objective pinball --n-trials 20
 # opt-in coverage-aware frontier objective
 uv run python examples/run_demo_tune.py --task frontier --objective pinball_coverage_penalty --coverage-target 0.92 --coverage-tolerance 0.02 --penalty-weight 2.0 --n-trials 20
-# causal DR tuning objective (nuisance models)
+# causal DR tuning (default objective: dr_balance_priority)
+uv run python examples/run_demo_tune.py --task regression --objective dr_balance_priority --n-trials 20
+# causal DR-DiD tuning (default objective: drdid_balance_priority)
+uv run python examples/run_demo_tune.py --task regression --objective drdid_balance_priority --causal-method dr_did --causal-design panel --time-col time --post-col post --unit-id-col unit_id --n-trials 20
+# legacy objectives remain available
 uv run python examples/run_demo_tune.py --task regression --objective dr_std_error --n-trials 20
-# causal DR-DiD tuning objective
-uv run python examples/run_demo_tune.py --task regression --objective drdid_std_error --n-trials 20
+uv run python examples/run_demo_tune.py --task regression --objective drdid_std_error --causal-method dr_did --causal-design panel --time-col time --post-col post --unit-id-col unit_id --n-trials 20
+# balance-priority threshold / penalty tuning knobs
+uv run python examples/run_demo_tune.py --task regression --objective dr_balance_priority --causal-balance-threshold 0.08 --causal-penalty-weight 3.0 --n-trials 20
 ```
+
+Note:
+- If `--objective` is causal (`dr_*` / `drdid_*`) and `--data-path` is omitted, the demo script auto-generates a causal dataset under `examples/data/`.
+- For non-resume runs without `--study-name`, the script assigns a per-run study name to avoid "study already exists" collisions.
+
+Causal balance-priority objectives optimize in two stages:
+1. satisfy `smd_max_weighted <= causal_balance_threshold`
+2. minimize `std_error` among balanced candidates
+
+If the threshold is violated, objective value is dominated by a large violation penalty.
 
 Tune resume / verbosity / custom search-space:
 

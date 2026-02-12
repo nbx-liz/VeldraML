@@ -64,8 +64,10 @@ def _objective_spec(
         "macro_f1": "maximize",
         "dr_std_error": "minimize",
         "dr_overlap_penalty": "minimize",
+        "dr_balance_priority": "minimize",
         "drdid_std_error": "minimize",
         "drdid_overlap_penalty": "minimize",
+        "drdid_balance_priority": "minimize",
     }
     if metric_name not in direction_by_metric:
         raise VeldraValidationError(f"Unsupported objective metric '{metric_name}'.")
@@ -220,18 +222,39 @@ def _score_for_task_with_components(
             else float("inf")
         )
         overlap_metric = float(estimation.metrics.get("overlap_metric", 0.0))
+        smd_max_unweighted = float(estimation.metrics.get("smd_max_unweighted", float("inf")))
+        smd_max_weighted = float(estimation.metrics.get("smd_max_weighted", float("inf")))
+        balance_threshold = float(config.tuning.causal_balance_threshold)
         penalty_weight = float(config.tuning.causal_penalty_weight)
         penalty = 0.0
+        balance_violation = max(0.0, smd_max_weighted - balance_threshold)
+        objective_stage = "std_error"
         if metric_name in {"dr_overlap_penalty", "drdid_overlap_penalty"}:
             penalty = penalty_weight * max(0.0, 0.1 - overlap_metric)
-        objective_value = std_error + penalty
+            objective_value = std_error + penalty
+            objective_stage = "overlap_penalty"
+        elif metric_name in {"dr_balance_priority", "drdid_balance_priority"}:
+            penalty = penalty_weight * balance_violation
+            if balance_violation > 0.0:
+                objective_value = 1_000_000.0 + penalty
+                objective_stage = "violated"
+            else:
+                objective_value = std_error
+                objective_stage = "balanced"
+        else:
+            objective_value = std_error
         components = {
             "estimate": float(estimation.estimate),
             "std_error": std_error,
             "overlap_metric": overlap_metric,
+            "smd_max_unweighted": smd_max_unweighted,
+            "smd_max_weighted": smd_max_weighted,
+            "balance_threshold": balance_threshold,
+            "balance_violation": balance_violation,
             "penalty_weight": penalty_weight,
             "penalty": penalty,
             "objective_value": objective_value,
+            "objective_stage": objective_stage,
         }
         return objective_value, components
 

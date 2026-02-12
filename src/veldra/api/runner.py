@@ -191,6 +191,9 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     causal_penalty_weight = (
         float(parsed.tuning.causal_penalty_weight) if parsed.causal is not None else None
     )
+    causal_balance_threshold = (
+        float(parsed.tuning.causal_balance_threshold) if parsed.causal is not None else None
+    )
 
     def _trial_progress(payload: dict[str, Any]) -> None:
         log_event(
@@ -230,6 +233,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
         penalty_weight=penalty_weight,
         causal_method=causal_method,
         causal_penalty_weight=causal_penalty_weight,
+        causal_balance_threshold=causal_balance_threshold,
     )
     return TuneResult(
         run_id=run_id,
@@ -252,6 +256,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
             "penalty_weight": penalty_weight,
             "causal_method": causal_method,
             "causal_penalty_weight": causal_penalty_weight,
+            "causal_balance_threshold": causal_balance_threshold,
             "objective_components": tuning_output.best_components,
         },
     )

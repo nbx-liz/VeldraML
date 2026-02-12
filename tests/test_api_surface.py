@@ -208,6 +208,7 @@ def test_estimate_dr_is_implemented(tmp_path) -> None:
     assert result.method == "dr"
     assert result.estimand == "att"
     assert "dr" in result.metrics
+    assert {"overlap_metric", "smd_max_unweighted", "smd_max_weighted"} <= set(result.metrics)
 
     panel = pd.DataFrame(
         {
@@ -240,6 +241,9 @@ def test_estimate_dr_is_implemented(tmp_path) -> None:
     )
     assert did_result.method == "dr_did"
     assert did_result.metadata["design"] == "panel"
+    assert {"overlap_metric", "smd_max_unweighted", "smd_max_weighted"} <= set(
+        did_result.metrics
+    )
 
     panel_binary = panel.copy()
     panel_binary["outcome"] = [0, 1, 0, 1, 0, 0, 1, 1]
