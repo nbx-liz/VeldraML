@@ -1985,3 +1985,70 @@
     - Matches existing architecture principles (RunConfig入口 / Core non-UI).
   - Impact area:
     - GUI roadmap / Architectural consistency
+
+### 2026-02-11 (Session planning: phase21-dash-gui-mvp)
+**Context**
+- Implement the top-priority adapter feature: Dash GUI MVP.
+- Keep stable API signatures unchanged and use `veldra.api.runner` only as GUI backend.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - GUI MVP scope is fixed to three pages: Config Editor, Run Console, Artifact Explorer.
+  - Reason:
+    - Provides a practical local operator surface without expanding Core responsibility.
+  - Impact area:
+    - Adapter architecture / Operability
+
+- Decision: provisional
+  - Policy:
+    - GUI is delivered as optional dependency (`uv sync --extra gui`) with launcher `veldra-gui`.
+  - Reason:
+    - Keeps base runtime lightweight while enabling opt-in interactive workflows.
+  - Impact area:
+    - Packaging / Developer experience
+
+### 2026-02-11 (Session/PR: phase21-dash-gui-mvp)
+**Context**
+- Added a non-intrusive Dash adapter for local RunConfig-driven operations.
+
+**Changes**
+- Code changes:
+  - Added GUI package:
+    - `src/veldra/gui/server.py`
+    - `src/veldra/gui/app.py`
+    - `src/veldra/gui/services.py`
+    - `src/veldra/gui/types.py`
+    - `src/veldra/gui/pages/config_page.py`
+    - `src/veldra/gui/pages/run_page.py`
+    - `src/veldra/gui/pages/artifacts_page.py`
+  - Added optional GUI dependencies and launcher in `pyproject.toml`:
+    - `gui` extra (`dash`, `plotly`, `dash-bootstrap-components`)
+    - `veldra-gui` entrypoint
+- Tests added:
+  - `tests/test_gui_app_layout.py`
+  - `tests/test_gui_services_config_validation.py`
+  - `tests/test_gui_services_run_dispatch.py`
+  - `tests/test_gui_artifact_listing.py`
+  - `tests/test_gui_error_mapping.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI adapter is implemented as Dash MVP with `/config`, `/run`, `/artifacts`.
+  - Reason:
+    - Satisfies immediate usability needs while preserving adapter-only responsibility.
+  - Impact area:
+    - Product capability / Architecture consistency
+
+- Decision: confirmed
+  - Policy:
+    - GUI remains optional and does not alter existing stable API signatures.
+  - Reason:
+    - Maintains non-intrusive rollout and backward compatibility.
+  - Impact area:
+    - Compatibility / Packaging policy

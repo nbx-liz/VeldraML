@@ -64,6 +64,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 8-12: tune/simulate/export/frontier/timeseries 拡張
 - Phase 13-18: ONNX 拡張, evaluate(config, data), notebook整備
 - Phase 19-20: DR, DR-DiD, causal tuning objective
+- Phase 21: Dash GUI MVP（Config編集 + Run実行 + Artifact閲覧）
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -73,15 +74,17 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
    - 既存の dynamic quantization は opt-in で利用可能。
 
 ### P1（次に着手すべき）
-1. GUI アダプタ本体（Dash）
-   - 現状 `src/veldra` に GUI 実装なし。
-2. Config migration ユーティリティ
+1. Config migration ユーティリティ
    - `veldra.config.migrate` 未実装。
-3. Causal 高度化
+2. Causal 高度化
    - DR-DiD の binary対応。
    - TWANGのように共変量バランスでのTune対応。
 
-## 6. GUI企画（Dash, MVP）
+## 6. GUI実装（Dash, MVP）
+
+### 6.0 実装状況
+- Phase 21 で Dash ベースの GUI アダプタを実装済み。
+- GUI は adapter 層として `veldra.api.runner` を呼び出すのみで、Coreロジックは保持しない。
 
 ### 6.1 目的
 - RunConfig 共通入口原則を GUI でも成立させる。
@@ -113,6 +116,11 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - 認証・権限管理
 - 分散実行
 - ジョブキュー高度化
+
+### 6.6 次段階（GUI）
+- ジョブ実行キューの導入（非同期）
+- 長時間Runの進捗管理
+- 可視化コンポーネントの強化（KPIカード、時系列比較）
 
 ## 7. 将来の拡張ポイント
 1. Simulation DSL の高度化

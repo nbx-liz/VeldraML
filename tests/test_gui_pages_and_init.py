@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+
+import pytest
+
+from veldra.gui.pages import artifacts_page, config_page, run_page
+
+_DASH_AVAILABLE = (
+    importlib.util.find_spec("dash") is not None
+    and importlib.util.find_spec("dash_bootstrap_components") is not None
+)
+pytestmark = pytest.mark.skipif(not _DASH_AVAILABLE, reason="Dash GUI dependencies are optional.")
+
+
+def test_page_layouts_have_expected_component_ids() -> None:
+    config = config_page.layout()
+    run = run_page.layout()
+    artifacts = artifacts_page.layout()
+
+    def _collect_ids(component, out: set[str]) -> None:
+        if component is None:
+            return
+        component_id = getattr(component, "id", None)
+        if isinstance(component_id, str):
+            out.add(component_id)
+        children = getattr(component, "children", None)
+        if isinstance(children, list):
+            for child in children:
+                _collect_ids(child, out)
+        else:
+            _collect_ids(children, out)
+
+    ids: set[str] = set()
+    _collect_ids(config, ids)
+    _collect_ids(run, ids)
+    _collect_ids(artifacts, ids)
+    assert "config-yaml" in ids
+    assert "run-action" in ids
+    assert "artifact-root-path" in ids
+
+
+def test_gui_init_create_app_proxy(monkeypatch) -> None:
+    import veldra.gui as gui
+
+    fake_module = types.ModuleType("veldra.gui.app")
+    fake_module.create_app = lambda: "ok-app"
+    monkeypatch.setitem(sys.modules, "veldra.gui.app", fake_module)
+    assert gui.create_app() == "ok-app"
