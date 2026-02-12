@@ -38,7 +38,9 @@ def test_page_layouts_have_expected_component_ids() -> None:
     _collect_ids(run, ids)
     _collect_ids(artifacts, ids)
     assert "config-yaml" in ids
+    assert "config-migrate-preview-btn" in ids
     assert "run-action" in ids
+    assert "run-job-select" in ids
     assert "artifact-root-path" in ids
 
 

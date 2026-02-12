@@ -16,7 +16,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Scenario simulation workflow: `simulate` (regression/binary/multiclass/frontier)
 - Export workflow: `export` (`python` + optional `onnx`)
 - Causal workflow: `estimate_dr` (DR + DR-DiD, ATT default)
-- GUI workflow (optional): Dash MVP (`config`/`run`/`artifacts`)
+- GUI workflow (optional): Dash enhanced MVP (`config`/`run`/`artifacts`)
 - Config migration utility: `veldra config migrate` (v1 normalization)
 
 ## Project Status
@@ -34,7 +34,8 @@ Implemented:
   - `causal.method=dr_did` with `task.type=regression|binary` (2-period panel/repeated cross-section)
 - Dash GUI adapter MVP:
   - Config editor + validation
-  - Run console (`fit/evaluate/tune/simulate/export/estimate_dr`)
+  - Config migrate workflow (preview/diff/apply)
+  - Run console async queue (`fit/evaluate/tune/simulate/export/estimate_dr`)
   - Artifact explorer + re-evaluate
 - Config migration utility:
   - `veldra config migrate --input <path> [--output <path>]`
@@ -440,6 +441,21 @@ GUI launch:
 ```bash
 uv run veldra-gui --host 127.0.0.1 --port 8050
 ```
+
+Runtime environment options:
+
+```bash
+# SQLite persistence path for async GUI jobs
+VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3
+# Run page polling interval (milliseconds)
+VELDRA_GUI_POLL_MS=2000
+```
+
+GUI run behavior:
+- `/run` enqueues jobs asynchronously and keeps history in SQLite.
+- queued jobs can be canceled immediately.
+- running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
+- `/config` includes migrate preview/diff and file migrate apply (overwrite is rejected).
 
 Windows quick start (launch server + open browser):
 

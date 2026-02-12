@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from veldra.api.exceptions import VeldraValidationError
-from veldra.gui.services import load_config_yaml, save_config_yaml, validate_config
+from veldra.gui.services import (
+    load_config_yaml,
+    migrate_config_from_yaml,
+    save_config_yaml,
+    validate_config,
+)
 
 
 def test_validate_config_success() -> None:
@@ -33,3 +38,8 @@ def test_save_and_load_config_yaml_roundtrip(tmp_path) -> None:
     assert written == str(path)
     loaded = load_config_yaml(str(path))
     assert loaded == source
+
+
+def test_migrate_config_from_yaml_rejects_non_mapping() -> None:
+    with pytest.raises(VeldraValidationError):
+        migrate_config_from_yaml("- a\n- b", target_version=1)

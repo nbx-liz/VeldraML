@@ -1,0 +1,287 @@
+"""SQLite-backed job persistence for GUI async runs."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+
+TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _decode_invocation(raw: str) -> RunInvocation:
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid invocation payload in job store.")
+    return RunInvocation(**payload)
+
+
+def _decode_result(raw: str | None) -> GuiRunResult | None:
+    if raw is None:
+        return None
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid result payload in job store.")
+    return GuiRunResult(**payload)
+
+
+def _row_to_record(row: sqlite3.Row) -> GuiJobRecord:
+    return GuiJobRecord(
+        job_id=str(row["job_id"]),
+        status=str(row["status"]),
+        action=str(row["action"]),
+        created_at_utc=str(row["created_at_utc"]),
+        updated_at_utc=str(row["updated_at_utc"]),
+        invocation=_decode_invocation(str(row["invocation_json"])),
+        cancel_requested=bool(int(row["cancel_requested"])),
+        started_at_utc=(str(row["started_at_utc"]) if row["started_at_utc"] is not None else None),
+        finished_at_utc=(
+            str(row["finished_at_utc"]) if row["finished_at_utc"] is not None else None
+        ),
+        result=_decode_result(row["result_json"]),
+        error_message=(str(row["error_message"]) if row["error_message"] is not None else None),
+    )
+
+
+class GuiJobStore:
+    """Persist GUI run jobs in SQLite."""
+
+    def __init__(self, db_path: str | Path) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    invocation_json TEXT NOT NULL,
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    started_at_utc TEXT NULL,
+                    finished_at_utc TEXT NULL,
+                    result_json TEXT NULL,
+                    error_message TEXT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
+                "ON jobs(status, created_at_utc)"
+            )
+
+    def enqueue_job(self, invocation: RunInvocation) -> GuiJobRecord:
+        now = _utcnow_iso()
+        job_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO jobs(
+                    job_id, status, action, created_at_utc, updated_at_utc,
+                    invocation_json, cancel_requested, started_at_utc, finished_at_utc,
+                    result_json, error_message
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
+                """,
+                (
+                    job_id,
+                    "queued",
+                    invocation.action.strip().lower(),
+                    now,
+                    now,
+                    json.dumps(asdict(invocation), ensure_ascii=False),
+                ),
+            )
+        record = self.get_job(job_id)
+        if record is None:
+            raise RuntimeError("Failed to read queued job.")
+        return record
+
+    def request_cancel(self, job_id: str) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+
+            status = str(row["status"])
+            if status in TERMINAL_STATUSES:
+                conn.execute("COMMIT")
+                return _row_to_record(row)
+
+            if status == "queued":
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'canceled',
+                        cancel_requested = 1,
+                        updated_at_utc = ?,
+                        finished_at_utc = ?
+                    WHERE job_id = ?
+                    """,
+                    (now, now, job_id),
+                )
+            elif status == "running":
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'cancel_requested',
+                        cancel_requested = 1,
+                        updated_at_utc = ?
+                    WHERE job_id = ?
+                    """,
+                    (now, job_id),
+                )
+            conn.execute("COMMIT")
+        return self.get_job(job_id)
+
+    def claim_next_job(self) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at_utc ASC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            job_id = str(row["job_id"])
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'running',
+                    started_at_utc = COALESCE(started_at_utc, ?),
+                    updated_at_utc = ?
+                WHERE job_id = ?
+                """,
+                (now, now, job_id),
+            )
+            conn.execute("COMMIT")
+        return self.get_job(job_id)
+
+    def mark_running(self, job_id: str) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'running',
+                    started_at_utc = COALESCE(started_at_utc, ?),
+                    updated_at_utc = ?
+                WHERE job_id = ?
+                """,
+                (now, now, job_id),
+            )
+        return self.get_job(job_id)
+
+    def mark_succeeded(self, job_id: str, result: GuiRunResult) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'succeeded',
+                    updated_at_utc = ?,
+                    finished_at_utc = ?,
+                    result_json = ?,
+                    error_message = NULL
+                WHERE job_id = ?
+                """,
+                (now, now, json.dumps(asdict(result), ensure_ascii=False), job_id),
+            )
+        return self.get_job(job_id)
+
+    def mark_failed(
+        self,
+        job_id: str,
+        *,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        result = GuiRunResult(success=False, message=message, payload=payload or {})
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    updated_at_utc = ?,
+                    finished_at_utc = ?,
+                    result_json = ?,
+                    error_message = ?
+                WHERE job_id = ?
+                """,
+                (now, now, json.dumps(asdict(result), ensure_ascii=False), message, job_id),
+            )
+        return self.get_job(job_id)
+
+    def mark_canceled(self, job_id: str, *, message: str = "Canceled.") -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        result = GuiRunResult(success=False, message=message, payload={})
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'canceled',
+                    cancel_requested = 1,
+                    updated_at_utc = ?,
+                    finished_at_utc = ?,
+                    result_json = ?,
+                    error_message = NULL
+                WHERE job_id = ?
+                """,
+                (now, now, json.dumps(asdict(result), ensure_ascii=False), job_id),
+            )
+        return self.get_job(job_id)
+
+    def get_job(self, job_id: str) -> GuiJobRecord | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        return _row_to_record(row)
+
+    def list_jobs(
+        self,
+        *,
+        limit: int = 100,
+        status: str | None = None,
+    ) -> list[GuiJobRecord]:
+        safe_limit = max(1, min(int(limit), 1000))
+        with self._connect() as conn:
+            if status is None:
+                rows = conn.execute(
+                    "SELECT * FROM jobs ORDER BY created_at_utc DESC LIMIT ?",
+                    (safe_limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE status = ? ORDER BY created_at_utc DESC LIMIT ?",
+                    (status, safe_limit),
+                ).fetchall()
+        return [_row_to_record(row) for row in rows]

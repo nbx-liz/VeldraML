@@ -10,7 +10,8 @@ from veldra.api.types import (
     SimulationResult,
     TuneResult,
 )
-from veldra.gui.services import run_action
+from veldra.gui.job_store import GuiJobStore
+from veldra.gui.services import run_action, set_gui_runtime, stop_gui_runtime, submit_run_job
 from veldra.gui.types import RunInvocation
 
 
@@ -109,3 +110,20 @@ def test_run_action_dispatch_for_artifact_actions(monkeypatch) -> None:
     assert sim_result.success is True
     assert export_result.success is True
     assert called == {"evaluate": 1, "simulate": 1, "export": 1}
+
+
+def test_submit_run_job_dispatches_to_queue(tmp_path) -> None:
+    class _Worker:
+        def __init__(self) -> None:
+            self.started = 0
+
+        def start(self) -> None:
+            self.started += 1
+
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    worker = _Worker()
+    set_gui_runtime(job_store=store, worker=worker)
+    queued = submit_run_job(RunInvocation(action="fit"))
+    assert queued.status == "queued"
+    assert worker.started == 1
+    stop_gui_runtime()
