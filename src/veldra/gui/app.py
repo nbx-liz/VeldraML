@@ -72,6 +72,104 @@ def _main_layout() -> html.Div:
     )
 
 
+def render_page(pathname: str | None) -> Any:
+    if pathname == "/config":
+        return config_page.layout()
+    if pathname == "/run":
+        return run_page.layout()
+    if pathname == "/artifacts":
+        return artifacts_page.layout()
+    return config_page.layout()
+
+
+def handle_config_action(
+    triggered: str,
+    yaml_text: str | None,
+    config_path: str | None,
+) -> tuple[str, str]:
+    current_yaml = yaml_text or ""
+    try:
+        if triggered == "config-load-btn":
+            loaded = load_config_yaml(config_path or "")
+            return loaded, f"Loaded: {config_path}"
+        if triggered == "config-save-btn":
+            saved_path = save_config_yaml(config_path or "", current_yaml)
+            return current_yaml, f"Saved: {saved_path}"
+        parsed = validate_config(current_yaml)
+        return (
+            current_yaml,
+            f"Valid RunConfig: task={parsed.task.type}, target={parsed.data.target}",
+        )
+    except Exception as exc:
+        return current_yaml, str(exc)
+
+
+def format_run_action_result(
+    action: str,
+    config_yaml: str,
+    config_path: str,
+    data_path: str,
+    artifact_path: str,
+    scenarios_path: str,
+    export_format: str,
+) -> tuple[str, str]:
+    result = run_action(
+        RunInvocation(
+            action=action or "",
+            config_yaml=config_yaml,
+            config_path=config_path,
+            data_path=data_path,
+            artifact_path=artifact_path,
+            scenarios_path=scenarios_path,
+            export_format=export_format,
+        )
+    )
+    payload = json.dumps(result.payload, indent=2, ensure_ascii=False) if result.payload else "{}"
+    status = "SUCCESS" if result.success else "ERROR"
+    return payload, f"[{status}] {result.message}"
+
+
+def build_artifact_options(root_dir: str | None) -> tuple[list[dict[str, str]], str | None]:
+    items = list_artifacts(root_dir or "artifacts")
+    options = [
+        {
+            "label": f"{item.run_id} | {item.task_type} | {item.created_at_utc or 'n/a'}",
+            "value": item.path,
+        }
+        for item in items
+    ]
+    value = options[0]["value"] if options else None
+    return options, value
+
+
+def format_artifact_metrics(artifact_path: str | None) -> Any:
+    if artifact_path is None or not artifact_path.strip():
+        return html.Pre("No artifact selected.")
+    try:
+        artifact = Artifact.load(artifact_path)
+        payload = {
+            "run_id": artifact.manifest.run_id,
+            "task_type": artifact.run_config.task.type,
+            "metrics": artifact.metrics.get("mean", artifact.metrics),
+        }
+        return html.Pre(json.dumps(payload, indent=2, ensure_ascii=False))
+    except Exception as exc:
+        return html.Pre(str(exc))
+
+
+def evaluate_selected_artifact(artifact_path: str, data_path: str) -> str:
+    try:
+        artifact = Artifact.load(artifact_path)
+        frame = load_tabular_data(data_path)
+        result = evaluate(artifact, frame)
+        payload = asdict(result)
+        if "data" in payload and hasattr(payload["data"], "to_dict"):
+            payload["data"] = payload["data"].head(20).to_dict(orient="records")
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return str(exc)
+
+
 def create_app() -> dash.Dash:
     app = dash.Dash(
         __name__,
@@ -83,13 +181,7 @@ def create_app() -> dash.Dash:
 
     @app.callback(Output("page-content", "children"), Input("url", "pathname"))
     def _render_page(pathname: str | None) -> Any:
-        if pathname == "/config":
-            return config_page.layout()
-        if pathname == "/run":
-            return run_page.layout()
-        if pathname == "/artifacts":
-            return artifacts_page.layout()
-        return config_page.layout()
+        return render_page(pathname)
 
     @app.callback(
         Output("config-yaml", "value"),
@@ -109,20 +201,7 @@ def create_app() -> dash.Dash:
         config_path: str,
     ) -> tuple[str, str]:
         triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
-        current_yaml = yaml_text or ""
-        try:
-            if triggered == "config-load-btn":
-                loaded = load_config_yaml(config_path or "")
-                return loaded, f"Loaded: {config_path}"
-            if triggered == "config-save-btn":
-                saved_path = save_config_yaml(config_path or "", current_yaml)
-                return current_yaml, f"Saved: {saved_path}"
-            parsed = validate_config(current_yaml)
-            return current_yaml, (
-                f"Valid RunConfig: task={parsed.task.type}, target={parsed.data.target}"
-            )
-        except Exception as exc:
-            return current_yaml, str(exc)
+        return handle_config_action(triggered, yaml_text, config_path)
 
     @app.callback(
         Output("run-result-json", "children"),
@@ -147,24 +226,15 @@ def create_app() -> dash.Dash:
         scenarios_path: str,
         export_format: str,
     ) -> tuple[str, str]:
-        result = run_action(
-            RunInvocation(
-                action=action or "",
-                config_yaml=config_yaml,
-                config_path=config_path,
-                data_path=data_path,
-                artifact_path=artifact_path,
-                scenarios_path=scenarios_path,
-                export_format=export_format,
-            )
+        return format_run_action_result(
+            action=action,
+            config_yaml=config_yaml,
+            config_path=config_path,
+            data_path=data_path,
+            artifact_path=artifact_path,
+            scenarios_path=scenarios_path,
+            export_format=export_format,
         )
-        payload = (
-            json.dumps(result.payload, indent=2, ensure_ascii=False)
-            if result.payload
-            else "{}"
-        )
-        status = "SUCCESS" if result.success else "ERROR"
-        return payload, f"[{status}] {result.message}"
 
     @app.callback(
         Output("artifact-select", "options"),
@@ -177,16 +247,7 @@ def create_app() -> dash.Dash:
         _n_clicks: int,
         root_dir: str,
     ) -> tuple[list[dict[str, str]], str | None]:
-        items = list_artifacts(root_dir or "artifacts")
-        options = [
-            {
-                "label": f"{item.run_id} | {item.task_type} | {item.created_at_utc or 'n/a'}",
-                "value": item.path,
-            }
-            for item in items
-        ]
-        value = options[0]["value"] if options else None
-        return options, value
+        return build_artifact_options(root_dir)
 
     @app.callback(
         Output("artifact-metrics", "children"),
@@ -194,18 +255,7 @@ def create_app() -> dash.Dash:
         prevent_initial_call=True,
     )
     def _show_artifact_metrics(artifact_path: str | None) -> Any:
-        if artifact_path is None or not artifact_path.strip():
-            return html.Pre("No artifact selected.")
-        try:
-            artifact = Artifact.load(artifact_path)
-            payload = {
-                "run_id": artifact.manifest.run_id,
-                "task_type": artifact.run_config.task.type,
-                "metrics": artifact.metrics.get("mean", artifact.metrics),
-            }
-            return html.Pre(json.dumps(payload, indent=2, ensure_ascii=False))
-        except Exception as exc:
-            return html.Pre(str(exc))
+        return format_artifact_metrics(artifact_path)
 
     @app.callback(
         Output("artifact-eval-result", "children"),
@@ -215,15 +265,6 @@ def create_app() -> dash.Dash:
         prevent_initial_call=True,
     )
     def _evaluate_artifact(_n_clicks: int, artifact_path: str, data_path: str) -> str:
-        try:
-            artifact = Artifact.load(artifact_path)
-            frame = load_tabular_data(data_path)
-            result = evaluate(artifact, frame)
-            payload = asdict(result)
-            if "data" in payload and hasattr(payload["data"], "to_dict"):
-                payload["data"] = payload["data"].head(20).to_dict(orient="records")
-            return json.dumps(payload, indent=2, ensure_ascii=False)
-        except Exception as exc:
-            return str(exc)
+        return evaluate_selected_artifact(artifact_path, data_path)
 
     return app

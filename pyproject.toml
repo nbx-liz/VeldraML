@@ -68,5 +68,5 @@ extend-exclude = ["*.ipynb"]
 select = ["E", "F", "I", "W"]
 
 [tool.coverage.run]
-source = ["src/veldra", "examples"]
+source = ["src/veldra"]
 omit = ["tests/*"]
