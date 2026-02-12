@@ -17,6 +17,7 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Export workflow: `export` (`python` + optional `onnx`)
 - Causal workflow: `estimate_dr` (DR + DR-DiD, ATT default)
 - GUI workflow (optional): Dash MVP (`config`/`run`/`artifacts`)
+- Config migration utility: `veldra config migrate` (v1 normalization)
 
 ## Project Status
 
@@ -35,9 +36,12 @@ Implemented:
   - Config editor + validation
   - Run console (`fit/evaluate/tune/simulate/export/estimate_dr`)
   - Artifact explorer + re-evaluate
+- Config migration utility:
+  - `veldra config migrate --input <path> [--output <path>]`
+  - strict validation + non-destructive output (`*.migrated.yaml`)
+  - current scope supports only `config_version=1 -> target_version=1`
 
 Backlog:
-- Config migration utility (`veldra.config.migrate`)
 - Causal DiD extensions beyond 2-period MVP (multi-period / staggered adoption)
 - Advanced simulation DSL operators (`allocate_total`, constrained allocation)
 - Binary threshold optimization beyond F1-only objective
@@ -405,6 +409,25 @@ or
 ```bat
 scripts\start_gui.cmd
 ```
+
+## Config Migration
+
+Normalize and validate a RunConfig YAML safely (non-destructive output):
+
+```bash
+uv run veldra config migrate --input configs/run.yaml
+```
+
+Custom output path:
+
+```bash
+uv run veldra config migrate --input configs/run.yaml --output configs/run.normalized.yaml
+```
+
+Behavior:
+- Strict validation (`RunConfig.model_validate`) is always applied.
+- Existing output files are never overwritten.
+- Current MVP supports only `config_version=1` and `--target-version 1`.
 
 ## Development
 
