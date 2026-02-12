@@ -1934,3 +1934,54 @@
 **Results**
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
+
+### 2026-02-11 (Session/PR: phase20.2-design-blueprint-reorg-and-gap-audit)
+**Context**
+- Reconcile `DESIGN_BLUEPRINT.md` with the current runtime implementation.
+- Reorganize the blueprint into readable Japanese and clarify remaining gaps.
+- Add a concrete GUI planning section (Dash MVP) without changing runtime behavior.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Rebuild `DESIGN_BLUEPRINT.md` as a current-state document in Japanese, and separate historical notes from current capability.
+  - Reason:
+    - Prevent mismatch between old phase notes and current implementation.
+  - Impact area:
+    - Documentation quality / Team alignment
+
+- Decision: provisional
+  - Policy:
+    - Define GUI direction as Dash MVP with three pages: Config, Run, Artifacts.
+  - Reason:
+    - Keeps Core/API boundaries intact while enabling practical local operations.
+  - Impact area:
+    - Product roadmap / Adapter layer design
+
+**Changes**
+- Updated `DESIGN_BLUEPRINT.md`:
+  - Reorganized fully in Japanese.
+  - Added API x Task capability matrix (current implementation).
+  - Added prioritized missing-feature inventory (P1/P2/P3).
+  - Added explicit Dash GUI MVP plan (`/config`, `/run`, `/artifacts`).
+  - Marked ONNX graph optimization as intentionally skipped (non-priority).
+- Updated `README.md`:
+  - Aligned backlog with current priorities (GUI, config migration, causal/simulation/export enhancements).
+  - Added status note clarifying ONNX graph optimization is skipped, while dynamic quantization remains available.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - `DESIGN_BLUEPRINT.md` serves as the current-state summary; detailed chronology remains in `HISTORY.md`.
+  - Reason:
+    - Improves readability and reduces ambiguity in implementation status.
+  - Impact area:
+    - Documentation governance
+
+- Decision: confirmed
+  - Policy:
+    - GUI plan is fixed to Dash MVP scope: Config編集 + Run実行 + Artifact閲覧.
+  - Reason:
+    - Matches existing architecture principles (RunConfig入口 / Core non-UI).
+  - Impact area:
+    - GUI roadmap / Architectural consistency
