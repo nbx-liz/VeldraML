@@ -67,6 +67,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 19-20: DR, DR-DiD, causal tuning objective
 - Phase 21: Dash GUI MVP（Config編集 + Run実行 + Artifact閲覧）
 - Phase 22: Config migration utility MVP（`veldra config migrate`）
+- Phase 25: GUI運用強化（async job queue + config migrate統合）
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -85,10 +86,14 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
   - CLI: `veldra config migrate --input ... [--output ...]`
   - v1正規化のみ対応、上書き禁止、未知キーは明示エラー
 
-## 6. GUI実装（Dash, MVP）
+## 6. GUI実装（Dash, 運用強化MVP）
 
 ### 6.0 実装状況
 - Phase 21 で Dash ベースの GUI アダプタを実装済み。
+- Phase 25 で運用強化MVPを追加:
+  - 非同期ジョブキュー（SQLite永続、single worker）
+  - best-effort cancel（queuedは即時cancel、runningはcancel_requested）
+  - Config migrate統合（preview/diff/apply）
 - GUI は adapter 層として `veldra.api.runner` を呼び出すのみで、Coreロジックは保持しない。
 
 ### 6.1 目的
@@ -102,6 +107,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
    - YAML 保存/読込
 2. Run Console
    - 実行対象: `fit`, `evaluate`, `tune`, `simulate`, `export`, `estimate_dr`
+   - 非同期 enqueue / polling / cancel / history
    - 実行ログ表示
 3. Artifact Explorer
    - Artifact 一覧
@@ -116,6 +122,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### 6.4 非機能要件
 - 単一ユーザー/ローカル実行を前提
 - 構造化ログを画面に表示（`run_id`, `artifact_path`, `task_type`）
+- ジョブ履歴は `VELDRA_GUI_JOB_DB_PATH`（既定 `.veldra_gui/jobs.sqlite3`）で永続化
 
 ### 6.5 非スコープ（MVPではやらない）
 - 認証・権限管理
@@ -123,8 +130,8 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - ジョブキュー高度化
 
 ### 6.6 次段階（GUI）
-- ジョブ実行キューの導入（非同期）
-- 長時間Runの進捗管理
+- ジョブ優先度と並列worker（現状はsingle worker固定）
+- 実行中ジョブの協調キャンセル改善（action単位）
 - 可視化コンポーネントの強化（KPIカード、時系列比較）
 
 ## 7. 将来の拡張ポイント

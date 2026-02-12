@@ -1,8 +1,9 @@
-"""Dash app factory for Veldra GUI MVP."""
+"""Dash app factory for Veldra GUI."""
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from typing import Any
 
@@ -15,10 +16,17 @@ from veldra.api.runner import evaluate
 from veldra.data import load_tabular_data
 from veldra.gui.pages import artifacts_page, config_page, run_page
 from veldra.gui.services import (
+    cancel_run_job,
+    get_run_job,
     list_artifacts,
+    list_run_jobs,
     load_config_yaml,
+    migrate_config_file_via_gui,
+    migrate_config_from_yaml,
+    normalize_gui_error,
     run_action,
     save_config_yaml,
+    submit_run_job,
     validate_config,
 )
 from veldra.gui.types import RunInvocation
@@ -82,6 +90,10 @@ def render_page(pathname: str | None) -> Any:
     return config_page.layout()
 
 
+def _json_dumps(payload: Any) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
 def handle_config_action(
     triggered: str,
     yaml_text: str | None,
@@ -104,6 +116,27 @@ def handle_config_action(
         return current_yaml, str(exc)
 
 
+def handle_config_migrate_preview(yaml_text: str, target_version: int) -> tuple[str, str, str]:
+    normalized_yaml, diff, result = migrate_config_from_yaml(
+        yaml_text or "",
+        target_version=int(target_version),
+    )
+    return normalized_yaml, diff or "(no diff)", _json_dumps(result)
+
+
+def handle_config_migrate_apply(
+    input_path: str,
+    output_path: str,
+    target_version: int,
+) -> str:
+    result = migrate_config_file_via_gui(
+        input_path=input_path,
+        output_path=(output_path.strip() if output_path and output_path.strip() else None),
+        target_version=int(target_version),
+    )
+    return _json_dumps(result)
+
+
 def format_run_action_result(
     action: str,
     config_yaml: str,
@@ -124,9 +157,33 @@ def format_run_action_result(
             export_format=export_format,
         )
     )
-    payload = json.dumps(result.payload, indent=2, ensure_ascii=False) if result.payload else "{}"
+    payload = _json_dumps(result.payload) if result.payload else "{}"
     status = "SUCCESS" if result.success else "ERROR"
     return payload, f"[{status}] {result.message}"
+
+
+def enqueue_run_job_result(
+    action: str,
+    config_yaml: str,
+    config_path: str,
+    data_path: str,
+    artifact_path: str,
+    scenarios_path: str,
+    export_format: str,
+) -> tuple[str, str]:
+    result = submit_run_job(
+        RunInvocation(
+            action=action or "",
+            config_yaml=config_yaml,
+            config_path=config_path,
+            data_path=data_path,
+            artifact_path=artifact_path,
+            scenarios_path=scenarios_path,
+            export_format=export_format,
+        )
+    )
+    payload = _json_dumps(asdict(result))
+    return payload, f"[QUEUED] {result.message}"
 
 
 def build_artifact_options(root_dir: str | None) -> tuple[list[dict[str, str]], str | None]:
@@ -142,6 +199,40 @@ def build_artifact_options(root_dir: str | None) -> tuple[list[dict[str, str]], 
     return options, value
 
 
+def build_job_options(limit: int = 50) -> tuple[list[dict[str, str]], str | None, str]:
+    jobs = list_run_jobs(limit=limit)
+    options = [
+        {
+            "label": f"{job.job_id[:8]} | {job.action} | {job.status} | {job.created_at_utc}",
+            "value": job.job_id,
+        }
+        for job in jobs
+    ]
+    value = options[0]["value"] if options else None
+    table_payload = [
+        {
+            "job_id": job.job_id,
+            "action": job.action,
+            "status": job.status,
+            "cancel_requested": job.cancel_requested,
+            "created_at_utc": job.created_at_utc,
+            "updated_at_utc": job.updated_at_utc,
+        }
+        for job in jobs
+    ]
+    return options, value, _json_dumps(table_payload)
+
+
+def format_job_detail(job_id: str | None) -> str:
+    if job_id is None or not job_id.strip():
+        return "No job selected."
+    job = get_run_job(job_id.strip())
+    if job is None:
+        return f"Job not found: {job_id}"
+    payload = asdict(job)
+    return _json_dumps(payload)
+
+
 def format_artifact_metrics(artifact_path: str | None) -> Any:
     if artifact_path is None or not artifact_path.strip():
         return html.Pre("No artifact selected.")
@@ -152,7 +243,7 @@ def format_artifact_metrics(artifact_path: str | None) -> Any:
             "task_type": artifact.run_config.task.type,
             "metrics": artifact.metrics.get("mean", artifact.metrics),
         }
-        return html.Pre(json.dumps(payload, indent=2, ensure_ascii=False))
+        return html.Pre(_json_dumps(payload))
     except Exception as exc:
         return html.Pre(str(exc))
 
@@ -165,7 +256,7 @@ def evaluate_selected_artifact(artifact_path: str, data_path: str) -> str:
         payload = asdict(result)
         if "data" in payload and hasattr(payload["data"], "to_dict"):
             payload["data"] = payload["data"].head(20).to_dict(orient="records")
-        return json.dumps(payload, indent=2, ensure_ascii=False)
+        return _json_dumps(payload)
     except Exception as exc:
         return str(exc)
 
@@ -178,6 +269,7 @@ def create_app() -> dash.Dash:
         title="Veldra GUI",
     )
     app.layout = _main_layout()
+    poll_ms = max(200, int(os.getenv("VELDRA_GUI_POLL_MS", "2000")))
 
     @app.callback(Output("page-content", "children"), Input("url", "pathname"))
     def _render_page(pathname: str | None) -> Any:
@@ -204,6 +296,54 @@ def create_app() -> dash.Dash:
         return handle_config_action(triggered, yaml_text, config_path)
 
     @app.callback(
+        Output("config-migrate-normalized-yaml", "value"),
+        Output("config-migrate-diff", "children"),
+        Output("config-migrate-result", "children"),
+        Input("config-migrate-preview-btn", "n_clicks"),
+        Input("config-migrate-apply-btn", "n_clicks"),
+        State("config-yaml", "value"),
+        State("config-migrate-input-path", "value"),
+        State("config-migrate-output-path", "value"),
+        State("config-migrate-target-version", "value"),
+        State("config-migrate-normalized-yaml", "value"),
+        State("config-migrate-diff", "children"),
+        prevent_initial_call=True,
+    )
+    def _handle_migrate_actions(
+        _preview_clicks: int,
+        _apply_clicks: int,
+        yaml_text: str,
+        input_path: str,
+        output_path: str,
+        target_version: int,
+        normalized_existing: str,
+        diff_existing: str,
+    ) -> tuple[str, str, str]:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+        try:
+            if triggered == "config-migrate-preview-btn":
+                return handle_config_migrate_preview(yaml_text, int(target_version or 1))
+            message = handle_config_migrate_apply(
+                input_path=input_path or "",
+                output_path=output_path or "",
+                target_version=int(target_version or 1),
+            )
+            return normalized_existing or "", diff_existing or "", message
+        except Exception as exc:
+            return (
+                normalized_existing or "",
+                diff_existing or "",
+                normalize_gui_error(exc),
+            )
+
+    @app.callback(
+        Output("run-jobs-interval", "interval"),
+        Input("url", "pathname"),
+    )
+    def _set_run_polling(_pathname: str | None) -> int:
+        return poll_ms
+
+    @app.callback(
         Output("run-result-json", "children"),
         Output("run-result-log", "children"),
         Input("run-execute-btn", "n_clicks"),
@@ -216,7 +356,7 @@ def create_app() -> dash.Dash:
         State("run-export-format", "value"),
         prevent_initial_call=True,
     )
-    def _run_action(
+    def _enqueue_run_action(
         _n_clicks: int,
         action: str,
         config_yaml: str,
@@ -226,15 +366,60 @@ def create_app() -> dash.Dash:
         scenarios_path: str,
         export_format: str,
     ) -> tuple[str, str]:
-        return format_run_action_result(
-            action=action,
-            config_yaml=config_yaml,
-            config_path=config_path,
-            data_path=data_path,
-            artifact_path=artifact_path,
-            scenarios_path=scenarios_path,
-            export_format=export_format,
-        )
+        try:
+            return enqueue_run_job_result(
+                action=action,
+                config_yaml=config_yaml,
+                config_path=config_path,
+                data_path=data_path,
+                artifact_path=artifact_path,
+                scenarios_path=scenarios_path,
+                export_format=export_format,
+            )
+        except Exception as exc:
+            return "{}", f"[ERROR] {normalize_gui_error(exc)}"
+
+    @app.callback(
+        Output("run-job-select", "options"),
+        Output("run-job-select", "value"),
+        Output("run-jobs-table", "children"),
+        Input("run-jobs-interval", "n_intervals"),
+        Input("run-refresh-jobs-btn", "n_clicks"),
+        State("run-job-select", "value"),
+    )
+    def _refresh_run_jobs(
+        _n_intervals: int,
+        _refresh_clicks: int,
+        selected_job_id: str | None,
+    ) -> tuple[list[dict[str, str]], str | None, str]:
+        options, default_value, table_text = build_job_options(limit=100)
+        if selected_job_id is not None and any(opt["value"] == selected_job_id for opt in options):
+            return options, selected_job_id, table_text
+        return options, default_value, table_text
+
+    @app.callback(
+        Output("run-job-detail", "children"),
+        Input("run-job-select", "value"),
+        Input("run-jobs-interval", "n_intervals"),
+        prevent_initial_call=True,
+    )
+    def _show_job_detail(job_id: str | None, _n_intervals: int) -> str:
+        return format_job_detail(job_id)
+
+    @app.callback(
+        Output("run-result-log", "children", allow_duplicate=True),
+        Input("run-cancel-job-btn", "n_clicks"),
+        State("run-job-select", "value"),
+        prevent_initial_call=True,
+    )
+    def _cancel_job(_n_clicks: int, job_id: str | None) -> str:
+        try:
+            if job_id is None or not job_id.strip():
+                return "[ERROR] No job selected."
+            canceled = cancel_run_job(job_id.strip())
+            return f"[INFO] {canceled.message}"
+        except Exception as exc:
+            return f"[ERROR] {normalize_gui_error(exc)}"
 
     @app.callback(
         Output("artifact-select", "options"),

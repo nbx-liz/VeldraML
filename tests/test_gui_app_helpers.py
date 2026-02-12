@@ -159,3 +159,68 @@ def test_evaluate_selected_artifact(monkeypatch) -> None:
         lambda _p: (_ for _ in ()).throw(RuntimeError("load failed")),
     )
     assert "load failed" in evaluate_selected_artifact("artifact", "data.csv")
+
+
+def test_handle_config_migrate_helpers(monkeypatch) -> None:
+    from veldra.gui.app import handle_config_migrate_apply, handle_config_migrate_preview
+
+    monkeypatch.setattr(
+        "veldra.gui.app.migrate_config_from_yaml",
+        lambda _yaml, target_version: (
+            "normalized: true\n",
+            "--- d\n",
+            {"target_version": target_version},
+        ),
+    )
+    normalized, diff_text, result_text = handle_config_migrate_preview("a: 1\n", 1)
+    assert "normalized" in normalized
+    assert "--- d" in diff_text
+    assert '"target_version": 1' in result_text
+
+    monkeypatch.setattr(
+        "veldra.gui.app.migrate_config_file_via_gui",
+        lambda **_: {"output_path": "x.yaml", "changed": True},
+    )
+    result_apply = handle_config_migrate_apply("in.yaml", "out.yaml", 1)
+    assert "x.yaml" in result_apply
+
+
+def test_build_job_options_and_detail(monkeypatch) -> None:
+    from veldra.gui.app import build_job_options, format_job_detail
+    from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+
+    record = GuiJobRecord(
+        job_id="job_1",
+        status="queued",
+        action="fit",
+        created_at_utc="2026-01-01T00:00:00+00:00",
+        updated_at_utc="2026-01-01T00:00:00+00:00",
+        invocation=RunInvocation(action="fit"),
+        result=GuiRunResult(success=True, message="ok", payload={"a": 1}),
+    )
+
+    monkeypatch.setattr("veldra.gui.app.list_run_jobs", lambda limit=50: [record])
+    options, value, table_text = build_job_options(limit=10)
+    assert options[0]["value"] == "job_1"
+    assert value == "job_1"
+    assert '"job_id": "job_1"' in table_text
+
+    monkeypatch.setattr("veldra.gui.app.get_run_job", lambda _job_id: record)
+    detail = format_job_detail("job_1")
+    assert '"status": "queued"' in detail
+    assert format_job_detail(None) == "No job selected."
+    monkeypatch.setattr("veldra.gui.app.get_run_job", lambda _job_id: None)
+    assert format_job_detail("missing").startswith("Job not found:")
+
+
+def test_enqueue_run_job_result(monkeypatch) -> None:
+    from veldra.gui.app import enqueue_run_job_result
+    from veldra.gui.types import GuiJobResult
+
+    monkeypatch.setattr(
+        "veldra.gui.app.submit_run_job",
+        lambda _inv: GuiJobResult(job_id="j1", status="queued", message="Queued fit job."),
+    )
+    payload, message = enqueue_run_job_result("fit", "cfg", "", "", "", "", "python")
+    assert '"job_id": "j1"' in payload
+    assert message.startswith("[QUEUED]")

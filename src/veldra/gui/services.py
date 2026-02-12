@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import difflib
 import json
+import logging
+import os
+import threading
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -16,10 +20,60 @@ from veldra.api.exceptions import (
     VeldraNotImplementedError,
     VeldraValidationError,
 )
+from veldra.api.logging import log_event
 from veldra.api.runner import estimate_dr, evaluate, export, fit, simulate, tune
+from veldra.config.migrate import migrate_run_config_file, migrate_run_config_payload
 from veldra.config.models import RunConfig
 from veldra.data import load_tabular_data
-from veldra.gui.types import ArtifactSummary, GuiRunResult, RunInvocation
+from veldra.gui.job_store import GuiJobStore
+from veldra.gui.types import (
+    ArtifactSummary,
+    GuiJobRecord,
+    GuiJobResult,
+    GuiRunResult,
+    RunInvocation,
+)
+
+LOGGER = logging.getLogger("veldra.gui.services")
+_RUNTIME_LOCK = threading.Lock()
+_JOB_STORE: GuiJobStore | None = None
+_JOB_WORKER: Any | None = None
+
+
+def default_job_db_path() -> Path:
+    return Path(os.getenv("VELDRA_GUI_JOB_DB_PATH", ".veldra_gui/jobs.sqlite3"))
+
+
+def set_gui_runtime(*, job_store: GuiJobStore, worker: Any | None) -> None:
+    global _JOB_STORE, _JOB_WORKER
+    with _RUNTIME_LOCK:
+        _JOB_STORE = job_store
+        _JOB_WORKER = worker
+
+
+def get_gui_job_store() -> GuiJobStore:
+    global _JOB_STORE
+    with _RUNTIME_LOCK:
+        if _JOB_STORE is None:
+            _JOB_STORE = GuiJobStore(default_job_db_path())
+        return _JOB_STORE
+
+
+def stop_gui_runtime() -> None:
+    global _JOB_STORE, _JOB_WORKER
+    with _RUNTIME_LOCK:
+        worker = _JOB_WORKER
+        _JOB_WORKER = None
+        _JOB_STORE = None
+    if worker is not None and hasattr(worker, "stop"):
+        worker.stop()
+
+
+def _start_worker_if_needed() -> None:
+    with _RUNTIME_LOCK:
+        worker = _JOB_WORKER
+    if worker is not None and hasattr(worker, "start"):
+        worker.start()
 
 
 def normalize_gui_error(exc: Exception) -> str:
@@ -61,6 +115,42 @@ def save_config_yaml(path: str, yaml_text: str) -> str:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml_text, encoding="utf-8")
     return str(config_path)
+
+
+def migrate_config_from_yaml(
+    yaml_text: str,
+    *,
+    target_version: int = 1,
+) -> tuple[str, str, dict[str, Any]]:
+    payload = yaml.safe_load(yaml_text)
+    if not isinstance(payload, dict):
+        raise VeldraValidationError("Config YAML must deserialize to an object.")
+    normalized, result = migrate_run_config_payload(payload, target_version=target_version)
+    normalized_yaml = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True)
+    diff = "\n".join(
+        difflib.unified_diff(
+            yaml_text.splitlines(),
+            normalized_yaml.splitlines(),
+            fromfile="input.yaml",
+            tofile="normalized.yaml",
+            lineterm="",
+        )
+    )
+    return normalized_yaml, diff, asdict(result)
+
+
+def migrate_config_file_via_gui(
+    *,
+    input_path: str,
+    output_path: str | None = None,
+    target_version: int = 1,
+) -> dict[str, Any]:
+    result = migrate_run_config_file(
+        input_path=input_path,
+        output_path=output_path,
+        target_version=target_version,
+    )
+    return asdict(result)
 
 
 def _result_to_payload(result: Any) -> dict[str, Any]:
@@ -151,6 +241,59 @@ def run_action(invocation: RunInvocation) -> GuiRunResult:
         )
     except Exception as exc:
         return GuiRunResult(success=False, message=normalize_gui_error(exc), payload={})
+
+
+def submit_run_job(invocation: RunInvocation) -> GuiJobResult:
+    store = get_gui_job_store()
+    job = store.enqueue_job(invocation)
+    _start_worker_if_needed()
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job submitted",
+        run_id=job.job_id,
+        artifact_path=invocation.artifact_path,
+        task_type=job.action,
+        event="gui job submitted",
+        status=job.status,
+        action=job.action,
+    )
+    return GuiJobResult(
+        job_id=job.job_id,
+        status=job.status,
+        message=f"Queued {job.action} job.",
+    )
+
+
+def get_run_job(job_id: str) -> GuiJobRecord | None:
+    return get_gui_job_store().get_job(_require(job_id, "job_id"))
+
+
+def list_run_jobs(*, limit: int = 100, status: str | None = None) -> list[GuiJobRecord]:
+    return get_gui_job_store().list_jobs(limit=limit, status=status)
+
+
+def cancel_run_job(job_id: str) -> GuiJobResult:
+    canceled = get_gui_job_store().request_cancel(_require(job_id, "job_id"))
+    if canceled is None:
+        raise VeldraValidationError(f"Job not found: {job_id}")
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job updated",
+        run_id=canceled.job_id,
+        artifact_path=canceled.invocation.artifact_path,
+        task_type=canceled.action,
+        event="gui job updated",
+        status=canceled.status,
+        action=canceled.action,
+        cancel_requested=canceled.cancel_requested,
+    )
+    return GuiJobResult(
+        job_id=canceled.job_id,
+        status=canceled.status,
+        message=f"Job {canceled.job_id} status updated to {canceled.status}.",
+    )
 
 
 def list_artifacts(root_dir: str) -> list[ArtifactSummary]:

@@ -607,6 +607,101 @@
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
 
+### 2026-02-12 (Session planning: phase25-gui-async-jobs-migrate-workflow-mvp)
+**Context**
+- Prioritize GUI operability over additional DR-DiD scope.
+- Keep stable runtime API signatures unchanged and extend GUI adapter behavior only.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Add async run execution to `/run` using SQLite persistence and a single worker.
+  - Reason:
+    - Removes UI blocking for long-running `tune`/causal jobs while preserving local simplicity.
+  - Impact area:
+    - GUI operability / Reliability
+
+- Decision: provisional
+  - Policy:
+    - Implement best-effort cancel:
+      - `queued` -> immediate cancel
+      - `running` -> `cancel_requested` marker (completion may still occur)
+  - Reason:
+    - Avoids unsafe force-kill behavior in MVP.
+  - Impact area:
+    - Job safety / UX clarity
+
+- Decision: provisional
+  - Policy:
+    - Integrate config migrate workflow in `/config` (preview + diff + apply).
+  - Reason:
+    - Reuses Phase 22 migration contract and closes GUI usability gap.
+  - Impact area:
+    - Config governance / Operator workflow
+
+### 2026-02-12 (Session/PR: phase25-gui-async-jobs-migrate-workflow-mvp)
+**Context**
+- Enhanced Dash GUI with async job execution and config migrate integration.
+
+**Changes**
+- Code changes:
+  - Added:
+    - `src/veldra/gui/job_store.py`
+    - `src/veldra/gui/worker.py`
+  - Updated:
+    - `src/veldra/gui/types.py`
+    - `src/veldra/gui/services.py`
+    - `src/veldra/gui/app.py`
+    - `src/veldra/gui/pages/run_page.py`
+    - `src/veldra/gui/pages/config_page.py`
+    - `src/veldra/gui/server.py`
+- Tests added:
+  - `tests/test_gui_job_store.py`
+  - `tests/test_gui_worker.py`
+  - `tests/test_gui_run_async.py`
+  - `tests/test_gui_config_migrate_workflow.py`
+- Tests updated:
+  - `tests/test_gui_app_layout.py`
+  - `tests/test_gui_app_helpers.py`
+  - `tests/test_gui_pages_and_init.py`
+  - `tests/test_gui_services_config_validation.py`
+  - `tests/test_gui_services_run_dispatch.py`
+  - `tests/test_gui_server.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI `/run` now uses async job queue with SQLite persistence (`.veldra_gui/jobs.sqlite3` by default).
+  - Reason:
+    - Provides restart-safe job history and non-blocking execution with minimal architectural risk.
+  - Impact area:
+    - GUI runtime behavior / Operability
+
+- Decision: confirmed
+  - Policy:
+    - best-effort cancel contract is implemented and surfaced in job status transitions.
+  - Reason:
+    - Keeps cancellation semantics explicit without forcefully terminating model execution.
+  - Impact area:
+    - Safety / Predictability
+
+- Decision: confirmed
+  - Policy:
+    - Config migrate workflow is available in GUI with preview/diff/apply and overwrite rejection.
+  - Reason:
+    - Aligns GUI operations with strict migration guarantees from Phase 22.
+  - Impact area:
+    - Config management / UX consistency
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed.
+- `uv run coverage report -m --include="src/veldra/gui/*,src/veldra/config/migrate.py"` : 90% total.
+
 ### 2026-02-12 (Session planning: phase24-causal-tune-balance-priority)
 **Context**
 - Extend causal tuning from SE/overlap-centered objectives to TWANG-style balance-priority behavior.
