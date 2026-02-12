@@ -2052,3 +2052,91 @@
     - Maintains non-intrusive rollout and backward compatibility.
   - Impact area:
     - Compatibility / Packaging policy
+
+### 2026-02-12 (Session planning: phase22-config-migrate-mvp)
+**Context**
+- Implement `veldra.config.migrate` MVP as the next P1 item.
+- Keep runtime API signatures unchanged and provide a strict, non-destructive migration entrypoint.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Provide migration as both Python API and CLI (`veldra config migrate`).
+  - Reason:
+    - Supports both automation and operator workflows.
+  - Impact area:
+    - Config operability / DX
+
+- Decision: provisional
+  - Policy:
+    - MVP scope is `config_version=1` normalization only; target_version is fixed to 1.
+  - Reason:
+    - Prioritizes safe foundation before multi-version transforms.
+  - Impact area:
+    - Compatibility / Risk control
+
+- Decision: provisional
+  - Policy:
+    - Output is non-destructive by default (separate file, overwrite prohibited).
+  - Reason:
+    - Prevents accidental data loss in configuration workflows.
+  - Impact area:
+    - Safety / Operability
+
+### 2026-02-12 (Session/PR: phase22-config-migrate-mvp)
+**Context**
+- Added a strict migration utility for RunConfig normalization and validation.
+
+**Changes**
+- Code changes:
+  - Added `src/veldra/config/migrate.py`
+    - `MigrationResult`
+    - `migrate_run_config_payload(...)`
+    - `migrate_run_config_file(...)`
+  - Updated `src/veldra/config/__init__.py`
+    - exports migration APIs
+  - Updated `src/veldra/__init__.py`
+    - implemented CLI subcommand:
+      - `veldra config migrate --input <path> [--output <path>] [--target-version 1]`
+    - success event logging:
+      - `event: config migrate completed`
+- Tests added:
+  - `tests/test_config_migrate_payload.py`
+  - `tests/test_config_migrate_file.py`
+  - `tests/test_config_migrate_version.py`
+  - `tests/test_cli_config_migrate.py`
+- Tests updated:
+  - `tests/test_package_root.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Migration utility is delivered as API + CLI with strict validation.
+  - Reason:
+    - Ensures deterministic normalization and consistent error behavior.
+  - Impact area:
+    - Config governance / Reliability
+
+- Decision: confirmed
+  - Policy:
+    - Only v1->v1 normalization is supported in this phase.
+  - Reason:
+    - Keeps the MVP bounded and safe while enabling future version migrations.
+  - Impact area:
+    - Scope control / Forward compatibility
+
+- Decision: confirmed
+  - Policy:
+    - Existing output files are never overwritten by migration.
+  - Reason:
+    - Maintains non-destructive operator defaults.
+  - Impact area:
+    - Operational safety
+
+**Results**
+- `uv run ruff check .` : passed.
+- `uv run pytest -q` : passed.

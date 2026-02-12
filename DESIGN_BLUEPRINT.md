@@ -65,6 +65,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 13-18: ONNX 拡張, evaluate(config, data), notebook整備
 - Phase 19-20: DR, DR-DiD, causal tuning objective
 - Phase 21: Dash GUI MVP（Config編集 + Run実行 + Artifact閲覧）
+- Phase 22: Config migration utility MVP（`veldra config migrate`）
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -74,11 +75,15 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
    - 既存の dynamic quantization は opt-in で利用可能。
 
 ### P1（次に着手すべき）
-1. Config migration ユーティリティ
-   - `veldra.config.migrate` 未実装。
-2. Causal 高度化
+1. Causal 高度化
    - DR-DiD の binary対応。
    - TWANGのように共変量バランスでのTune対応。
+
+### 実装済み（新規）
+- Config migration utility（MVP）
+  - Python API: `migrate_run_config_payload`, `migrate_run_config_file`
+  - CLI: `veldra config migrate --input ... [--output ...]`
+  - v1正規化のみ対応、上書き禁止、未知キーは明示エラー
 
 ## 6. GUI実装（Dash, MVP）
 
