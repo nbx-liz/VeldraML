@@ -32,8 +32,15 @@ Implemented:
   - `causal.method=dr_did` with `task.type=regression` (2-period panel/repeated cross-section)
 
 Backlog:
-- ONNX graph optimization pipeline (quantization is available as opt-in)
+- GUI adapter (Dash MVP: config editor + run console + artifact explorer)
+- Config migration utility (`veldra.config.migrate`)
 - Causal DiD extensions beyond 2-period MVP (multi-period / staggered adoption)
+- Advanced simulation DSL operators (`allocate_total`, constrained allocation)
+- Binary threshold optimization beyond F1-only objective
+- Python export packaging enhancements (e.g. Dockerfile generation)
+
+Status note:
+- ONNX graph optimization is intentionally skipped (non-priority). Optional ONNX dynamic quantization remains supported.
 
 ## Requirements
 
