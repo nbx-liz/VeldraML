@@ -47,6 +47,10 @@ def _base_validation(config: RunConfig, frame: pd.DataFrame) -> tuple[str, str, 
         raise VeldraValidationError("causal.post_col is required for DR-DiD estimation.")
     if frame.empty:
         raise VeldraValidationError("Input data is empty.")
+    if config.task.type == "binary" and config.causal.estimand != "att":
+        raise VeldraValidationError(
+            "DR-DiD binary supports only causal.estimand='att' in current phase."
+        )
 
     treatment_col = config.causal.treatment_col
     target_col = config.data.target
@@ -64,12 +68,15 @@ def _base_validation(config: RunConfig, frame: pd.DataFrame) -> tuple[str, str, 
 
     _to_binary(frame[treatment_col], name=treatment_col)
     _to_binary(frame[post_col], name=post_col)
-    try:
-        pd.to_numeric(frame[target_col], errors="raise")
-    except Exception as exc:
-        raise VeldraValidationError(
-            "Outcome values must be numeric for DR-DiD regression."
-        ) from exc
+    if config.task.type == "binary":
+        _to_binary(frame[target_col], name=target_col)
+    else:
+        try:
+            pd.to_numeric(frame[target_col], errors="raise")
+        except Exception as exc:
+            raise VeldraValidationError(
+                "Outcome values must be numeric for DR-DiD regression."
+            ) from exc
 
     return treatment_col, target_col, post_col
 
@@ -79,7 +86,56 @@ def _dr_config_from_drdid(config: RunConfig) -> RunConfig:
     if dr_cfg.causal is None:
         raise VeldraValidationError("causal config is required for DR-DiD estimation.")
     dr_cfg.causal.method = "dr"
+    # DR-DiD pseudo outcomes are continuous by construction even for binary endpoints.
+    dr_cfg.task.type = "regression"
     return dr_cfg
+
+
+def _weighted_mean_var(values: np.ndarray, weights: np.ndarray | None) -> tuple[float, float]:
+    if weights is None:
+        mean = float(np.mean(values))
+        var = float(np.var(values))
+        return mean, var
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 0.0:
+        return 0.0, 0.0
+    mean = float(np.average(values, weights=weights))
+    var = float(np.average((values - mean) ** 2, weights=weights))
+    return mean, var
+
+
+def _max_smd(
+    covariates: pd.DataFrame,
+    treatment: np.ndarray,
+    *,
+    weights: np.ndarray | None = None,
+) -> float:
+    if covariates.empty:
+        return 0.0
+
+    t_mask = treatment == 1
+    c_mask = treatment == 0
+    if not np.any(t_mask) or not np.any(c_mask):
+        return 0.0
+
+    smd_values: list[float] = []
+    for col in covariates.columns:
+        values = pd.to_numeric(covariates[col], errors="coerce").to_numpy(dtype=float)
+        if np.isnan(values).any():
+            continue
+        w_t = weights[t_mask] if weights is not None else None
+        w_c = weights[c_mask] if weights is not None else None
+        mean_t, var_t = _weighted_mean_var(values[t_mask], w_t)
+        mean_c, var_c = _weighted_mean_var(values[c_mask], w_c)
+        pooled_sd = float(np.sqrt(max((var_t + var_c) / 2.0, 0.0)))
+        if pooled_sd <= 1e-12:
+            smd_values.append(0.0)
+            continue
+        smd_values.append(abs(mean_t - mean_c) / pooled_sd)
+
+    if not smd_values:
+        return 0.0
+    return float(np.max(smd_values))
 
 
 def _panel_to_pseudo_frame(
@@ -202,6 +258,17 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
     else:
         pseudo_frame, obs_meta = _repeated_cs_to_pseudo_frame(config, frame)
 
+    smd_drop_cols = {
+        config.data.target,
+        treatment_col,
+        config.causal.time_col or "",
+        config.causal.post_col or "",
+        config.causal.unit_id_col or "",
+    }
+    smd_covariates = pseudo_frame.drop(
+        columns=[c for c in smd_drop_cols if c in pseudo_frame.columns]
+    )
+
     dr_cfg = _dr_config_from_drdid(config)
     dr_out = run_dr_estimation(dr_cfg, pseudo_frame)
 
@@ -213,9 +280,17 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
         obs["e_hat"].to_numpy(dtype=float),
         obs["treatment"].to_numpy(dtype=int),
     )
+    t_np = obs["treatment"].to_numpy(dtype=int)
+    e_np = np.clip(obs["e_hat"].to_numpy(dtype=float), 1e-6, 1.0 - 1e-6)
+    att_weights = np.where(t_np == 1, 1.0, e_np / (1.0 - e_np))
+    smd_max_unweighted = _max_smd(smd_covariates, t_np)
+    smd_max_weighted = _max_smd(smd_covariates, t_np, weights=att_weights)
+
     metrics = dict(dr_out.metrics)
     metrics["overlap_metric"] = overlap
     metrics["drdid"] = metrics.get("dr", dr_out.estimate)
+    metrics["smd_max_unweighted"] = smd_max_unweighted
+    metrics["smd_max_weighted"] = smd_max_weighted
 
     summary = dict(dr_out.summary)
     summary.update(
@@ -230,6 +305,14 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
             "n_treated_pre": n_treated_pre,
             "n_treated_post": n_treated_post,
             "overlap_metric": overlap,
+            "smd_max_unweighted": smd_max_unweighted,
+            "smd_max_weighted": smd_max_weighted,
+            "binary_outcome": bool(config.task.type == "binary"),
+            "outcome_scale": (
+                "risk_difference_att"
+                if config.task.type == "binary"
+                else "continuous_att"
+            ),
             "metrics": metrics,
         }
     )

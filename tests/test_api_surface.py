@@ -240,3 +240,27 @@ def test_estimate_dr_is_implemented(tmp_path) -> None:
     )
     assert did_result.method == "dr_did"
     assert did_result.metadata["design"] == "panel"
+
+    panel_binary = panel.copy()
+    panel_binary["outcome"] = [0, 1, 0, 1, 0, 0, 1, 1]
+    panel_binary_path = tmp_path / "drdid_panel_binary.csv"
+    panel_binary.to_csv(panel_binary_path, index=False)
+    did_binary_result = estimate_dr(
+        {
+            "config_version": 1,
+            "task": {"type": "binary"},
+            "data": {"path": str(panel_binary_path), "target": "outcome"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 11},
+            "causal": {
+                "method": "dr_did",
+                "treatment_col": "treatment",
+                "design": "panel",
+                "time_col": "time",
+                "post_col": "post",
+                "unit_id_col": "unit_id",
+            },
+            "export": {"artifact_dir": str(tmp_path)},
+        }
+    )
+    assert did_binary_result.method == "dr_did"
+    assert did_binary_result.metadata["binary_outcome"] is True

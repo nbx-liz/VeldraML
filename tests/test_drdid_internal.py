@@ -78,6 +78,24 @@ def test_dr_config_from_drdid_requires_causal() -> None:
         dr_did._dr_config_from_drdid(cfg)
 
 
+def test_dr_config_from_drdid_forces_regression_task() -> None:
+    cfg = _config()
+    cfg.task.type = "binary"
+    dr_cfg = dr_did._dr_config_from_drdid(cfg)
+    assert dr_cfg.task.type == "regression"
+
+
+def test_max_smd_handles_weighted_and_empty_covariates() -> None:
+    cov = pd.DataFrame({"x1": [0.1, 0.2, 0.8, 0.9], "x2": [1.0, 1.1, 2.0, 2.1]})
+    treat = np.array([0, 0, 1, 1], dtype=int)
+    weights = np.array([1.0, 1.0, 1.2, 1.3], dtype=float)
+    unweighted = dr_did._max_smd(cov, treat)
+    weighted = dr_did._max_smd(cov, treat, weights=weights)
+    assert unweighted >= 0.0
+    assert weighted >= 0.0
+    assert dr_did._max_smd(pd.DataFrame(), treat) == 0.0
+
+
 def test_panel_to_pseudo_frame_validation_paths(monkeypatch) -> None:
     cfg = _config()
 

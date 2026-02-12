@@ -266,12 +266,28 @@ def test_causal_drdid_requires_design_and_columns() -> None:
         RunConfig.model_validate(payload)
 
 
-def test_causal_drdid_rejects_non_regression_task() -> None:
+def test_causal_drdid_allows_binary_task() -> None:
     payload = _minimal_payload()
     payload["task"] = {"type": "binary"}
     payload["causal"] = {
         "method": "dr_did",
         "treatment_col": "treatment",
+        "design": "panel",
+        "time_col": "time",
+        "post_col": "post",
+        "unit_id_col": "unit_id",
+    }
+    cfg = RunConfig.model_validate(payload)
+    assert cfg.task.type == "binary"
+
+
+def test_causal_drdid_binary_rejects_ate_estimand() -> None:
+    payload = _minimal_payload()
+    payload["task"] = {"type": "binary"}
+    payload["causal"] = {
+        "method": "dr_did",
+        "treatment_col": "treatment",
+        "estimand": "ate",
         "design": "panel",
         "time_col": "time",
         "post_col": "post",

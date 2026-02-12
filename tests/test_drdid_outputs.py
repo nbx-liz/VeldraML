@@ -50,4 +50,7 @@ def test_drdid_writes_summary_and_observation_outputs(tmp_path) -> None:
     assert payload["design"] == "panel"
     assert payload["n_pre"] == 4
     assert payload["n_post"] == 4
+    assert "overlap_metric" in payload
+    assert "smd_max_unweighted" in payload
+    assert "smd_max_weighted" in payload
 

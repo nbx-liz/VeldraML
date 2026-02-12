@@ -34,7 +34,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 | `export(format="python")` | Yes | Yes | Yes | Yes | validation report 生成 |
 | `export(format="onnx")` | Yes | Yes | Yes | Yes | optional dependency |
 | `estimate_dr` | Yes | Yes | No | No | `causal.method=dr` |
-| `estimate_dr (dr_did)` | Yes | N/A | N/A | N/A | `task.type=regression` のみ |
+| `estimate_dr (dr_did)` | Yes | Yes | N/A | N/A | 2時点 `panel/repeated_cross_section` |
 
 ### 3.2 タスク別の主要契約
 - regression:
@@ -56,6 +56,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - DR-DiD (`causal.method="dr_did"`): 2時点 MVP
   - `design="panel"`
   - `design="repeated_cross_section"`
+  - `task.type="binary"` は Risk Difference ATT で解釈（estimand は ATT のみ）
 - propensity は校正後確率（既定: `platt`）を使用
 
 ## 4. 実装済みフェーズ要約
@@ -76,8 +77,8 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 
 ### P1（次に着手すべき）
 1. Causal 高度化
-   - DR-DiD の binary対応。
    - TWANGのように共変量バランスでのTune対応。
+   - multi-period / staggered adoption 対応。
 
 ### 実装済み（新規）
 - Config migration utility（MVP）
@@ -145,3 +146,12 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ## 9. HISTORYとの関係
 - 詳細な意思決定と時系列ログは `HISTORY.md` を正とする。
 - 本書は「現時点の設計状態」を示す要約ドキュメントとして維持する。
+
+## 10. Phase 23（DR-DiD Binary + 最小診断）
+- Proposal:
+  - `causal.method="dr_did"` の `task.type="binary"` を追加し、効果を Risk Difference ATT として扱う。
+  - 診断として `overlap_metric`, `smd_max_unweighted`, `smd_max_weighted` を返却契約へ追加する。
+- Implemented:
+  - `estimate_dr` の DR-DiD 経路は `regression|binary` を許可。
+  - panel/repeated_cross_section の両設計で binary DR-DiD を実行可能化。
+  - `CausalResult.metadata` に `outcome_scale` / `binary_outcome` を追加。

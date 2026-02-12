@@ -59,5 +59,6 @@ def test_estimate_drdid_repeated_cross_section_smoke(tmp_path) -> None:
 
     assert result.method == "dr_did"
     assert result.metadata["design"] == "repeated_cross_section"
-    assert {"naive", "ipw", "dr"} <= set(result.metrics)
+    assert {"naive", "ipw", "dr", "drdid"} <= set(result.metrics)
+    assert {"overlap_metric", "smd_max_unweighted", "smd_max_weighted"} <= set(result.metrics)
 
