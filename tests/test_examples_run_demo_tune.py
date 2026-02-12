@@ -188,3 +188,76 @@ def test_run_demo_tune_frontier_accepts_coverage_penalty_options(tmp_path) -> No
     assert used_config["tuning"]["coverage_tolerance"] == 0.02
     assert used_config["tuning"]["penalty_weight"] == 2.5
 
+
+def test_run_demo_tune_causal_infers_method_and_balance_threshold(tmp_path) -> None:
+    data_path = tmp_path / "causal.csv"
+    out_dir = tmp_path / "out_causal"
+    frame = _regression_frame()
+    frame["treatment"] = (frame["x1"] > frame["x1"].median()).astype(int)
+    frame.to_csv(data_path, index=False)
+
+    exit_code = run_demo_tune.main(
+        [
+            "--task",
+            "regression",
+            "--data-path",
+            str(data_path),
+            "--out-dir",
+            str(out_dir),
+            "--n-trials",
+            "1",
+            "--objective",
+            "dr_balance_priority",
+            "--causal-balance-threshold",
+            "0.08",
+            "--causal-penalty-weight",
+            "3.0",
+        ]
+    )
+    assert exit_code == 0
+    run_dir = sorted([p for p in out_dir.iterdir() if p.is_dir()])[-1]
+    used_config = yaml.safe_load((run_dir / "used_config.yaml").read_text(encoding="utf-8"))
+    assert used_config["causal"]["method"] == "dr"
+    assert used_config["causal"]["treatment_col"] == "treatment"
+    assert used_config["tuning"]["causal_balance_threshold"] == 0.08
+    assert used_config["tuning"]["causal_penalty_weight"] == 3.0
+
+
+def test_run_demo_tune_causal_default_data_and_study_name_avoid_collision(tmp_path) -> None:
+    out_dir = tmp_path / "out_causal_default"
+    first = run_demo_tune.main(
+        [
+            "--task",
+            "regression",
+            "--objective",
+            "dr_balance_priority",
+            "--n-trials",
+            "1",
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+    second = run_demo_tune.main(
+        [
+            "--task",
+            "regression",
+            "--objective",
+            "dr_balance_priority",
+            "--n-trials",
+            "1",
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+    assert first == 0
+    assert second == 0
+    run_dirs = sorted([p for p in out_dir.iterdir() if p.is_dir()])
+    assert len(run_dirs) >= 2
+
+    latest_config = yaml.safe_load((run_dirs[-1] / "used_config.yaml").read_text(encoding="utf-8"))
+    assert "causal" in latest_config
+    assert latest_config["causal"]["method"] == "dr"
+    assert latest_config["tuning"]["study_name"].startswith("demo_regression_")
+    data_path = latest_config["data"]["path"]
+    assert data_path.endswith("causal_dr_tune_demo.csv")
+

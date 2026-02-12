@@ -276,15 +276,28 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
     for col in obs_meta.columns:
         obs[col] = obs_meta[col].to_numpy()
 
-    overlap = _overlap_metric(
-        obs["e_hat"].to_numpy(dtype=float),
-        obs["treatment"].to_numpy(dtype=int),
+    overlap = float(
+        dr_out.metrics.get(
+            "overlap_metric",
+            _overlap_metric(
+                obs["e_hat"].to_numpy(dtype=float),
+                obs["treatment"].to_numpy(dtype=int),
+            ),
+        )
     )
     t_np = obs["treatment"].to_numpy(dtype=int)
-    e_np = np.clip(obs["e_hat"].to_numpy(dtype=float), 1e-6, 1.0 - 1e-6)
-    att_weights = np.where(t_np == 1, 1.0, e_np / (1.0 - e_np))
-    smd_max_unweighted = _max_smd(smd_covariates, t_np)
-    smd_max_weighted = _max_smd(smd_covariates, t_np, weights=att_weights)
+    smd_max_unweighted = float(
+        dr_out.metrics.get("smd_max_unweighted", _max_smd(smd_covariates, t_np))
+    )
+    if "smd_max_weighted" in dr_out.metrics:
+        smd_max_weighted = float(dr_out.metrics["smd_max_weighted"])
+    else:
+        e_np = np.clip(obs["e_hat"].to_numpy(dtype=float), 1e-6, 1.0 - 1e-6)
+        if config.causal.estimand == "ate":
+            balance_weights = np.where(t_np == 1, 1.0 / e_np, 1.0 / (1.0 - e_np))
+        else:
+            balance_weights = np.where(t_np == 1, 1.0, e_np / (1.0 - e_np))
+        smd_max_weighted = _max_smd(smd_covariates, t_np, weights=balance_weights)
 
     metrics = dict(dr_out.metrics)
     metrics["overlap_metric"] = overlap

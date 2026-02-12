@@ -607,6 +607,119 @@
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
 
+### 2026-02-12 (Session planning: phase24-causal-tune-balance-priority)
+**Context**
+- Extend causal tuning from SE/overlap-centered objectives to TWANG-style balance-priority behavior.
+- Keep stable public API signatures unchanged.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - Add balance-priority objectives for causal tuning:
+      - `dr_balance_priority`
+      - `drdid_balance_priority`
+  - Reason:
+    - Explicitly enforce covariate balance quality before variance minimization.
+  - Impact area:
+    - Causal tuning quality / Operability
+
+- Decision: provisional
+  - Policy:
+    - Change causal tuning defaults to balance-priority objectives.
+  - Reason:
+    - Make safer causal objective behavior the default path for operational use.
+  - Impact area:
+    - Default behavior / Backward compatibility (explicit old objective still supported)
+
+- Decision: provisional
+  - Policy:
+    - Introduce `tuning.causal_balance_threshold` with default `0.10`.
+  - Reason:
+    - Provide an explicit, configurable acceptance boundary for weighted SMD.
+  - Impact area:
+    - Config contract / Diagnostics governance
+
+### 2026-02-12 (Session/PR: phase24-causal-tune-balance-priority)
+**Context**
+- Implement balance-priority causal tuning for both DR and DR-DiD.
+- Preserve stable API signatures and legacy objective compatibility.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - added objective options:
+      - DR: `dr_balance_priority`
+      - DR-DiD: `drdid_balance_priority`
+    - updated causal default objectives:
+      - DR -> `dr_balance_priority`
+      - DR-DiD -> `drdid_balance_priority`
+    - added `tuning.causal_balance_threshold` (default `0.10`) and validation rules.
+  - Updated `src/veldra/causal/dr.py`:
+    - added diagnostics in metrics/summary:
+      - `overlap_metric`
+      - `smd_max_unweighted`
+      - `smd_max_weighted`
+    - weighted SMD now respects estimand-specific weighting (ATT/ATE).
+  - Updated `src/veldra/causal/dr_did.py`:
+    - aligned DR-DiD diagnostic contract with DR (`overlap` + `SMD` keys).
+  - Updated `src/veldra/modeling/tuning.py`:
+    - added balance-priority objective handling.
+    - score logic:
+      - if balanced: objective = `std_error`
+      - if violated: objective = `1_000_000 + penalty_weight * violation`
+    - persisted trial components:
+      - `estimate`, `std_error`, `overlap_metric`
+      - `smd_max_unweighted`, `smd_max_weighted`
+      - `balance_threshold`, `balance_violation`
+      - `penalty_weight`, `penalty`, `objective_value`, `objective_stage`
+  - Updated `src/veldra/api/runner.py`:
+    - tune metadata now includes `causal_balance_threshold`.
+  - Updated `examples/run_demo_tune.py`:
+    - added causal CLI options including `--causal-balance-threshold`.
+    - objective-based causal method inference for `dr_*` / `drdid_*`.
+- Tests added:
+  - `tests/test_tune_causal_balance_priority.py`
+  - `tests/test_dr_balance_metrics.py`
+  - `tests/test_tune_causal_default_objective.py`
+- Tests updated:
+  - `tests/test_tune_causal_validation.py`
+  - `tests/test_tune_objective_selection.py`
+  - `tests/test_tune_dr_smoke.py`
+  - `tests/test_tune_drdid_smoke.py`
+  - `tests/test_api_surface.py`
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_tuning_internal.py`
+  - `tests/test_examples_run_demo_tune.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Balance-priority causal objectives are implemented for DR and DR-DiD.
+  - Reason:
+    - Aligns tuning behavior with causal balance quality requirements.
+  - Impact area:
+    - Causal tuning robustness / Operability
+
+- Decision: confirmed
+  - Policy:
+    - Causal default objectives are now balance-priority.
+  - Reason:
+    - Improves default safety while retaining explicit access to legacy objectives.
+  - Impact area:
+    - Default behavior / Compatibility
+
+- Decision: confirmed
+  - Policy:
+    - Weighted SMD threshold is configurable via `tuning.causal_balance_threshold`.
+  - Reason:
+    - Supports policy-specific balance strictness without API expansion.
+  - Impact area:
+    - Config governance / Diagnostics transparency
+
 ### 2026-02-12 (Session planning: phase23-drdid-binary-riskdiff-mvp)
 **Context**
 - Extend DR-DiD from regression-only to binary outcome while keeping stable API signatures unchanged.

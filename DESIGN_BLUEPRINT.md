@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-11
+最終更新: 2026-02-12
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -77,7 +77,6 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 
 ### P1（次に着手すべき）
 1. Causal 高度化
-   - TWANGのように共変量バランスでのTune対応。
    - multi-period / staggered adoption 対応。
 
 ### 実装済み（新規）
@@ -155,3 +154,15 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
   - `estimate_dr` の DR-DiD 経路は `regression|binary` を許可。
   - panel/repeated_cross_section の両設計で binary DR-DiD を実行可能化。
   - `CausalResult.metadata` に `outcome_scale` / `binary_outcome` を追加。
+
+## 11. Phase 24（Causal Tune Balance-Priority）
+- Proposal:
+  - DR/DR-DiD の因果チューニングを、SE中心から balance-priority へ拡張する。
+  - 既定 objective を `dr_balance_priority` / `drdid_balance_priority` に変更する。
+  - balance判定は `smd_max_weighted <= causal_balance_threshold`（既定 0.10）を利用する。
+- Implemented:
+  - `tuning.objective` に balance-priority objective を追加。
+  - `tuning.causal_balance_threshold` を追加（causal時のみカスタム可）。
+  - DR/DR-DiD の metrics/summary で `overlap_metric`, `smd_max_unweighted`,
+    `smd_max_weighted` を統一返却。
+  - tune trial attributes に balance violation と objective stage を保存。

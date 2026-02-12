@@ -33,16 +33,26 @@ def test_tune_supports_dr_objective(tmp_path) -> None:
             "tuning": {
                 "enabled": True,
                 "n_trials": 1,
-                "objective": "dr_std_error",
+                "objective": "dr_balance_priority",
                 "causal_penalty_weight": 0.5,
+                "causal_balance_threshold": 0.10,
             },
             "export": {"artifact_dir": str(tmp_path / "artifacts")},
         }
     )
-    assert result.metadata["metric_name"] == "dr_std_error"
+    assert result.metadata["metric_name"] == "dr_balance_priority"
     trials_path = Path(result.metadata["trials_path"])
     trials = pd.read_parquet(trials_path)
-    assert {"estimate", "std_error", "overlap_metric", "penalty", "objective_value"} <= set(
-        trials.columns
-    )
+    assert {
+        "estimate",
+        "std_error",
+        "overlap_metric",
+        "smd_max_unweighted",
+        "smd_max_weighted",
+        "balance_threshold",
+        "balance_violation",
+        "penalty",
+        "objective_value",
+        "objective_stage",
+    } <= set(trials.columns)
 

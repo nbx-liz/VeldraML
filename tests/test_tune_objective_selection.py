@@ -142,3 +142,21 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
     )
     assert causal.metadata["metric_name"] == "dr_std_error"
 
+    causal_balance = tune(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": str(causal_path), "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 1},
+            "causal": {"method": "dr", "treatment_col": "treatment"},
+            "tuning": {
+                "enabled": True,
+                "n_trials": 1,
+                "objective": "dr_balance_priority",
+                "causal_balance_threshold": 0.10,
+            },
+            "export": {"artifact_dir": str(tmp_path / "artifacts")},
+        }
+    )
+    assert causal_balance.metadata["metric_name"] == "dr_balance_priority"
+

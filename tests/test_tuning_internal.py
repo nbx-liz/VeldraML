@@ -53,12 +53,17 @@ def test_objective_and_default_search_space_validation() -> None:
         "regression",
         None,
         causal_method="dr",
-    ) == ("dr_std_error", "minimize")
+    ) == ("dr_balance_priority", "minimize")
     assert tuning._objective_spec(
         "regression",
         "drdid_overlap_penalty",
         causal_method="dr_did",
     ) == ("drdid_overlap_penalty", "minimize")
+    assert tuning._objective_spec(
+        "regression",
+        "drdid_balance_priority",
+        causal_method="dr_did",
+    ) == ("drdid_balance_priority", "minimize")
     with pytest.raises(VeldraValidationError):
         tuning._objective_spec("binary", "r2")
     with pytest.raises(VeldraValidationError):
