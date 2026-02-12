@@ -267,9 +267,9 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
                 "estimate_dr(method='dr') supports only task.type='regression' or 'binary'."
             )
     elif parsed.causal.method == "dr_did":
-        if parsed.task.type != "regression":
+        if parsed.task.type not in {"regression", "binary"}:
             raise VeldraNotImplementedError(
-                "estimate_dr(method='dr_did') supports only task.type='regression'."
+                "estimate_dr(method='dr_did') supports only task.type='regression' or 'binary'."
             )
     else:
         raise VeldraValidationError(f"Unsupported causal method '{parsed.causal.method}'.")
@@ -335,6 +335,12 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
             "task_type": parsed.task.type,
             "causal_method": parsed.causal.method,
             "design": parsed.causal.design,
+            "outcome_scale": (
+                "risk_difference_att"
+                if parsed.causal.method == "dr_did" and parsed.task.type == "binary"
+                else None
+            ),
+            "binary_outcome": bool(parsed.task.type == "binary"),
             "time_col": parsed.causal.time_col,
             "post_col": parsed.causal.post_col,
             "unit_id_col": parsed.causal.unit_id_col,

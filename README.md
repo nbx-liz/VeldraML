@@ -31,7 +31,7 @@ Implemented:
 - `export` for all implemented tasks (`python` always, `onnx` optional dependency)
 - `estimate_dr` for:
   - `causal.method=dr` with `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
-  - `causal.method=dr_did` with `task.type=regression` (2-period panel/repeated cross-section)
+  - `causal.method=dr_did` with `task.type=regression|binary` (2-period panel/repeated cross-section)
 - Dash GUI adapter MVP:
   - Config editor + validation
   - Run console (`fit/evaluate/tune/simulate/export/estimate_dr`)
@@ -153,6 +153,34 @@ drdid_result = estimate_dr(
 )
 print(drdid_result.estimate, drdid_result.metrics["drdid"])
 ```
+
+### API usage (causal DR-DiD, binary outcome)
+
+```python
+from veldra.api import estimate_dr
+
+drdid_binary_result = estimate_dr(
+    {
+        "config_version": 1,
+        "task": {"type": "binary"},
+        "data": {"path": "drdid_panel_binary.csv", "target": "outcome"},
+        "causal": {
+            "method": "dr_did",
+            "treatment_col": "treatment",
+            "design": "panel",
+            "time_col": "time",
+            "post_col": "post",
+            "unit_id_col": "unit_id",
+            "estimand": "att",  # default
+            "propensity_calibration": "platt",  # default
+        },
+        "export": {"artifact_dir": "artifacts"},
+    }
+)
+print(drdid_binary_result.estimate, drdid_binary_result.metadata["outcome_scale"])
+```
+
+Binary DR-DiD estimates are interpreted as **Risk Difference ATT** (treated-group probability difference).
 
 Advanced time-series split options (non-default, opt-in):
 

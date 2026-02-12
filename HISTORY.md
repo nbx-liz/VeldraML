@@ -606,6 +606,99 @@
 **Results**
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
+
+### 2026-02-12 (Session planning: phase23-drdid-binary-riskdiff-mvp)
+**Context**
+- Extend DR-DiD from regression-only to binary outcome while keeping stable API signatures unchanged.
+- Add minimum diagnostics for overlap and covariate balance.
+
+**Decisions**
+- Decision: provisional
+  - Policy:
+    - `causal.method='dr_did'` supports `task.type='binary'` in addition to regression.
+  - Reason:
+    - Close the remaining P1 causal capability gap without adding new public APIs.
+  - Impact area:
+    - Causal runtime capability / Compatibility
+
+- Decision: provisional
+  - Policy:
+    - Binary DR-DiD effect is interpreted as Risk Difference ATT.
+  - Reason:
+    - DR-DiD pseudo outcome targets treated-group probability difference in 2-period setup.
+  - Impact area:
+    - Causal interpretation contract / Documentation
+
+- Decision: provisional
+  - Policy:
+    - Add minimum diagnostics: `overlap_metric`, `smd_max_unweighted`, `smd_max_weighted`.
+  - Reason:
+    - Provide baseline balance/overlap observability for operational review.
+  - Impact area:
+    - Diagnostics / Operability
+
+### 2026-02-12 (Session/PR: phase23-drdid-binary-riskdiff-mvp)
+**Context**
+- Implement DR-DiD binary support and minimum diagnostics in a non-breaking way.
+- Preserve existing regression DR-DiD behavior and all stable API signatures.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/config/models.py`:
+    - `causal.method='dr_did'` now allows `task.type='regression'|'binary'`.
+  - Updated `src/veldra/api/runner.py`:
+    - `estimate_dr` DR-DiD gate expanded to regression/binary.
+    - `CausalResult.metadata` now includes `outcome_scale` and `binary_outcome`.
+  - Updated `src/veldra/causal/dr_did.py`:
+    - binary outcome validation (0/1 strict) for DR-DiD.
+    - DR-DiD internal DR execution fixed to regression task for pseudo outcomes.
+    - added diagnostics:
+      - `smd_max_unweighted`
+      - `smd_max_weighted` (ATT weighting)
+      - `overlap_metric` (existing, retained)
+    - propagated diagnostic fields to metrics and summary outputs.
+- Tests added:
+  - `tests/test_drdid_binary_smoke_panel.py`
+  - `tests/test_drdid_binary_smoke_repeated_cs.py`
+  - `tests/test_drdid_binary_validation.py`
+  - `tests/test_drdid_binary_metrics_contract.py`
+- Tests updated:
+  - `tests/test_runconfig_validation.py`
+  - `tests/test_drdid_validation.py`
+  - `tests/test_drdid_smoke_panel.py`
+  - `tests/test_drdid_smoke_repeated_cs.py`
+  - `tests/test_drdid_outputs.py`
+  - `tests/test_drdid_internal.py`
+  - `tests/test_api_surface.py`
+- Docs updated:
+  - `README.md`
+  - `DESIGN_BLUEPRINT.md`
+  - `HISTORY.md`
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - DR-DiD now supports both regression and binary outcomes for panel/repeated-CS designs.
+  - Reason:
+    - Completes the intended MVP scope while preserving API compatibility.
+  - Impact area:
+    - Causal runtime capability / Backward compatibility
+
+- Decision: confirmed
+  - Policy:
+    - Binary DR-DiD is surfaced as Risk Difference ATT, with explicit metadata flags.
+  - Reason:
+    - Makes interpretation unambiguous for downstream consumers.
+  - Impact area:
+    - Analysis contract / Documentation clarity
+
+- Decision: confirmed
+  - Policy:
+    - Minimum overlap and balance diagnostics are part of DR-DiD metric output.
+  - Reason:
+    - Improves practical trust and debugging for causal runs.
+  - Impact area:
+    - Operability / Quality assurance
 - Tune now supports:
   - objective selection
   - resume continuation

@@ -342,10 +342,15 @@ class RunConfig(BaseModel):
                         "causal.unit_id_col is only supported for causal.method='dr_did'"
                     )
             elif self.causal.method == "dr_did":
-                if self.task.type != "regression":
+                if self.task.type not in {"regression", "binary"}:
                     raise ValueError(
                         "causal.method='dr_did' supports only "
-                        "task.type='regression' in current phase"
+                        "task.type='regression' or 'binary' in current phase"
+                    )
+                if self.task.type == "binary" and self.causal.estimand != "att":
+                    raise ValueError(
+                        "causal.estimand must be 'att' when "
+                        "causal.method='dr_did' and task.type='binary'"
                     )
                 if self.causal.design is None:
                     raise ValueError("causal.design is required when causal.method='dr_did'")
