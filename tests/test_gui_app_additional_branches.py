@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +53,24 @@ def test_ensure_default_run_config_and_render_routes(tmp_path: Path) -> None:
     assert "regression" in cfg.read_text(encoding="utf-8")
 
     assert app_module.render_page("/data") is not None
+
+
+def test_system_temp_dir_and_cleanup(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(app_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    tmp_dir = app_module._get_gui_system_temp_dir()
+    assert tmp_dir.name == "veldra_system_temporary_uploads"
+    assert tmp_dir.exists()
+
+    stale_file = tmp_dir / "stale.csv"
+    fresh_file = tmp_dir / "fresh.csv"
+    stale_file.write_text("x", encoding="utf-8")
+    fresh_file.write_text("y", encoding="utf-8")
+    now = app_module.time.time()
+    os.utime(stale_file, (now - 1000, now - 1000))
+    os.utime(fresh_file, (now - 10, now - 10))
+    app_module._cleanup_gui_system_temp_files(max_age_seconds=100)
+    assert not stale_file.exists()
+    assert fresh_file.exists()
 
 
 def test_stepper_bar_and_timestamp_helpers() -> None:

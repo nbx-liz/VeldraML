@@ -45,8 +45,8 @@ def test_inspect_data_upload_csv():
                 # args: n_clicks, file_path, upload_contents, upload_filename
                 out_div, msg, state = _cb_inspect_data(1, "", content_string, "test_upload.csv")
 
-                # Check that final data path is temp path
-                assert "temp_data" in state["data_path"]
+                # Check that final data path is system temp path
+                assert "veldra_system_temporary_uploads" in state["data_path"]
                 assert "test_upload.csv" in state["data_path"]
                 assert mock_inspect.called
 
