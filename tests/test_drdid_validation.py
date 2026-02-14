@@ -65,4 +65,3 @@ def test_drdid_binary_panel_config_is_accepted(tmp_path) -> None:
     )
     assert result.method == "dr_did"
     assert result.metadata["binary_outcome"] is True
-

@@ -68,4 +68,3 @@ def test_causal_tune_rejects_non_positive_balance_threshold(tmp_path) -> None:
                 },
             }
         )
-

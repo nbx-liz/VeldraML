@@ -269,7 +269,17 @@ def _max_smd(
 
 
 def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOutput:
-    """Run doubly robust estimation using cross-fitting and calibrated propensity."""
+    """Run doubly robust estimation using cross-fitting and calibrated propensity.
+
+    Notes
+    -----
+    - Nuisance models estimate propensity and outcome regressions, then combine
+      them through DR score equations for ATT/ATE.
+    - With ``causal.cross_fit=true``, nuisance predictions are generated in an
+      out-of-fold manner to reduce overfitting bias.
+    - Propensity predictions are calibrated (Platt/isotonic) and clipped before
+      score construction for numerical stability.
+    """
     if config.causal is None:
         raise VeldraValidationError("causal config is required for DR estimation.")
     if config.causal.method != "dr":
@@ -371,9 +381,7 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
     else:
         score = _att_score(y_np, t_np, e_hat, m0_np)
         p1 = float(np.mean(t_np))
-        ipw = float(
-            np.mean((t_np * y_np - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) * y_np) / p1)
-        )
+        ipw = float(np.mean((t_np * y_np - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) * y_np) / p1))
         weights = t_np / p1 - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) / p1
 
     estimate = float(np.mean(score))

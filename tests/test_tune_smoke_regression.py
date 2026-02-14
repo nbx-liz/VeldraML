@@ -35,4 +35,3 @@ def test_tune_smoke_regression(tmp_path) -> None:
     assert result.best_params
     assert result.metadata["metric_name"] == "rmse"
     assert result.metadata["direction"] == "minimize"
-

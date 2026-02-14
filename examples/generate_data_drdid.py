@@ -39,10 +39,7 @@ def generate_panel_data(
     macro_trend = 800.0 + 180.0 * baseline_skill
     pre_income = baseline_income + rng.normal(0.0, 1200.0, size=n_units)
     post_income = (
-        baseline_income
-        + macro_trend
-        + treatment * true_att
-        + rng.normal(0.0, 1200.0, size=n_units)
+        baseline_income + macro_trend + treatment * true_att + rng.normal(0.0, 1200.0, size=n_units)
     )
 
     pre = pd.DataFrame(
@@ -90,26 +87,14 @@ def generate_repeated_cs_data(
     baseline_skill = rng.normal(0.0, 1.0, size=n_total)
 
     logits = (
-        -1.1
-        + 0.04 * (age - 30)
-        + 0.13 * (education - 12)
-        + 0.65 * baseline_skill
-        + 0.10 * post
+        -1.1 + 0.04 * (age - 30) + 0.13 * (education - 12) + 0.65 * baseline_skill + 0.10 * post
     )
     propensity = _sigmoid(logits)
     treatment = rng.binomial(1, propensity, size=n_total)
 
-    base = (
-        11000.0
-        + 300.0 * (age - 30)
-        + 450.0 * (education - 12)
-        + 1800.0 * baseline_skill
-    )
+    base = 11000.0 + 300.0 * (age - 30) + 450.0 * (education - 12) + 1800.0 * baseline_skill
     outcome = (
-        base
-        + 700.0 * post
-        + true_att * treatment * post
-        + rng.normal(0.0, 2600.0, size=n_total)
+        base + 700.0 * post + true_att * treatment * post + rng.normal(0.0, 2600.0, size=n_total)
     )
     df = pd.DataFrame(
         {
@@ -169,4 +154,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -54,9 +54,9 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
     _multiclass_frame().to_csv(mc_path, index=False)
     _frontier_frame().to_csv(fr_path, index=False)
     causal_frame = _regression_frame(seed=909)
-    causal_frame["treatment"] = (
-        causal_frame["x1"] > float(causal_frame["x1"].median())
-    ).astype(int)
+    causal_frame["treatment"] = (causal_frame["x1"] > float(causal_frame["x1"].median())).astype(
+        int
+    )
     causal_path = tmp_path / "causal.csv"
     causal_frame.to_csv(causal_path, index=False)
 
@@ -159,4 +159,3 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
         }
     )
     assert causal_balance.metadata["metric_name"] == "dr_balance_priority"
-

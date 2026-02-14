@@ -53,4 +53,3 @@ def test_drdid_writes_summary_and_observation_outputs(tmp_path) -> None:
     assert "overlap_metric" in payload
     assert "smd_max_unweighted" in payload
     assert "smd_max_weighted" in payload
-

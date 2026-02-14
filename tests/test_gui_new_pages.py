@@ -1,7 +1,9 @@
 """Tests for new GUI pages (Data, Results)."""
+
 from __future__ import annotations
 
 import importlib.util
+
 import pytest
 
 _DASH_AVAILABLE = (
@@ -28,22 +30,22 @@ def _collect_ids(component, out: set[str]) -> None:
 
 def test_data_page_layout() -> None:
     from veldra.gui.pages import data_page
-    
+
     layout = data_page.layout()
     ids: set[str] = set()
     _collect_ids(layout, ids)
-    
+
     assert "data-file-path" in ids
     assert "data-loading" in ids
 
 
 def test_results_page_layout() -> None:
     from veldra.gui.pages import results_page
-    
+
     layout = results_page.layout()
     ids: set[str] = set()
     _collect_ids(layout, ids)
-    
+
     assert "artifact-root-path" in ids
     assert "artifact-select" in ids
     assert "artifact-refresh-btn" in ids

@@ -100,9 +100,7 @@ def _default_search_space(task_type: str, preset: str) -> dict[str, Any]:
             "bagging_fraction": {"type": "float", "low": 0.6, "high": 1.0},
             "bagging_freq": {"type": "int", "low": 1, "high": 7},
         }
-    raise VeldraValidationError(
-        f"Unsupported tuning preset '{preset}' for task '{task_type}'."
-    )
+    raise VeldraValidationError(f"Unsupported tuning preset '{preset}' for task '{task_type}'.")
 
 
 def _resolve_search_space(config: RunConfig) -> dict[str, Any]:
@@ -146,10 +144,7 @@ def _build_trial_config(config: RunConfig, trial_params: dict[str, Any]) -> RunC
         **trial_cfg.train.lgb_params,
         **trial_params,
     }
-    if (
-        trial_cfg.task.type == "binary"
-        and trial_cfg.postprocess.threshold_optimization is not None
-    ):
+    if trial_cfg.task.type == "binary" and trial_cfg.postprocess.threshold_optimization is not None:
         trial_cfg.postprocess.threshold_optimization.enabled = False
     return trial_cfg
 
@@ -173,11 +168,7 @@ def _frontier_objective_from_metrics(
     if "pinball" not in mean_metrics:
         raise VeldraValidationError("Tuning metric 'pinball' is missing from training output.")
     pinball = float(mean_metrics["pinball"])
-    coverage = (
-        float(mean_metrics["coverage"])
-        if "coverage" in mean_metrics
-        else None
-    )
+    coverage = float(mean_metrics["coverage"]) if "coverage" in mean_metrics else None
     coverage_target, coverage_tolerance, penalty_weight = _resolve_frontier_tuning_terms(config)
     if metric_name == "pinball_coverage_penalty" and coverage is None:
         raise VeldraValidationError(
@@ -217,9 +208,7 @@ def _score_for_task_with_components(
                 f"Unsupported causal method '{config.causal.method}' for tuning."
             )
         std_error = (
-            float(estimation.std_error)
-            if estimation.std_error is not None
-            else float("inf")
+            float(estimation.std_error) if estimation.std_error is not None else float("inf")
         )
         overlap_metric = float(estimation.metrics.get("overlap_metric", 0.0))
         smd_max_unweighted = float(estimation.metrics.get("smd_max_unweighted", float("inf")))
@@ -270,10 +259,7 @@ def _score_for_task_with_components(
         raise VeldraValidationError(f"Unsupported tuning task type '{config.task.type}'.")
 
     mean_metrics = output.metrics.get("mean", {})
-    if (
-        config.task.type == "frontier"
-        and metric_name in {"pinball", "pinball_coverage_penalty"}
-    ):
+    if config.task.type == "frontier" and metric_name in {"pinball", "pinball_coverage_penalty"}:
         return _frontier_objective_from_metrics(config, metric_name, mean_metrics)
 
     if metric_name not in mean_metrics:
@@ -344,7 +330,18 @@ def run_tuning(
     output_dir: Path,
     on_trial_complete: Callable[[dict[str, Any]], None] | None = None,
 ) -> TuningOutput:
-    """Run Optuna tuning and return summary payload for API adapter layer."""
+    """Run Optuna tuning and return summary payload for API adapter layer.
+
+    Notes
+    -----
+    - Search space is resolved from explicit config or preset defaults.
+    - Each trial trains/evaluates through existing task trainers to keep scoring
+      logic consistent with ``fit``.
+    - Intermediate study summary and trial parquet artifacts are updated on each
+      callback for resume-safe operation.
+    - For causal objectives, overlap/balance penalties are composed into the
+      final objective value.
+    """
     if config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(
             "run_tuning supports only regression/binary/multiclass/frontier tasks."
@@ -403,9 +400,7 @@ def run_tuning(
                     if isinstance(value, (int, float, bool, str))
                 }
             )
-            on_trial_complete(
-                payload
-            )
+            on_trial_complete(payload)
 
     def objective(trial: optuna.Trial) -> float:
         params: dict[str, Any] = {}

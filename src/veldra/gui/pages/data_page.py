@@ -1,8 +1,10 @@
 """Data selection page."""
+
 from __future__ import annotations
 
-from dash import dcc, html
 import dash_bootstrap_components as dbc
+from dash import dcc, html
+
 from veldra.gui.components.kpi_cards import kpi_card
 
 
@@ -10,15 +12,12 @@ def layout() -> html.Div:
     return html.Div(
         [
             html.H2("Data Selection", className="mb-4"),
-            
             # File Selection Area
             html.Div(
                 [
                     dcc.Upload(
                         id="data-upload-drag",
-                        children=html.Div(
-                            ["Drag & Drop or ", html.A("Select Data File")]
-                        ),
+                        children=html.Div(["Drag & Drop or ", html.A("Select Data File")]),
                         style={
                             "width": "100%",
                             "height": "100px",
@@ -32,15 +31,18 @@ def layout() -> html.Div:
                             "color": "var(--text-primary)",
                             "cursor": "pointer",
                         },
-                        multiple=False
+                        multiple=False,
                     ),
                     html.Div(id="data-upload-msg", className="text-center text-info small mb-2"),
                     # Selected file indicator (read-only)
                     html.Div(
                         [
                             html.I(className="bi bi-file-earmark-text me-2"),
-                            html.Span("No file selected — upload or drop a file above", id="data-selected-file-label",
-                                       className="text-light"),
+                            html.Span(
+                                "No file selected — upload or drop a file above",
+                                id="data-selected-file-label",
+                                className="text-light",
+                            ),
                         ],
                         id="data-selected-file",
                         className="d-flex align-items-center p-3 mb-3 rounded",
@@ -59,7 +61,6 @@ def layout() -> html.Div:
                 ],
                 className="glass-card mb-4",
             ),
-            
             # Loading Spinner
             dcc.Loading(
                 id="data-loading",
@@ -68,6 +69,7 @@ def layout() -> html.Div:
             ),
         ]
     )
+
 
 def render_data_stats(stats: dict) -> html.Div:
     """Render data statistics cards."""
@@ -80,18 +82,32 @@ def render_data_stats(stats: dict) -> html.Div:
                     kpi_card("Columns", stats["n_cols"]),
                     kpi_card("Numeric Vars", len(stats["numeric_cols"])),
                     kpi_card("Categorical Vars", len(stats["categorical_cols"])),
-                    kpi_card("Missing Values", stats["missing_count"], 
-                             trend="High" if stats["missing_count"] > 0 else "None", 
-                             trend_direction="down" if stats["missing_count"] > 0 else "neutral"),
+                    kpi_card(
+                        "Missing Values",
+                        stats["missing_count"],
+                        trend="High" if stats["missing_count"] > 0 else "None",
+                        trend_direction="down" if stats["missing_count"] > 0 else "neutral",
+                    ),
                 ],
-                style={"display": "flex", "flexWrap": "wrap", "gap": "10px", "marginBottom": "24px"}
+                style={
+                    "display": "flex",
+                    "flexWrap": "wrap",
+                    "gap": "10px",
+                    "marginBottom": "24px",
+                },
             ),
-
             # Target selection moved to Config Page
             # Target selection moved to Config Page
-            dbc.Button("Next: Configure →", id="data-to-config-btn", color="success", href="/config", className="w-100"),
+            dbc.Button(
+                "Next: Configure →",
+                id="data-to-config-btn",
+                color="success",
+                href="/config",
+                className="w-100",
+            ),
         ]
     )
+
 
 def render_data_preview(preview: list[dict]) -> html.Div:
     """Render data preview table."""
@@ -99,11 +115,7 @@ def render_data_preview(preview: list[dict]) -> html.Div:
         return html.Div()
 
     columns = list(preview[0].keys())
-    header = html.Thead(
-        html.Tr(
-            [html.Th(col, style={"whiteSpace": "nowrap"}) for col in columns]
-        )
-    )
+    header = html.Thead(html.Tr([html.Th(col, style={"whiteSpace": "nowrap"}) for col in columns]))
     body_rows = []
     for row in preview:
         body_rows.append(

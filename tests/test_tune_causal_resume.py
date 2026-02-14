@@ -64,4 +64,3 @@ def test_causal_tune_resume_continues_trials(tmp_path) -> None:
     second_trials = pd.read_parquet(Path(second.metadata["trials_path"]))
     assert len(second_trials) >= len(first_trials) + 1
     assert second.metadata["resume"] is True
-

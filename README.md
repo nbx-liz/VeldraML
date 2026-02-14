@@ -3,6 +3,24 @@
 VeldraML is a config-driven LightGBM analysis library.
 Current implemented tasks are regression, binary classification, multiclass classification, and frontier.
 
+## Why VeldraML?
+
+Teams often hit the same operational problems:
+- experimentation and production paths drift into separate interfaces
+- flexible configs become inconsistent and reduce reproducibility
+- training outputs are not packaged as a portable handoff unit
+
+VeldraML addresses those gaps with explicit contracts:
+- one entrypoint contract: `RunConfig`
+- one handoff contract: `Artifact`
+- one stable adapter surface: `veldra.api.*`
+
+When to use:
+- config-driven ML analysis workflows where reproducibility and traceability matter.
+
+When not to use:
+- a distributed training platform or online serving infrastructure by itself.
+
 ## Features
 
 - Stable public API under `veldra.api.*`
@@ -18,6 +36,33 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - Causal workflow: `estimate_dr` (DR + DR-DiD, ATT default)
 - GUI workflow (optional): Dash enhanced MVP (`config`/`run`/`artifacts`)
 - Config migration utility: `veldra config migrate` (v1 normalization)
+
+## API Reference (Summary)
+
+| API | Input | Output | Typical Raises |
+| --- | --- | --- | --- |
+| `fit(config)` | `RunConfig \| dict` | `RunResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `tune(config)` | `RunConfig \| dict` | `TuneResult` | `VeldraValidationError` |
+| `estimate_dr(config)` | `RunConfig \| dict` | `CausalResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `evaluate(artifact_or_config, data)` | `Artifact \| RunConfig \| dict`, `pd.DataFrame` | `EvalResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `predict(artifact, data)` | `Artifact`, `pd.DataFrame` | `Prediction` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `simulate(artifact, data, scenarios)` | `Artifact`, `pd.DataFrame`, `dict \| list[dict]` | `SimulationResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `export(artifact, format)` | `Artifact`, `"python" \| "onnx"` | `ExportResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+
+## Algorithm Overview
+
+- CV training (`fit`):
+  - Uses split strategy from `RunConfig.split` (`kfold/group/stratified/timeseries`) and aggregates OOF metrics.
+- Binary probability calibration:
+  - Fits calibrator from OOF raw probabilities only to prevent leakage.
+- DR estimation (`causal.method="dr"`):
+  - Combines calibrated propensity and outcome nuisance models through doubly robust score equations.
+- DR-DiD estimation (`causal.method="dr_did"`):
+  - Converts data to pseudo outcomes (panel/repeated-cross-section), then applies DR pipeline with overlap/SMD diagnostics.
+- Frontier training:
+  - Optimizes quantile objective and reports pinball/coverage/inefficiency metrics.
+- Scenario DSL simulation:
+  - Applies validated feature perturbations (`set/add/mul/clip`) and reports baseline vs scenario deltas.
 
 ## Project Status
 
@@ -221,6 +266,97 @@ tune_result = tune(
 )
 print(tune_result.best_score, tune_result.best_params)
 ```
+
+## From Quick Start to Production
+
+Bridge to production by keeping one run contract and validating each stage.
+
+### Step 1. Fix the data contract
+
+- Inputs:
+  - source dataset path
+  - agreed columns (`target`, optional `treatment`, optional id columns)
+- Command example:
+```bash
+uv run python -c "from veldra.data import load_tabular_data; df=load_tabular_data('train.csv'); print(df.shape, list(df.columns)[:10])"
+```
+- Success criteria:
+  - required columns exist
+  - target/treatment semantics are fixed for this run
+
+### Step 2. Create RunConfig from template
+
+- Inputs:
+  - task type and split strategy
+  - artifact root path
+- Command example:
+```bash
+cp configs/gui_run.yaml configs/run.prod.yaml
+uv run veldra config migrate --input configs/run.prod.yaml
+```
+- Success criteria:
+  - config validates and migration reports expected version
+  - output policy remains non-destructive
+
+### Step 3. Execute fit/evaluate/tune in order
+
+- Inputs:
+  - validated RunConfig
+  - train/eval datasets
+- Command example:
+```bash
+uv run python examples/run_demo_regression.py
+uv run python examples/evaluate_demo_artifact.py --artifact-path <artifact_dir>
+uv run python examples/run_demo_tune.py --task regression --n-trials 20
+```
+- Success criteria:
+  - artifact directory is created
+  - metrics and tuning artifacts are persisted
+
+### Step 4. Export and verify artifacts
+
+- Inputs:
+  - artifact path
+  - export format
+- Command example:
+```bash
+uv run python examples/run_demo_export.py --artifact-path <artifact_dir> --format python
+```
+- Success criteria:
+  - export directory exists
+  - `validation_report.json` is generated and reflected in metadata
+
+### Step 5. Reproduce with the same contract
+
+- Inputs:
+  - same RunConfig, seeds, split settings
+- Command example:
+```bash
+uv run python examples/run_demo_regression.py
+```
+- Success criteria:
+  - outputs are reproducible within expected numeric tolerance
+  - config and artifact metadata are traceable
+
+### Step 6. GUI operations (optional)
+
+- Inputs:
+  - GUI runtime env vars and SQLite path
+- Command example:
+```bash
+VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3 uv run veldra-gui --host 127.0.0.1 --port 8050
+```
+- Success criteria:
+  - async queue state is visible
+  - queued cancel works immediately
+  - running cancel is recorded as best-effort (`cancel_requested`)
+
+### Production minimum checklist
+
+- `config_version` is pinned and migration output is archived.
+- `export.artifact_dir` is fixed per environment.
+- export validation report is archived with run outputs.
+- migration stays non-destructive (no overwrite).
 
 ### Example scripts
 
@@ -475,6 +611,192 @@ or
 ```bat
 scripts\start_gui.cmd
 ```
+
+## RunConfig Reference (Complete)
+
+<!-- RUNCONFIG_REF:START -->
+### Field Reference
+
+_This section is auto-generated from `src/veldra/config/models.py`. Do not edit manually._
+
+| path | type | required | default | allowed values | scope | description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `config_version` | `int` | yes | - | - | - | Configuration schema version. |
+| `task` | `TaskConfig` | yes | - | - | - | Task-level settings container. |
+| `task.type` | ``regression` | `binary` | `multiclass` | `frontier`` | yes | - | `regression`, `binary`, `multiclass`, `frontier` | - | Task kind to execute. |
+| `data` | `DataConfig` | yes | - | - | - | Input data contract settings. |
+| `data.path` | `str | None` | no | `None` | - | - | Training data path (required for fit/tune/estimate_dr). |
+| `data.target` | `str` | yes | - | - | - | Target column name. |
+| `data.id_cols` | `list[str]` | no | `[]` | - | - | Identifier columns protected in simulation. |
+| `data.categorical` | `list[str]` | no | `[]` | - | - | Categorical feature columns for LightGBM. |
+| `data.drop_cols` | `list[str]` | no | `[]` | - | - | Columns dropped before training. |
+| `split` | `SplitConfig` | no | `<factory>` | - | - | Cross-validation split settings. |
+| `split.type` | ``kfold` | `stratified` | `group` | `timeseries`` | no | `kfold` | `kfold`, `stratified`, `group`, `timeseries` | - | Split strategy selector. |
+| `split.n_splits` | `int` | no | `5` | - | - | Number of CV folds. |
+| `split.time_col` | `str | None` | no | `None` | - | - | Time column for timeseries split. |
+| `split.group_col` | `str | None` | no | `None` | - | - | Group column for group split. |
+| `split.seed` | `int` | no | `42` | - | - | Random seed for split shuffling. |
+| `split.timeseries_mode` | ``expanding` | `blocked`` | no | `expanding` | `expanding`, `blocked` | - | Timeseries CV mode. |
+| `split.test_size` | `int | None` | no | `None` | - | - | Validation window size for timeseries split. |
+| `split.gap` | `int` | no | `0` | - | - | Gap between train and validation windows. |
+| `split.embargo` | `int` | no | `0` | - | - | Embargo window after validation horizon. |
+| `split.train_size` | `int | None` | no | `None` | - | - | Fixed train window size in blocked mode. |
+| `train` | `TrainConfig` | no | `<factory>` | - | - | Model training settings. |
+| `train.lgb_params` | `dict[str, Any]` | no | `{}` | - | - | LightGBM parameter overrides. |
+| `train.early_stopping_rounds` | `int | None` | no | `100` | - | - | Early stopping rounds. |
+| `train.seed` | `int` | no | `42` | - | - | Training seed. |
+| `tuning` | `TuningConfig` | no | `<factory>` | - | - | Hyperparameter tuning settings. |
+| `tuning.enabled` | `bool` | no | `false` | - | - | Enable/disable tuning path. |
+| `tuning.n_trials` | `int` | no | `30` | - | - | Optuna trial count. |
+| `tuning.search_space` | `dict[str, Any]` | no | `{}` | - | - | Explicit search space spec. |
+| `tuning.preset` | ``fast` | `standard`` | no | `standard` | `fast`, `standard` | - | Default search space preset. |
+| `tuning.objective` | `str | None` | no | `None` | - | - | Objective metric name. |
+| `tuning.resume` | `bool` | no | `false` | - | - | Resume an existing study. |
+| `tuning.study_name` | `str | None` | no | `None` | - | - | Explicit study name. |
+| `tuning.log_level` | ``DEBUG` | `INFO` | `WARNING` | `ERROR`` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | - | Tuning log verbosity. |
+| `tuning.coverage_target` | `float | None` | no | `None` | - | task.type=frontier | Target coverage for frontier tuning. |
+| `tuning.coverage_tolerance` | `float` | no | `0.01` | - | task.type=frontier | Allowed coverage deviation. |
+| `tuning.penalty_weight` | `float` | no | `1.0` | - | task.type=frontier | Coverage penalty weight. |
+| `tuning.causal_penalty_weight` | `float` | no | `1.0` | - | causal configured | Penalty weight for causal objectives. |
+| `tuning.causal_balance_threshold` | `float` | no | `0.1` | - | causal configured | Max weighted SMD threshold. |
+| `postprocess` | `PostprocessConfig` | no | `<factory>` | - | - | Postprocessing settings. |
+| `postprocess.calibration` | ``platt` | `isotonic` | None` | no | `None` | `platt`, `isotonic` | task.type=binary | Probability calibration method. |
+| `postprocess.threshold` | `float | None` | no | `None` | - | task.type=binary | Fixed decision threshold for binary. |
+| `postprocess.threshold_optimization` | `ForwardRef("'ThresholdOptimizationConfig | None'")` | no | `None` | - | task.type=binary | Threshold optimization settings. |
+| `simulation` | `SimulationConfig` | no | `<factory>` | - | - | Simulation DSL settings. |
+| `simulation.scenarios` | `list[dict[str, Any]]` | no | `[]` | - | - | Scenario list. |
+| `simulation.actions` | `list[dict[str, Any]]` | no | `[]` | - | - | Action list (legacy/helper). |
+| `simulation.constraints` | `list[dict[str, Any]]` | no | `[]` | - | - | Constraint list (reserved). |
+| `export` | `ExportConfig` | no | `<factory>` | - | - | Artifact/export settings. |
+| `export.artifact_dir` | `str` | no | `artifacts` | - | - | Artifact root directory. |
+| `export.inference_package` | `bool` | no | `false` | - | - | Reserved package export toggle. |
+| `export.onnx_optimization` | `ForwardRef("'OnnxOptimizationConfig'")` | no | `<factory>` | - | - | ONNX optimization settings. |
+| `frontier` | `FrontierConfig` | no | `<factory>` | - | task.type=frontier | Frontier task settings. |
+| `frontier.alpha` | `float` | no | `0.9` | - | task.type=frontier | Quantile alpha (0,1). |
+| `causal` | `CausalConfig | None` | no | `None` | - | task.type in {regression,binary} | Causal estimation settings. |
+| `causal.method` | ``dr` | `dr_did`` | no | `dr` | `dr`, `dr_did` | - | Causal estimator family. |
+| `causal.treatment_col` | `str` | yes | - | - | - | Treatment column name. |
+| `causal.estimand` | ``att` | `ate`` | no | `att` | `att`, `ate` | - | Target estimand. |
+| `causal.design` | ``panel` | `repeated_cross_section` | None` | no | `None` | `panel`, `repeated_cross_section` | causal.method=dr_did | DR-DiD design type. |
+| `causal.time_col` | `str | None` | no | `None` | - | causal.method=dr_did | Time column for DR-DiD. |
+| `causal.post_col` | `str | None` | no | `None` | - | causal.method=dr_did | Post-period indicator column. |
+| `causal.unit_id_col` | `str | None` | no | `None` | - | causal.method=dr_did, design=panel | Unit id column (panel DR-DiD). |
+| `causal.propensity_clip` | `float` | no | `0.01` | - | - | Propensity clipping threshold. |
+| `causal.cross_fit` | `bool` | no | `true` | - | - | Enable nuisance cross-fitting. |
+| `causal.propensity_calibration` | ``platt` | `isotonic`` | no | `platt` | `platt`, `isotonic` | - | Propensity calibration method. |
+| `causal.nuisance_params` | `dict[str, Any]` | no | `{}` | - | - | Nuisance model parameter overrides. |
+
+### Tuning Objective Matrix
+
+#### Non-causal
+
+| task.type | allowed objectives | default |
+| --- | --- | --- |
+| regression | `rmse`, `mae`, `r2` | `rmse` |
+| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall` | `auc` |
+| multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |
+| frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |
+
+#### Causal
+
+| causal.method | allowed objectives | default |
+| --- | --- | --- |
+| dr | `dr_std_error`, `dr_overlap_penalty`, `dr_balance_priority` | `dr_balance_priority` |
+| dr_did | `drdid_std_error`, `drdid_overlap_penalty`, `drdid_balance_priority` | `drdid_balance_priority` |
+
+### Cross-field Constraints (Key Rules)
+
+| group | rule |
+| --- | --- |
+| version | `config_version` must be `>= 1`. |
+| split(timeseries) | `split.time_col` required; `gap>=0`; `embargo>=0`; `test_size>=1` when set. |
+| split(blocked timeseries) | `split.train_size>=1` required when `timeseries_mode=blocked`. |
+| split(non-timeseries) | `timeseries_mode=expanding`; other timeseries fields are forbidden. |
+| split(group) | `split.group_col` required when `split.type=group`. |
+| frontier | `frontier.alpha` must satisfy `0<alpha<1`; `split.type=stratified` is forbidden. |
+| non-frontier | Custom `frontier.*` is forbidden outside `task.type=frontier`. |
+| binary postprocess | `postprocess.*` only for `task.type=binary`; calibration is `platt` only. |
+| threshold rules | Fixed threshold and enabled threshold optimization cannot be combined. |
+| causal(method=dr) | `task.type` must be `regression|binary`; DiD fields must be unset. |
+| causal(method=dr_did) | requires `design/time_col/post_col`; panel also needs `unit_id_col`. |
+| causal(binary dr_did) | `causal.estimand` must be `att`. |
+| tuning(frontier) | `coverage_target` in `(0,1)`; `coverage_tolerance>=0`; `penalty_weight>=0`. |
+| tuning(non-frontier) | `coverage_target` forbidden; tolerance/penalty keep defaults. |
+| tuning(causal) | `tuning.objective` must come from causal objective set for selected method. |
+| tuning(non-causal) | `tuning.objective` must come from task set; causal knobs keep defaults. |
+
+### Minimal Templates
+
+#### 1) Regression (standard)
+
+```yaml
+config_version: 1
+task: {type: regression}
+data: {path: train.csv, target: target}
+split: {type: kfold, n_splits: 5, seed: 42}
+export: {artifact_dir: artifacts}
+```
+
+#### 2) Binary + calibration
+
+```yaml
+config_version: 1
+task: {type: binary}
+data: {path: train.csv, target: target}
+postprocess:
+  calibration: platt
+  threshold_optimization: {enabled: true, objective: f1}
+export: {artifact_dir: artifacts}
+```
+
+#### 3) Frontier + coverage-aware tuning
+
+```yaml
+config_version: 1
+task: {type: frontier}
+data: {path: train.csv, target: target}
+frontier: {alpha: 0.9}
+tuning:
+  enabled: true
+  objective: pinball_coverage_penalty
+  coverage_target: 0.9
+  coverage_tolerance: 0.02
+  penalty_weight: 2.0
+export: {artifact_dir: artifacts}
+```
+
+#### 4) Causal DR
+
+```yaml
+config_version: 1
+task: {type: regression}
+data: {path: train.csv, target: outcome}
+causal:
+  method: dr
+  treatment_col: treatment
+  estimand: att
+  propensity_calibration: platt
+export: {artifact_dir: artifacts}
+```
+
+#### 5) Causal DR-DiD (panel / repeated_cross_section)
+
+```yaml
+config_version: 1
+task: {type: regression}
+data: {path: train.csv, target: outcome}
+causal:
+  method: dr_did
+  treatment_col: treatment
+  design: panel  # or repeated_cross_section
+  time_col: time
+  post_col: post
+  unit_id_col: unit_id  # required for panel
+  estimand: att
+  propensity_calibration: platt
+export: {artifact_dir: artifacts}
+```
+<!-- RUNCONFIG_REF:END -->
 
 ## Config Migration
 

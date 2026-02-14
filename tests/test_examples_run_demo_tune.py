@@ -260,4 +260,3 @@ def test_run_demo_tune_causal_default_data_and_study_name_avoid_collision(tmp_pa
     assert latest_config["tuning"]["study_name"].startswith("demo_regression_")
     data_path = latest_config["data"]["path"]
     assert data_path.endswith("causal_dr_tune_demo.csv")
-

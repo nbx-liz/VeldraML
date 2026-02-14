@@ -1,16 +1,18 @@
 """Run console page."""
+
 from __future__ import annotations
 
-from dash import dcc, html
 import dash_bootstrap_components as dbc
+from dash import dcc, html
+
 from veldra.gui.components.task_table import task_table
 
 
 def layout(state: dict | None = None) -> html.Div:
     data_path_val = ""
-    config_path_val = "configs/gui_run.yaml" # Default
+    config_path_val = "configs/gui_run.yaml"  # Default
     config_yaml_val = ""
-    
+
     if state:
         if "data_path" in state:
             data_path_val = state["data_path"]
@@ -18,17 +20,16 @@ def layout(state: dict | None = None) -> html.Div:
             config_yaml_val = state["config_yaml"] or ""
         # If we had a mechanism to store last saved config path, we'd load it here.
         # identifying readiness
-    
+
     # Readiness Check (Simple)
-    is_ready = bool(data_path_val) 
+    is_ready = bool(data_path_val)
     # Config is assumed to be handled by builder which saves to default path.
-    
+
     actions = ["fit", "evaluate", "tune", "simulate", "export", "estimate_dr"]
-    
+
     return html.Div(
         [
             html.H2("Run Tasks", className="mb-4"),
-            
             # Action Selection & Summary
             dbc.Row(
                 [
@@ -43,17 +44,22 @@ def layout(state: dict | None = None) -> html.Div:
                                         [
                                             dbc.RadioItems(
                                                 id="run-action",
-                                                options=[{"label": a.upper(), "value": a} for a in actions],
+                                                options=[
+                                                    {"label": a.upper(), "value": a}
+                                                    for a in actions
+                                                ],
                                                 value="fit",
                                                 inline=True,
-                                                style={"display": "none"}
+                                                style={"display": "none"},
                                             ),
-                                            html.Div(id="run-action-display", className="badge bg-primary fs-6 p-2 mb-3", children="Ready: TRAIN"),
+                                            html.Div(
+                                                id="run-action-display",
+                                                className="badge bg-primary fs-6 p-2 mb-3",
+                                                children="Ready: TRAIN",
+                                            ),
                                         ]
                                     ),
-                                    
                                     html.Hr(className="border-secondary"),
-                                    
                                     html.H5("2. Task Context", className="text-info mb-3"),
                                     # Hidden Inputs for Auto-Filling
                                     dbc.Row(
@@ -61,21 +67,30 @@ def layout(state: dict | None = None) -> html.Div:
                                             dbc.Col(
                                                 [
                                                     html.Label("Config Source"),
-                                                    dbc.Input(id="run-config-path", value=config_path_val, readonly=True, className="mb-2 bg-dark text-muted"),
-                                                ], 
-                                                width=12
+                                                    dbc.Input(
+                                                        id="run-config-path",
+                                                        value=config_path_val,
+                                                        readonly=True,
+                                                        className="mb-2 bg-dark text-muted",
+                                                    ),
+                                                ],
+                                                width=12,
                                             ),
                                             dbc.Col(
                                                 [
                                                     html.Label("Data Source"),
-                                                    dbc.Input(id="run-data-path", value=data_path_val, readonly=True, className="mb-2 bg-dark text-muted"),
-                                                ], 
-                                                width=12
+                                                    dbc.Input(
+                                                        id="run-data-path",
+                                                        value=data_path_val,
+                                                        readonly=True,
+                                                        className="mb-2 bg-dark text-muted",
+                                                    ),
+                                                ],
+                                                width=12,
                                             ),
                                         ],
-                                        className="mb-3"
+                                        className="mb-3",
                                     ),
-                                    
                                     dbc.Accordion(
                                         [
                                             dbc.AccordionItem(
@@ -86,19 +101,35 @@ def layout(state: dict | None = None) -> html.Div:
                                                             dbc.Select(
                                                                 id="run-artifact-preset",
                                                                 options=[
-                                                                    {"label": "Standard (artifacts/)", "value": "artifacts"},
-                                                                    {"label": "Output (output/)", "value": "output"},
-                                                                    {"label": "Custom...", "value": "custom"},
+                                                                    {
+                                                                        "label": "Standard "
+                                                                        "(artifacts/)",
+                                                                        "value": "artifacts",
+                                                                    },
+                                                                    {
+                                                                        "label": "Output (output/)",
+                                                                        "value": "output",
+                                                                    },
+                                                                    {
+                                                                        "label": "Custom...",
+                                                                        "value": "custom",
+                                                                    },
                                                                 ],
                                                                 placeholder="Preset",
-                                                                style={"maxWidth": "120px"}
+                                                                style={"maxWidth": "120px"},
                                                             ),
-                                                            dbc.Input(id="run-artifact-path", value="artifacts", placeholder="e.g. artifacts"),
+                                                            dbc.Input(
+                                                                id="run-artifact-path",
+                                                                value="artifacts",
+                                                                placeholder="e.g. artifacts",
+                                                            ),
                                                         ],
-                                                        className="mb-2"
+                                                        className="mb-2",
                                                     ),
                                                     html.Label("Scenarios Path"),
-                                                    dbc.Input(id="run-scenarios-path", className="mb-2"),
+                                                    dbc.Input(
+                                                        id="run-scenarios-path", className="mb-2"
+                                                    ),
                                                     html.Label("Export Format"),
                                                     dbc.Select(
                                                         id="run-export-format",
@@ -108,56 +139,69 @@ def layout(state: dict | None = None) -> html.Div:
                                                         ],
                                                         value="python",
                                                     ),
-                                                    html.Label("Config YAML Override", className="mt-2"),
+                                                    html.Label(
+                                                        "Config YAML Override", className="mt-2"
+                                                    ),
                                                     dcc.Textarea(
-                                                        id="run-config-yaml", 
+                                                        id="run-config-yaml",
                                                         value=config_yaml_val,
-                                                        style={"height": "100px", "width": "100%", "fontFamily": "monospace"},
-                                                        className="form-control"
+                                                        style={
+                                                            "height": "100px",
+                                                            "width": "100%",
+                                                            "fontFamily": "monospace",
+                                                        },
+                                                        className="form-control",
                                                     ),
                                                 ],
                                                 title="Advanced Options (Override)",
                                             )
                                         ],
                                         start_collapsed=True,
-                                        className="mb-4"
+                                        className="mb-4",
                                     ),
-                                    
                                     html.Div(
                                         [
                                             dbc.Button(
-                                                [html.I(className="bi bi-play-fill me-2"), "Launch Task"],
+                                                [
+                                                    html.I(className="bi bi-play-fill me-2"),
+                                                    "Launch Task",
+                                                ],
                                                 id="run-execute-btn",
                                                 color="primary",
                                                 size="lg",
                                                 className="w-100 shadow-lg",
                                                 disabled=not is_ready,
-                                                title="Data must be selected in Data Page" if not is_ready else "Include Config from Builder"
+                                                title="Data must be selected in Data Page"
+                                                if not is_ready
+                                                else "Include Config from Builder",
                                             ),
                                             dbc.Alert(
                                                 "Ready: Data source is set."
                                                 if is_ready
-                                                else "Not ready: Select and inspect a data file in Data page.",
+                                                else (
+                                                    "Not ready: Select and inspect "
+                                                    "a data file in Data page."
+                                                ),
                                                 id="run-launch-status",
                                                 color="success" if is_ready else "warning",
                                                 className="mt-2 mb-0 small",
                                             ),
                                         ],
-                                        id="run-launch-container"
+                                        id="run-launch-container",
                                     ),
-                                    
                                     dcc.Loading(
                                         id="run-loading",
                                         type="dot",
-                                        children=html.Div(id="run-result-log", className="mt-3 text-info small")
-                                    )
+                                        children=html.Div(
+                                            id="run-result-log", className="mt-3 text-info small"
+                                        ),
+                                    ),
                                 ],
-                                className="glass-card h-100"
+                                className="glass-card h-100",
                             )
                         ],
-                        width=4
+                        width=4,
                     ),
-                    
                     dbc.Col(
                         [
                             # Live Task Feed
@@ -165,65 +209,97 @@ def layout(state: dict | None = None) -> html.Div:
                                 [
                                     html.Div(
                                         [
-                                            html.H5("3. Execution Queue", className="text-info mb-0"),
+                                            html.H5(
+                                                "3. Execution Queue", className="text-info mb-0"
+                                            ),
                                             html.Div(
                                                 [
-                                                     # Batch Mode Toggle (Placeholder for future)
-                                                     dbc.Checklist(
-                                                         options=[{"label": "Batch Mode", "value": "enabled"}],
-                                                         value=[],
-                                                         id="run-batch-mode-toggle",
-                                                         switch=True,
-                                                         inline=True,
-                                                         className="me-3 d-inline-block small"
-                                                     ),
-                                                     dbc.Button("Refresh", id="run-refresh-jobs-btn", size="sm", color="secondary", outline=True)
+                                                    # Batch Mode Toggle (Placeholder for future)
+                                                    dbc.Checklist(
+                                                        options=[
+                                                            {
+                                                                "label": "Batch Mode",
+                                                                "value": "enabled",
+                                                            }
+                                                        ],
+                                                        value=[],
+                                                        id="run-batch-mode-toggle",
+                                                        switch=True,
+                                                        inline=True,
+                                                        className="me-3 d-inline-block small",
+                                                    ),
+                                                    dbc.Button(
+                                                        "Refresh",
+                                                        id="run-refresh-jobs-btn",
+                                                        size="sm",
+                                                        color="secondary",
+                                                        outline=True,
+                                                    ),
                                                 ]
-                                            )
+                                            ),
                                         ],
-                                        className="d-flex justify-content-between align-items-center mb-3"
+                                        className=(
+                                            "d-flex justify-content-between "
+                                            "align-items-center mb-3"
+                                        ),
                                     ),
-                                    
-                                    dcc.Interval(id="run-jobs-interval", interval=2000, n_intervals=0),
-                                    
+                                    dcc.Interval(
+                                        id="run-jobs-interval", interval=2000, n_intervals=0
+                                    ),
                                     html.Div(
                                         id="run-jobs-table-container",
                                         children=task_table("run-jobs", []),  # Initial empty table
-                                        style={"minHeight": "200px"}
+                                        style={"minHeight": "200px"},
                                     ),
-                                    
                                     html.Hr(className="border-secondary my-4"),
-                                    
                                     html.H5("Task Details", className="mb-3"),
                                     html.Div(
                                         [
-                                            dbc.Button("Cancel Task", id="run-cancel-job-btn", color="danger", size="sm", className="me-2", disabled=True),
-                                            html.Span(id="selected-job-id-display", className="text-muted small"),
-                                            
+                                            dbc.Button(
+                                                "Cancel Task",
+                                                id="run-cancel-job-btn",
+                                                color="danger",
+                                                size="sm",
+                                                className="me-2",
+                                                disabled=True,
+                                            ),
+                                            html.Span(
+                                                id="selected-job-id-display",
+                                                className="text-muted small",
+                                            ),
                                             # Link to Results
-                                            dbc.Button("View Results →", id="run-view-results-btn", color="success", size="sm", outline=True, href="/results", className="float-end", style={"display": "none"})
+                                            dbc.Button(
+                                                "View Results →",
+                                                id="run-view-results-btn",
+                                                color="success",
+                                                size="sm",
+                                                outline=True,
+                                                href="/results",
+                                                className="float-end",
+                                                style={"display": "none"},
+                                            ),
                                         ],
-                                        className="mb-3"
+                                        className="mb-3",
                                     ),
                                     html.Pre(
                                         id="run-job-detail",
                                         style={
-                                            "height": "250px", 
+                                            "height": "250px",
                                             "overflowY": "auto",
                                             "backgroundColor": "#0d0d0d",
                                             "padding": "12px",
                                             "borderRadius": "8px",
-                                            "border": "1px solid rgba(148, 163, 184, 0.1)"
-                                        }
+                                            "border": "1px solid rgba(148, 163, 184, 0.1)",
+                                        },
                                     ),
                                     # Hidden store for selection state
-                                    dcc.Store(id="run-job-select") 
+                                    dcc.Store(id="run-job-select"),
                                 ],
-                                className="glass-card h-100"
+                                className="glass-card h-100",
                             )
                         ],
-                        width=8
-                    )
+                        width=8,
+                    ),
                 ]
             ),
         ]

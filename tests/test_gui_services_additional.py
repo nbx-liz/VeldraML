@@ -59,12 +59,7 @@ def test_result_to_payload_variants() -> None:
 def test_resolve_config_from_path(tmp_path) -> None:
     cfg = tmp_path / "run.yaml"
     cfg.write_text(
-        "config_version: 1\n"
-        "task:\n"
-        "  type: regression\n"
-        "data:\n"
-        "  path: train.csv\n"
-        "  target: y\n",
+        "config_version: 1\ntask:\n  type: regression\ndata:\n  path: train.csv\n  target: y\n",
         encoding="utf-8",
     )
     resolved = _resolve_config(RunInvocation(action="fit", config_path=str(cfg)))
@@ -95,12 +90,7 @@ def test_run_action_errors(monkeypatch) -> None:
         lambda _cfg, _f: SimulationResult(task_type="r", data=frame),
     )
     cfg_yaml = (
-        "config_version: 1\n"
-        "task:\n"
-        "  type: regression\n"
-        "data:\n"
-        "  path: train.csv\n"
-        "  target: y\n"
+        "config_version: 1\ntask:\n  type: regression\ndata:\n  path: train.csv\n  target: y\n"
     )
     ok = run_action(RunInvocation(action="evaluate", config_yaml=cfg_yaml, data_path="eval.csv"))
     assert ok.success is True

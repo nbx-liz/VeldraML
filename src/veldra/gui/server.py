@@ -42,9 +42,7 @@ def main() -> None:
     try:
         from veldra.gui.app import create_app
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "GUI dependencies are not installed. Run: uv sync --extra gui"
-        ) from exc
+        raise RuntimeError("GUI dependencies are not installed. Run: uv sync --extra gui") from exc
 
     store = GuiJobStore(args.job_db_path)
     worker = GuiWorker(store, poll_interval_sec=args.worker_poll_sec)

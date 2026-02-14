@@ -63,4 +63,3 @@ def test_estimate_drdid_panel_smoke(tmp_path) -> None:
     assert {"overlap_metric", "smd_max_unweighted", "smd_max_weighted"} <= set(result.metrics)
     assert result.metadata["n_pre"] > 0
     assert result.metadata["n_post"] > 0
-

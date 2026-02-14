@@ -13,7 +13,13 @@ _ALLOWED_OPS = {"set", "add", "mul", "clip"}
 
 
 def normalize_scenarios(scenarios: Any) -> list[dict[str, Any]]:
-    """Normalize incoming scenarios into a non-empty list."""
+    """Normalize incoming scenarios into a non-empty list.
+
+    Notes
+    -----
+    Accepts either one scenario dict or list of scenario dicts and enforces
+    minimal DSL contract (name/actions) before simulation.
+    """
     if isinstance(scenarios, dict):
         items = [dict(scenarios)]
     elif isinstance(scenarios, list):
@@ -35,9 +41,7 @@ def normalize_scenarios(scenarios: Any) -> list[dict[str, Any]]:
             raise VeldraValidationError("scenario.name must be a non-empty string.")
         actions = item.get("actions")
         if not isinstance(actions, list) or not actions:
-            raise VeldraValidationError(
-                f"Scenario '{name}' must include a non-empty actions list."
-            )
+            raise VeldraValidationError(f"Scenario '{name}' must include a non-empty actions list.")
         normalized.append({"name": name, "actions": actions})
     return normalized
 
@@ -56,7 +60,15 @@ def apply_scenario(
     target_col: str,
     id_cols: list[str],
 ) -> pd.DataFrame:
-    """Apply scenario actions to a copied DataFrame."""
+    """Apply scenario actions to a copied DataFrame.
+
+    Notes
+    -----
+    - Scenario operations are constrained to ``set``, ``add``, ``mul``, and
+      ``clip`` on numeric columns.
+    - Protected columns (target and id columns) are immutable to avoid leakage
+      and identity corruption during simulation.
+    """
     scenario_name = str(scenario["name"])
     actions = scenario["actions"]
     out = data.copy()
@@ -156,7 +168,14 @@ def build_simulation_frame(
     scenario_pred: Any,
     target_classes: list[Any] | None = None,
 ) -> pd.DataFrame:
-    """Build task-specific simulation comparison frame."""
+    """Build task-specific simulation comparison frame.
+
+    Notes
+    -----
+    Output schema is task-dependent and always contains row identifier,
+    scenario name, and baseline-vs-scenario deltas suitable for downstream
+    aggregation/visualization.
+    """
     result = pd.DataFrame(
         {
             "row_id": row_ids.to_list(),

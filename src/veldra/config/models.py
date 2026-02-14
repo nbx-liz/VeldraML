@@ -190,9 +190,7 @@ class RunConfig(BaseModel):
             if self.split.embargo < 0:
                 raise ValueError("split.embargo must be >= 0 when split.type='timeseries'")
             if self.split.test_size is not None and self.split.test_size < 1:
-                raise ValueError(
-                    "split.test_size must be >= 1 when split.type='timeseries'"
-                )
+                raise ValueError("split.test_size must be >= 1 when split.type='timeseries'")
             if self.split.timeseries_mode == "blocked":
                 if self.split.train_size is None or self.split.train_size < 1:
                     raise ValueError(
@@ -215,9 +213,7 @@ class RunConfig(BaseModel):
                     "split.test_size can be customized only when split.type='timeseries'"
                 )
             if self.split.gap != 0:
-                raise ValueError(
-                    "split.gap can be customized only when split.type='timeseries'"
-                )
+                raise ValueError("split.gap can be customized only when split.type='timeseries'")
             if self.split.embargo != 0:
                 raise ValueError(
                     "split.embargo can be customized only when split.type='timeseries'"
@@ -249,10 +245,7 @@ class RunConfig(BaseModel):
                     "when task.type='binary'"
                 )
         else:
-            if (
-                self.postprocess.calibration is not None
-                and self.postprocess.calibration != "platt"
-            ):
+            if self.postprocess.calibration is not None and self.postprocess.calibration != "platt":
                 raise ValueError("binary calibration supports only 'platt' in current phase")
             if self.postprocess.threshold is not None and not (
                 0.0 <= self.postprocess.threshold <= 1.0
@@ -313,20 +306,15 @@ class RunConfig(BaseModel):
                     "tuning.coverage_target must satisfy 0 < value < 1 for frontier task"
                 )
             if self.tuning.coverage_tolerance < 0:
-                raise ValueError(
-                    "tuning.coverage_tolerance must be >= 0 for frontier task"
-                )
+                raise ValueError("tuning.coverage_tolerance must be >= 0 for frontier task")
             if self.tuning.penalty_weight < 0:
                 raise ValueError("tuning.penalty_weight must be >= 0 for frontier task")
         else:
             if self.tuning.coverage_target is not None:
-                raise ValueError(
-                    "tuning.coverage_target can only be set when task.type='frontier'"
-                )
+                raise ValueError("tuning.coverage_target can only be set when task.type='frontier'")
             if self.tuning.coverage_tolerance != 0.01:
                 raise ValueError(
-                    "tuning.coverage_tolerance can only be customized when "
-                    "task.type='frontier'"
+                    "tuning.coverage_tolerance can only be customized when task.type='frontier'"
                 )
             if self.tuning.penalty_weight != 1.0:
                 raise ValueError(
@@ -370,10 +358,7 @@ class RunConfig(BaseModel):
                     raise ValueError("causal.time_col is required when causal.method='dr_did'")
                 if self.causal.post_col is None:
                     raise ValueError("causal.post_col is required when causal.method='dr_did'")
-                if (
-                    self.causal.design == "panel"
-                    and self.causal.unit_id_col is None
-                ):
+                if self.causal.design == "panel" and self.causal.unit_id_col is None:
                     raise ValueError(
                         "causal.unit_id_col is required for causal.method='dr_did' "
                         "and causal.design='panel'"
@@ -390,9 +375,7 @@ def resolve_tuning_objective(
 ) -> str:
     if causal_method is not None:
         if causal_method not in _CAUSAL_TUNE_ALLOWED_OBJECTIVES:
-            raise ValueError(
-                f"Unsupported causal method for tuning objective: '{causal_method}'"
-            )
+            raise ValueError(f"Unsupported causal method for tuning objective: '{causal_method}'")
         if objective is None:
             return _CAUSAL_TUNE_DEFAULT_OBJECTIVES[causal_method]
         if objective not in _CAUSAL_TUNE_ALLOWED_OBJECTIVES[causal_method]:

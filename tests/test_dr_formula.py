@@ -5,9 +5,7 @@ import pandas as pd
 from veldra.api import estimate_dr
 
 
-def _synthetic_dr_frame(
-    n: int = 900, seed: int = 123
-) -> tuple[pd.DataFrame, float]:
+def _synthetic_dr_frame(n: int = 900, seed: int = 123) -> tuple[pd.DataFrame, float]:
     import numpy as np
 
     rng = np.random.default_rng(seed)

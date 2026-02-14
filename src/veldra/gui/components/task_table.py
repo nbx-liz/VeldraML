@@ -1,12 +1,15 @@
 """Task Table component."""
+
 from __future__ import annotations
 
 from typing import Any
+
 from dash import dash_table, html
+
 
 def task_table(id_prefix: str, data: list[dict[str, Any]]) -> html.Div:
     """Create a styled data table for tasks."""
-    
+
     return html.Div(
         [
             dash_table.DataTable(
@@ -53,5 +56,5 @@ def task_table(id_prefix: str, data: list[dict[str, Any]]) -> html.Div:
             )
         ],
         className="glass-card",
-        style={"padding": "0", "overflow": "hidden"}
+        style={"padding": "0", "overflow": "hidden"},
     )

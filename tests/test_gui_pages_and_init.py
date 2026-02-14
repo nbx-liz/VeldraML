@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from veldra.gui.pages import config_page, run_page, results_page
+from veldra.gui.pages import config_page, results_page, run_page
 
 _DASH_AVAILABLE = (
     importlib.util.find_spec("dash") is not None

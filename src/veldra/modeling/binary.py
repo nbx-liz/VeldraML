@@ -225,7 +225,16 @@ def _find_best_threshold_f1(y_true: np.ndarray, p_pred: np.ndarray) -> tuple[flo
 
 
 def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainingOutput:
-    """Train binary model with CV, then fit Platt calibrator on OOF predictions."""
+    """Train binary model with CV and OOF probability calibration.
+
+    Notes
+    -----
+    - Base LightGBM probabilities are generated out-of-fold first, then a
+      calibration model (Platt) is fitted only on OOF scores.
+    - This flow prevents calibration leakage from in-fold predictions.
+    - Optional threshold optimization evaluates candidate cutoffs on calibrated
+      OOF probabilities and records the selected threshold contract.
+    """
     if config.task.type != "binary":
         raise VeldraValidationError("train_binary_with_cv only supports task.type='binary'.")
     if not config.data.path:
@@ -332,9 +341,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         }
     else:
         threshold_value = (
-            float(config.postprocess.threshold)
-            if config.postprocess.threshold is not None
-            else 0.5
+            float(config.postprocess.threshold) if config.postprocess.threshold is not None else 0.5
         )
         threshold = {"policy": "fixed", "value": threshold_value}
 

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
-from veldra.api.exceptions import VeldraValidationError
 from veldra.gui.services import migrate_config_file_via_gui, migrate_config_from_yaml
 
 _SOURCE = """
@@ -39,13 +36,12 @@ def test_migrate_config_file_contract(tmp_path) -> None:
         target_version=1,
     )
     assert "Migration successful" in result_msg
-    # assert out.exists() 
-    # Logic note: migrate_run_config_file by default refuses to overwrite. 
+    # assert out.exists()
+    # Logic note: migrate_run_config_file by default refuses to overwrite.
     # But wrapper catches exception. If src exists, output defaults to src.migrated.yaml?
     # services.py wrapper calls migrate_run_config_file(input_path, target_version...).
     # Default output path is input_path.stem + .migrated.yaml.
     # So we should check that file.
-    
+
     expected_out = src.with_name("run.migrated.yaml")
     assert expected_out.exists()
-
