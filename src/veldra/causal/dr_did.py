@@ -242,7 +242,17 @@ def _repeated_cs_to_pseudo_frame(
 
 
 def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOutput:
-    """Run two-period DR-DiD estimation for panel or repeated cross-section data."""
+    """Run two-period DR-DiD estimation for panel or repeated cross-section data.
+
+    Notes
+    -----
+    - Input is transformed into pseudo-outcome form (panel difference or
+      repeated-cross-section tilting), then fed to DR estimation.
+    - Binary outcome DR-DiD is interpreted as Risk Difference ATT in current
+      scope.
+    - Additional diagnostics (overlap, weighted/unweighted SMD) are computed to
+      support balance-priority tuning objectives.
+    """
     treatment_col, _target_col, post_col = _base_validation(config, frame)
     assert config.causal is not None
 

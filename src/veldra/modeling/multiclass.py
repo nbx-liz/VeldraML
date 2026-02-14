@@ -186,7 +186,16 @@ def _multiclass_metrics(y_true: np.ndarray, proba: np.ndarray) -> dict[str, floa
 
 
 def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> MulticlassTrainingOutput:
-    """Train multiclass model with CV and return serialized artifact payload."""
+    """Train multiclass model with CV and return artifact payload.
+
+    Notes
+    -----
+    - Class labels are mapped to contiguous indices and restored through
+      ``feature_schema.target_classes``.
+    - Fold-level probabilities are normalized and merged into OOF probabilities
+      before metric aggregation.
+    - Shape and probability-sum checks guard against malformed model outputs.
+    """
     if config.task.type != "multiclass":
         raise VeldraValidationError(
             "train_multiclass_with_cv only supports task.type='multiclass'."

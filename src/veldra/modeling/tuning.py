@@ -330,7 +330,18 @@ def run_tuning(
     output_dir: Path,
     on_trial_complete: Callable[[dict[str, Any]], None] | None = None,
 ) -> TuningOutput:
-    """Run Optuna tuning and return summary payload for API adapter layer."""
+    """Run Optuna tuning and return summary payload for API adapter layer.
+
+    Notes
+    -----
+    - Search space is resolved from explicit config or preset defaults.
+    - Each trial trains/evaluates through existing task trainers to keep scoring
+      logic consistent with ``fit``.
+    - Intermediate study summary and trial parquet artifacts are updated on each
+      callback for resume-safe operation.
+    - For causal objectives, overlap/balance penalties are composed into the
+      final objective value.
+    """
     if config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(
             "run_tuning supports only regression/binary/multiclass/frontier tasks."

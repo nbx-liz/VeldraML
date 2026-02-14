@@ -22,7 +22,13 @@ from veldra.simulate import apply_scenario, build_simulation_frame
 
 
 class Artifact:
-    """Serializable artifact object passed across API/CLI/GUI boundaries."""
+    """Serializable model artifact shared across API/CLI/GUI boundaries.
+
+    Notes
+    -----
+    The artifact stores serialized model state plus schema metadata required for
+    deterministic prediction, evaluation, and scenario simulation.
+    """
 
     def __init__(
         self,
@@ -63,6 +69,24 @@ class Artifact:
         threshold: dict[str, Any] | None = None,
         threshold_curve: pd.DataFrame | None = None,
     ) -> "Artifact":
+        """Construct an artifact object from training outputs.
+
+        Parameters
+        ----------
+        run_config
+            Run configuration used for training.
+        run_id
+            Unique run identifier.
+        feature_schema, model_text, metrics, cv_results
+            Core training payload pieces to embed in the artifact.
+        calibrator, calibration_curve, threshold, threshold_curve
+            Training payload pieces to embed in the artifact.
+
+        Returns
+        -------
+        Artifact
+            In-memory artifact instance ready to save.
+        """
         manifest = build_manifest(
             run_config=run_config,
             run_id=run_id,
@@ -83,6 +107,23 @@ class Artifact:
 
     @classmethod
     def load(cls, path: str | Path) -> "Artifact":
+        """Load an artifact from directory.
+
+        Parameters
+        ----------
+        path
+            Artifact directory path.
+
+        Returns
+        -------
+        Artifact
+            Loaded artifact instance.
+
+        Raises
+        ------
+        VeldraArtifactError
+            If artifact files are missing or inconsistent.
+        """
         run_config, manifest, feature_schema, extras = load_artifact(path)
         return cls(
             run_config=run_config,
@@ -98,6 +139,18 @@ class Artifact:
         )
 
     def save(self, path: str | Path) -> None:
+        """Persist artifact payload to directory.
+
+        Parameters
+        ----------
+        path
+            Destination directory path.
+
+        Raises
+        ------
+        VeldraArtifactError
+            If writing artifact files fails.
+        """
         save_artifact(
             path=path,
             run_config=self.run_config,
@@ -200,6 +253,29 @@ class Artifact:
         return pd.DataFrame(payload, index=x.index)
 
     def predict(self, df: Any) -> Any:
+        """Predict outputs for supported tasks.
+
+        Parameters
+        ----------
+        df
+            Input feature frame.
+
+        Returns
+        -------
+        Any
+            Task-specific prediction payload:
+            regression returns ``np.ndarray``;
+            binary/multiclass/frontier return ``pd.DataFrame``.
+
+        Raises
+        ------
+        VeldraNotImplementedError
+            If task type is unsupported.
+        VeldraValidationError
+            If input/frame schema is invalid.
+        VeldraArtifactError
+            If required artifact payload for prediction is missing.
+        """
         if not isinstance(df, pd.DataFrame):
             raise VeldraValidationError("predict input must be a pandas.DataFrame.")
         x = self._prepare_feature_frame(df)
@@ -218,6 +294,27 @@ class Artifact:
         )
 
     def simulate(self, df: Any, scenario: dict[str, Any]) -> Any:
+        """Simulate one scenario against baseline predictions.
+
+        Parameters
+        ----------
+        df
+            Baseline feature frame.
+        scenario
+            Scenario DSL payload with ``name`` and ``actions``.
+
+        Returns
+        -------
+        Any
+            Task-specific simulation comparison frame.
+
+        Raises
+        ------
+        VeldraNotImplementedError
+            If task type is unsupported.
+        VeldraValidationError
+            If input frame or scenario payload is invalid.
+        """
         if self.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
             raise VeldraNotImplementedError(
                 "Artifact.simulate is currently implemented only for regression, binary, "

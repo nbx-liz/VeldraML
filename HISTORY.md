@@ -3255,3 +3255,55 @@
 - `uv run ruff check .`: **passed**
 - `uv run pytest -q -m "not gui"`: **335 passed, 73 deselected**
 - `uv run pytest -q -m "gui"`: **73 passed, 335 deselected**
+
+### 2026-02-15 (Session/PR: api-doc-contract-and-algorithm-docs)
+**Context**
+- 公開APIで docstring 欠落と契約記述不足（Parameters/Returns/Raises）があり、利用者向け参照性が低かった。
+- 主要アルゴリズム関数の説明が短く、設計意図と安全性（リーク防止等）が追いにくかった。
+
+**Plan**
+- `veldra.api.*` の公開面を NumPy 形式 docstring へ統一し、公開関数の契約を明文化する。
+- 主要アルゴリズム関数に `Notes` を追加し、フロー・前提・失敗条件を説明する。
+- README に API サマリとアルゴ概要を追記し、品質ゲートとして doc 契約テストを追加する。
+
+**Changes**
+- 実装変更:
+  - `src/veldra/api/runner.py`
+    - `fit/tune/estimate_dr/evaluate/predict/simulate/export` に NumPy 形式 docstring を追加/統一。
+  - `src/veldra/api/types.py`
+    - 公開 dataclass (`RunResult` など) に `Attributes` 付き docstring を追加。
+  - `src/veldra/api/artifact.py`
+    - `Artifact` と公開メソッド（`from_config/load/save/predict/simulate`）の契約 docstring を追加。
+  - `src/veldra/api/logging.py`
+    - `build_log_payload/log_event` を NumPy 形式 docstring に更新。
+  - 主要アルゴリズム関数へ `Notes` 追加:
+    - `src/veldra/modeling/regression.py`
+    - `src/veldra/modeling/binary.py`
+    - `src/veldra/modeling/multiclass.py`
+    - `src/veldra/modeling/frontier.py`
+    - `src/veldra/modeling/tuning.py`
+    - `src/veldra/causal/dr.py`
+    - `src/veldra/causal/dr_did.py`
+    - `src/veldra/simulate/engine.py`
+  - `README.md`
+    - `API Reference (Summary)` と `Algorithm Overview` を追加。
+  - `tests/test_doc_contract.py`（新規）
+    - `veldra.api.__all__` の docstring 有無
+    - 公開API関数の `Parameters/Returns/Raises` セクション有無
+    - 主要アルゴ関数の `Notes` セクション有無
+
+**Decisions**
+- Decision: confirmed
+  - 内容:
+    - docstring フォーマットは NumPy 形式を採用する。
+    - 品質ゲートは公開APIと主要アルゴ関数に限定して導入する。
+  - 理由:
+    - 公開契約の明確化を優先しつつ、過剰なテストコストを避けるため。
+  - 影響範囲:
+    - API ドキュメント / README / テスト品質
+
+**Results**
+- `uv run ruff check .`: passed
+- `uv run pytest -q tests/test_doc_contract.py`: passed
+- `uv run pytest -q -m "not gui"`: passed
+- `uv run pytest -q -m "gui"`: passed

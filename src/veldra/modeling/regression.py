@@ -129,7 +129,16 @@ def _train_single_booster(
 
 
 def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> RegressionTrainingOutput:
-    """Train regression model with CV and return serialized artifact payload."""
+    """Train regression model with CV and return artifact payload.
+
+    Notes
+    -----
+    - Data is split by ``split.type`` and fold-level out-of-fold predictions are
+      aggregated into mean metrics.
+    - For ``timeseries`` split, data is ordered by ``split.time_col`` before
+      fold construction to avoid temporal leakage.
+    - Training fails fast on empty folds or missing OOF predictions.
+    """
     if config.task.type != "regression":
         raise VeldraValidationError(
             "train_regression_with_cv only supports task.type='regression'."

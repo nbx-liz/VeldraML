@@ -19,6 +19,33 @@ Current implemented tasks are regression, binary classification, multiclass clas
 - GUI workflow (optional): Dash enhanced MVP (`config`/`run`/`artifacts`)
 - Config migration utility: `veldra config migrate` (v1 normalization)
 
+## API Reference (Summary)
+
+| API | Input | Output | Typical Raises |
+| --- | --- | --- | --- |
+| `fit(config)` | `RunConfig \| dict` | `RunResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `tune(config)` | `RunConfig \| dict` | `TuneResult` | `VeldraValidationError` |
+| `estimate_dr(config)` | `RunConfig \| dict` | `CausalResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `evaluate(artifact_or_config, data)` | `Artifact \| RunConfig \| dict`, `pd.DataFrame` | `EvalResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `predict(artifact, data)` | `Artifact`, `pd.DataFrame` | `Prediction` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `simulate(artifact, data, scenarios)` | `Artifact`, `pd.DataFrame`, `dict \| list[dict]` | `SimulationResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+| `export(artifact, format)` | `Artifact`, `"python" \| "onnx"` | `ExportResult` | `VeldraValidationError`, `VeldraNotImplementedError` |
+
+## Algorithm Overview
+
+- CV training (`fit`):
+  - Uses split strategy from `RunConfig.split` (`kfold/group/stratified/timeseries`) and aggregates OOF metrics.
+- Binary probability calibration:
+  - Fits calibrator from OOF raw probabilities only to prevent leakage.
+- DR estimation (`causal.method="dr"`):
+  - Combines calibrated propensity and outcome nuisance models through doubly robust score equations.
+- DR-DiD estimation (`causal.method="dr_did"`):
+  - Converts data to pseudo outcomes (panel/repeated-cross-section), then applies DR pipeline with overlap/SMD diagnostics.
+- Frontier training:
+  - Optimizes quantile objective and reports pinball/coverage/inefficiency metrics.
+- Scenario DSL simulation:
+  - Applies validated feature perturbations (`set/add/mul/clip`) and reports baseline vs scenario deltas.
+
 ## Project Status
 
 Implemented:

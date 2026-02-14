@@ -152,7 +152,15 @@ def _frontier_metrics(y_true: np.ndarray, y_pred: np.ndarray, alpha: float) -> d
 
 
 def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTrainingOutput:
-    """Train frontier quantile model with CV and return serialized artifact payload."""
+    """Train frontier quantile model with CV and return artifact payload.
+
+    Notes
+    -----
+    - The model uses LightGBM quantile objective with ``frontier.alpha``.
+    - Fold predictions are aggregated as OOF predictions to compute pinball,
+      MAE, mean inefficiency (``u_hat``), and empirical coverage.
+    - Timeseries mode preserves chronological order before split generation.
+    """
     if config.task.type != "frontier":
         raise VeldraValidationError("train_frontier_with_cv only supports task.type='frontier'.")
     if not config.data.path:

@@ -85,7 +85,25 @@ def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
 
 
 def fit(config: RunConfig | dict[str, Any]) -> RunResult:
-    """Train supported model with CV and persist artifact payload."""
+    """Train a model and persist an artifact.
+
+    Parameters
+    ----------
+    config
+        Run configuration object or its dictionary payload.
+
+    Returns
+    -------
+    RunResult
+        Run identifier, task type, artifact path, and mean CV metrics.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If ``task.type`` is outside supported tasks.
+    VeldraValidationError
+        If the configuration is invalid or required fields are missing.
+    """
     parsed = _ensure_config(config)
     if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
@@ -150,6 +168,24 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
 
 
 def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
+    """Run Optuna-based hyperparameter tuning.
+
+    Parameters
+    ----------
+    config
+        Run configuration object or its dictionary payload.
+
+    Returns
+    -------
+    TuneResult
+        Best parameters and objective score with tuning metadata.
+
+    Raises
+    ------
+    VeldraValidationError
+        If tuning is disabled, configuration is invalid, or required
+        configuration fields are missing.
+    """
     parsed = _ensure_config(config)
     if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(f"Unsupported task type for tune: '{parsed.task.type}'.")
@@ -257,6 +293,26 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
 
 
 def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
+    """Estimate causal effects with DR or DR-DiD.
+
+    Parameters
+    ----------
+    config
+        Run configuration object or its dictionary payload.
+
+    Returns
+    -------
+    CausalResult
+        Point estimate, uncertainty metrics, diagnostics, and file paths for
+        persisted causal outputs.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If task and causal method combination is not implemented.
+    VeldraValidationError
+        If causal configuration, input data, or required columns are invalid.
+    """
     parsed = _ensure_config(config)
     if parsed.causal is None:
         raise VeldraValidationError("causal configuration is required for estimate_dr().")
@@ -567,6 +623,29 @@ def _evaluate_with_artifact(
 
 
 def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
+    """Evaluate predictions against labeled data.
+
+    Parameters
+    ----------
+    artifact_or_config
+        Either a persisted ``Artifact`` or a run configuration payload.
+        When a config is passed, an ephemeral model is trained in-memory and no
+        artifact directory is written.
+    data
+        Evaluation frame containing the target column and feature columns.
+
+    Returns
+    -------
+    EvalResult
+        Task-specific evaluation metrics and metadata.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If task type is not supported for evaluation.
+    VeldraValidationError
+        If input type/shape is invalid or required columns are missing.
+    """
     if isinstance(artifact_or_config, Artifact):
         return _evaluate_with_artifact(
             artifact_or_config,
@@ -588,6 +667,27 @@ def evaluate(artifact_or_config: Any, data: Any) -> EvalResult:
 
 
 def predict(artifact: Artifact, data: Any) -> Prediction:
+    """Run inference using a persisted artifact.
+
+    Parameters
+    ----------
+    artifact
+        Trained artifact object loaded from disk or built in memory.
+    data
+        Feature-only frame for prediction.
+
+    Returns
+    -------
+    Prediction
+        Task-specific prediction payload and metadata.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If task type is not supported for prediction.
+    VeldraValidationError
+        If the input is not a pandas DataFrame.
+    """
     if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
             "predict is currently implemented only for task.type='regression', 'binary', "
@@ -605,6 +705,29 @@ def predict(artifact: Artifact, data: Any) -> Prediction:
 
 
 def simulate(artifact: Artifact, data: Any, scenarios: Any) -> SimulationResult:
+    """Evaluate scenario deltas from baseline predictions.
+
+    Parameters
+    ----------
+    artifact
+        Trained artifact object loaded from disk or built in memory.
+    data
+        Baseline feature frame.
+    scenarios
+        Scenario DSL payload as ``dict`` or ``list[dict]``.
+
+    Returns
+    -------
+    SimulationResult
+        Row-level baseline/scenario comparison frame and metadata.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If task type is not supported for simulation.
+    VeldraValidationError
+        If data or scenario payload is invalid.
+    """
     if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
             "simulate is currently implemented only for task.type='regression', 'binary', "
@@ -662,6 +785,27 @@ def simulate(artifact: Artifact, data: Any, scenarios: Any) -> SimulationResult:
 
 
 def export(artifact: Artifact, format: str = "python") -> ExportResult:
+    """Export an artifact to a deployable package format.
+
+    Parameters
+    ----------
+    artifact
+        Trained artifact to export.
+    format
+        Export format. Supported values are ``"python"`` and ``"onnx"``.
+
+    Returns
+    -------
+    ExportResult
+        Export directory path and validation metadata.
+
+    Raises
+    ------
+    VeldraNotImplementedError
+        If task type is not supported for export.
+    VeldraValidationError
+        If model payload is missing or requested format is unsupported.
+    """
     if artifact.run_config.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
             "export is currently implemented only for task.type='regression', 'binary', "

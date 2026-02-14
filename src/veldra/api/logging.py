@@ -13,7 +13,24 @@ def build_log_payload(
     task_type: str,
     **extra: Any,
 ) -> dict[str, Any]:
-    """Return a payload with mandatory structured-log keys."""
+    """Build structured log payload with mandatory keys.
+
+    Parameters
+    ----------
+    run_id
+        Run identifier.
+    artifact_path
+        Artifact path linked to the event, if available.
+    task_type
+        Task type of the event.
+    **extra
+        Additional fields to include.
+
+    Returns
+    -------
+    dict[str, Any]
+        JSON-serializable payload with mandatory and extra fields.
+    """
     payload: dict[str, Any] = {
         "run_id": run_id,
         "artifact_path": artifact_path,
@@ -32,7 +49,30 @@ def log_event(
     task_type: str,
     **extra: Any,
 ) -> dict[str, Any]:
-    """Emit a JSON log message with mandatory contract fields."""
+    """Emit one structured log event.
+
+    Parameters
+    ----------
+    logger
+        Target logger instance.
+    level
+        Logging level.
+    message
+        Human-readable event message.
+    run_id
+        Run identifier.
+    artifact_path
+        Artifact path linked to the event, if available.
+    task_type
+        Task type of the event.
+    **extra
+        Additional payload fields.
+
+    Returns
+    -------
+    dict[str, Any]
+        Payload that was emitted.
+    """
     payload = build_log_payload(
         run_id=run_id,
         artifact_path=artifact_path,
