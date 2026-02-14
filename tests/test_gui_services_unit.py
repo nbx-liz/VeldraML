@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import pandas as pd
@@ -10,48 +10,50 @@ from veldra.gui import services
 from veldra.api.exceptions import VeldraValidationError
 from veldra.gui.types import RunInvocation
 
-@pytest.fixture
-def mock_path(monkeypatch):
-    mock = MagicMock(spec=Path)
-    # Monkeypatching Path in services.py is hard if it imports names.
-    # services.py imports Path.
-    # We might need to patch 'veldra.gui.services.Path'
-    return mock
 
-def test_inspect_data(monkeypatch):
-    # Mock specific Path usage inside inspect_data
-    # It calls Path(path), .exists(), load_tabular_data, df ops.
-    
+def test_inspect_data(monkeypatch, tmp_path):
+    data_path = tmp_path / "data.csv"
+    data_path.write_text("a,b\n1,x\n2,y\n", encoding="utf-8")
+
     mock_df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
     monkeypatch.setattr(services, "load_tabular_data", lambda p: mock_df)
-    
-    with patch("veldra.gui.services.Path") as MockPath:
-        MockPath.return_value.exists.return_value = True
-        MockPath.return_value.resolve.return_value = "abs/path"
-        
-        res = services.inspect_data("data.csv")
-        assert res["success"] is True
-        assert res["stats"]["n_rows"] == 2
-        assert "a" in res["stats"]["numeric_cols"]
-        
-        # Test error
-        MockPath.return_value.exists.return_value = False
-        res_err = services.inspect_data("data.csv")
-        assert res_err["success"] is False
-        assert "not exist" in res_err["error"]
+
+    res = services.inspect_data(str(data_path))
+    assert res["success"] is True
+    assert res["stats"]["n_rows"] == 2
+    assert "a" in res["stats"]["numeric_cols"]
+
+    # Test error
+    res_err = services.inspect_data(str(tmp_path / "missing.csv"))
+    assert res_err["success"] is False
+    assert "not exist" in res_err["error"]
 
 def test_runtime_management():
-    store = MagicMock()
-    worker = MagicMock()
-    
+    class StoreStub:
+        pass
+
+    class WorkerStub:
+        def __init__(self) -> None:
+            self.started = 0
+            self.stopped = 0
+
+        def start(self) -> None:
+            self.started += 1
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+    store = StoreStub()
+    worker = WorkerStub()
+
     services.set_gui_runtime(job_store=store, worker=worker)
     assert services.get_gui_job_store() is store
-    
+
     services._start_worker_if_needed()
-    worker.start.assert_called_once()
-    
+    assert worker.started == 1
+
     services.stop_gui_runtime()
-    worker.stop.assert_called_once()
+    assert worker.stopped == 1
     assert services._JOB_STORE is None
 
 def test_run_action(monkeypatch):
@@ -64,13 +66,18 @@ def test_run_action(monkeypatch):
     monkeypatch.setattr(services, "export", lambda a, format: "export_res")
     
     monkeypatch.setattr(services, "load_tabular_data", lambda p: pd.DataFrame())
-    monkeypatch.setattr(services, "Artifact", MagicMock())
-    monkeypatch.setattr(services.Artifact, "load", lambda p: MagicMock())
+
+    class ArtifactStub:
+        @staticmethod
+        def load(_path: str):
+            return SimpleNamespace()
+
+    monkeypatch.setattr(services, "Artifact", ArtifactStub)
     
     # Mock config resolution rules
     # _resolve_config calls load_config_yaml if path provided, or parses yaml string
     monkeypatch.setattr(services, "load_config_yaml", lambda p: "key: val")
-    monkeypatch.setattr(services, "_load_config_from_yaml", lambda y: MagicMock())
+    monkeypatch.setattr(services, "_load_config_from_yaml", lambda y: SimpleNamespace())
     
     # 1. Fit
     inv = RunInvocation("fit", config_yaml="key: val")
@@ -101,51 +108,29 @@ def test_run_action(monkeypatch):
     
     # 6. Simulate
     # Needs scenarios path
-    with patch("veldra.gui.services.Path") as MP:
-        MP.return_value.exists.return_value = True
-        MP.return_value.read_text.return_value = '{"scenarios": []}'
-        MP.return_value.suffix = ".json"
-        
+    with patch("veldra.gui.services._load_scenarios", lambda _path: {"scenarios": []}):
         inv_sim = RunInvocation("simulate", artifact_path="a", data_path="d", scenarios_path="s")
         res_sim = services.run_action(inv_sim)
         assert res_sim.success
 
-def test_list_artifacts():
-    with patch("veldra.gui.services.Path") as MockPath:
-        root = MockPath.return_value
-        root.exists.return_value = True
-        root.is_dir.return_value = True
-        
-        # Child 1: Valid
-        c1 = MagicMock()
-        c1.is_dir.return_value = True
-        c1.name = "run1"
-        c1.__lt__ = lambda self, other: self.name < other.name
-        c1.__truediv__.return_value.exists.return_value = True # manifest exists
-        c1.__truediv__.return_value.read_text.return_value = json.dumps({
-            "run_id": "r1", "task_type": "reg", "created_at_utc": "2023-01-01"
-        })
-        
-        # Child 2: No manifest
-        c2 = MagicMock()
-        c2.is_dir.return_value = True
-        c2.name = "run2"
-        c2.__lt__ = lambda self, other: self.name < other.name
-        c2.__truediv__.return_value.exists.return_value = False
-        
-        # Child 3: File
-        c3 = MagicMock()
-        c3.is_dir.return_value = False
-        # c3 might be sorted if is_dir checked inside loop.
-        # sorted(root.iterdir()) happens BEFORE loop.
-        c3.__lt__ = lambda self, other: self.name < other.name
-        c3.name = "file"
-        
-        root.iterdir.return_value = [c1, c2, c3]
-        
-        items = services.list_artifacts("root")
-        assert len(items) == 1
-        assert items[0].run_id == "r1"
+def test_list_artifacts(tmp_path):
+    root = tmp_path / "artifacts"
+    root.mkdir(parents=True, exist_ok=True)
+
+    run1 = root / "run1"
+    run1.mkdir()
+    (run1 / "manifest.json").write_text(
+        json.dumps({"run_id": "r1", "task_type": "reg", "created_at_utc": "2023-01-01"}),
+        encoding="utf-8",
+    )
+
+    run2 = root / "run2"
+    run2.mkdir()
+    (root / "file.txt").write_text("x", encoding="utf-8")
+
+    items = services.list_artifacts(str(root))
+    assert len(items) == 1
+    assert items[0].run_id == "r1"
 
 def test_migration_services():
     # Test error paths

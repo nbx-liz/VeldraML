@@ -9,10 +9,13 @@ from veldra.gui.components.task_table import task_table
 def layout(state: dict | None = None) -> html.Div:
     data_path_val = ""
     config_path_val = "configs/gui_run.yaml" # Default
+    config_yaml_val = ""
     
     if state:
         if "data_path" in state:
             data_path_val = state["data_path"]
+        if "config_yaml" in state:
+            config_yaml_val = state["config_yaml"] or ""
         # If we had a mechanism to store last saved config path, we'd load it here.
         # identifying readiness
     
@@ -108,6 +111,7 @@ def layout(state: dict | None = None) -> html.Div:
                                                     html.Label("Config YAML Override", className="mt-2"),
                                                     dcc.Textarea(
                                                         id="run-config-yaml", 
+                                                        value=config_yaml_val,
                                                         style={"height": "100px", "width": "100%", "fontFamily": "monospace"},
                                                         className="form-control"
                                                     ),
@@ -129,6 +133,14 @@ def layout(state: dict | None = None) -> html.Div:
                                                 className="w-100 shadow-lg",
                                                 disabled=not is_ready,
                                                 title="Data must be selected in Data Page" if not is_ready else "Include Config from Builder"
+                                            ),
+                                            dbc.Alert(
+                                                "Ready: Data source is set."
+                                                if is_ready
+                                                else "Not ready: Select and inspect a data file in Data page.",
+                                                id="run-launch-status",
+                                                color="success" if is_ready else "warning",
+                                                className="mt-2 mb-0 small",
                                             ),
                                         ],
                                         id="run-launch-container"

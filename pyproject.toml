@@ -58,6 +58,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:cacheprovider --basetemp=.pytest_tmp"
+markers = [
+    "gui: GUI adapter related tests",
+]
 
 [tool.ruff]
 target-version = "py311"

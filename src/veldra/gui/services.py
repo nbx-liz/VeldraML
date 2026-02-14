@@ -14,17 +14,14 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from veldra.api.artifact import Artifact
 from veldra.api.exceptions import (
     VeldraArtifactError,
     VeldraNotImplementedError,
     VeldraValidationError,
 )
 from veldra.api.logging import log_event
-from veldra.api.runner import estimate_dr, evaluate, export, fit, simulate, tune
 from veldra.config.migrate import migrate_run_config_file, migrate_run_config_payload
 from veldra.config.models import RunConfig
-from veldra.data import load_tabular_data
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.types import (
     ArtifactSummary,
@@ -39,6 +36,76 @@ _RUNTIME_LOCK = threading.Lock()
 _JOB_STORE: GuiJobStore | None = None
 _JOB_WORKER: Any | None = None
 
+# Lazy runtime symbols for heavyweight deps.
+_ARTIFACT_CLS: Any | None = None
+evaluate: Any | None = None
+estimate_dr: Any | None = None
+export: Any | None = None
+fit: Any | None = None
+simulate: Any | None = None
+tune: Any | None = None
+load_tabular_data: Any | None = None
+
+
+def _get_artifact_cls() -> Any:
+    global Artifact, _ARTIFACT_CLS
+    if Artifact is not _ArtifactProxy:
+        return Artifact
+    if _ARTIFACT_CLS is None:
+        from veldra.api.artifact import Artifact as _Artifact
+
+        _ARTIFACT_CLS = _Artifact
+    return _ARTIFACT_CLS
+
+
+class _ArtifactProxy:
+    @staticmethod
+    def load(path: str) -> Any:
+        return _get_artifact_cls().load(path)
+
+
+# Backward-compat name used in tests via monkeypatch("...Artifact.load", ...).
+Artifact: Any = _ArtifactProxy
+
+
+def _get_runner_func(name: str) -> Any:
+    global evaluate, estimate_dr, export, fit, simulate, tune
+    current = {
+        "evaluate": evaluate,
+        "estimate_dr": estimate_dr,
+        "export": export,
+        "fit": fit,
+        "simulate": simulate,
+        "tune": tune,
+    }.get(name)
+    if current is not None:
+        return current
+    from veldra.api import runner as _runner
+
+    resolved = getattr(_runner, name)
+    if name == "evaluate":
+        evaluate = resolved
+    elif name == "estimate_dr":
+        estimate_dr = resolved
+    elif name == "export":
+        export = resolved
+    elif name == "fit":
+        fit = resolved
+    elif name == "simulate":
+        simulate = resolved
+    elif name == "tune":
+        tune = resolved
+    return resolved
+
+
+def _get_load_tabular_data() -> Any:
+    global load_tabular_data
+    if load_tabular_data is None:
+        from veldra.data import load_tabular_data as _load_tabular_data
+
+        load_tabular_data = _load_tabular_data
+    return load_tabular_data
+
 
 def inspect_data(path: str) -> dict[str, Any]:
     """Inspect a data file and return preview and statistics."""
@@ -46,8 +113,8 @@ def inspect_data(path: str) -> dict[str, Any]:
         data_path = Path(_require(path, "path"))
         if not data_path.exists():
             raise VeldraValidationError(f"Data file does not exist: {data_path}")
-
-        df = load_tabular_data(str(data_path))
+        loader = _get_load_tabular_data()
+        df = loader(str(data_path))
         
         # Calculate column stats
         numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
@@ -275,35 +342,35 @@ def run_action(invocation: RunInvocation) -> GuiRunResult:
 
         if action == "fit":
             config = _resolve_config(invocation)
-            result = fit(config)
+            result = _get_runner_func("fit")(config)
         elif action == "tune":
             config = _resolve_config(invocation)
-            result = tune(config)
+            result = _get_runner_func("tune")(config)
         elif action == "estimate_dr":
             config = _resolve_config(invocation)
-            result = estimate_dr(config)
+            result = _get_runner_func("estimate_dr")(config)
         elif action == "evaluate":
             data_path = _require(invocation.data_path, "data_path")
-            frame = load_tabular_data(data_path)
+            frame = _get_load_tabular_data()(data_path)
             if invocation.artifact_path and invocation.artifact_path.strip():
                 artifact = Artifact.load(invocation.artifact_path.strip())
-                result = evaluate(artifact, frame)
+                result = _get_runner_func("evaluate")(artifact, frame)
             else:
                 config = _resolve_config(invocation)
-                result = evaluate(config, frame)
+                result = _get_runner_func("evaluate")(config, frame)
         elif action == "simulate":
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             data_path = _require(invocation.data_path, "data_path")
             scenarios_path = _require(invocation.scenarios_path, "scenarios_path")
             artifact = Artifact.load(artifact_path)
-            frame = load_tabular_data(data_path)
+            frame = _get_load_tabular_data()(data_path)
             scenarios = _load_scenarios(scenarios_path)
-            result = simulate(artifact, frame, scenarios)
+            result = _get_runner_func("simulate")(artifact, frame, scenarios)
         else:
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             artifact = Artifact.load(artifact_path)
             export_format = (invocation.export_format or "python").strip().lower()
-            result = export(artifact, format=export_format)
+            result = _get_runner_func("export")(artifact, format=export_format)
 
         return GuiRunResult(
             success=True,
@@ -407,6 +474,3 @@ def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
 
     summaries.sort(key=lambda item: item.created_at_utc or "", reverse=True)
     return summaries
-
-
-

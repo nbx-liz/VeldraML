@@ -81,7 +81,7 @@ def test_callback_wrappers_cover_branches(monkeypatch) -> None:
             GuiJobRecord("j1", "succeeded", "fit", "now", "now", RunInvocation("fit"), None)
         ],
     )
-    table, toast, status, _ = refresh_jobs_cb(1, 0, {}, "/run", [])
+    table, toast, status, _, _ = refresh_jobs_cb(1, 0, {}, {}, "/run", [])
     assert table is not None
 
     # Job Detail
@@ -107,7 +107,7 @@ def test_callback_wrappers_cover_branches(monkeypatch) -> None:
     # Signature: (selected_rows, data) -> (str, bool, str, str|None)
     # The test needs proper inputs.
     # selected_rows=[0], data=[{"job_id": "j1"}]
-    res_detail = detail_cb([0], [{"job_id": "j1"}])
+    res_detail = detail_cb([0], [{"job_id": "j1"}], None)
     # detail_cb returns (html.Div, bool, str, str)
     # Check that status is present in Html representation
     # detail_cb returns (html.Div, bool, str, str)
@@ -191,4 +191,3 @@ def test_config_callback_wrappers(monkeypatch) -> None:
     
     res_mig = migrate_cb(1, "src", 2)
     assert res_mig == ("norm", "diff", None)
-

@@ -10,6 +10,44 @@ import dash_bootstrap_components as dbc
 def _render_builder_tab() -> html.Div:
     return html.Div(
         [
+            html.Div(id="cfg-builder-top"),
+            html.Div(
+                [
+                    html.Div(
+                        "Quick Actions",
+                        className="small text-uppercase fw-bold text-muted",
+                    ),
+                    html.Div(
+                        [
+                            dbc.Button(
+                                "Run Now →",
+                                id="config-run-now-btn",
+                                href="/run",
+                                color="success",
+                                size="sm",
+                                className="me-2",
+                            ),
+                            dbc.Button(
+                                "Jump to Export",
+                                id="config-jump-export-btn",
+                                href="#cfg-export-section",
+                                color="secondary",
+                                outline=True,
+                                size="sm",
+                            ),
+                        ],
+                    ),
+                ],
+                className="d-flex justify-content-between align-items-center mb-3 p-2 rounded",
+                style={
+                    "position": "sticky",
+                    "top": "8px",
+                    "zIndex": "100",
+                    "backgroundColor": "rgba(15, 23, 42, 0.95)",
+                    "backdropFilter": "blur(4px)",
+                    "border": "1px solid rgba(148, 163, 184, 0.2)",
+                },
+            ),
             # --- Task Section ---
             html.H5("1. Task Type", className="mb-3 mt-2 text-info"),
             dbc.Card(
@@ -347,6 +385,7 @@ def _render_builder_tab() -> html.Div:
             ),
             
             # --- Export Section ---
+             html.Div(id="cfg-export-section"),
              html.H5("6. Export", className="mb-3 text-info"),
              dbc.Card(
                  dbc.CardBody(
@@ -384,7 +423,8 @@ def _render_builder_tab() -> html.Div:
              # --- Actions ---
              html.Div(
                  [
-                     dbc.Button("Next: Run →", id="config-to-run-btn", color="success", size="lg", href="/run", className="w-100 shadow"),
+                     dbc.Button("Next: Run →", id="config-to-run-btn", color="success", size="lg", href="/run", className="w-100 shadow mb-2"),
+                     dbc.Button("Back to Top", id="config-back-top-btn", color="secondary", outline=True, href="#cfg-builder-top", className="w-100"),
                  ],
                  className="mt-4 mb-5"
              )

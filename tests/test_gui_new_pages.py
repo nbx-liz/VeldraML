@@ -34,7 +34,6 @@ def test_data_page_layout() -> None:
     _collect_ids(layout, ids)
     
     assert "data-file-path" in ids
-    assert "data-inspect-btn" in ids
     assert "data-loading" in ids
 
 

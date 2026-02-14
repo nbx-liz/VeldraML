@@ -83,6 +83,56 @@ def test_results_callbacks(monkeypatch):
     # Feature Importance view
     res_feat = view_cb("path_metrics_feature", None)
     assert res_feat[2] is not None # Should be figure
+
+    # Feature Importance fallback from booster when metadata/schema does not include it
+    original_load_with_feature = MockArtifact.load
+
+    def load_with_booster_fi(path):
+        if "boosterfi" in path:
+            obj = types.SimpleNamespace(
+                path=path,
+                run_id="run_booster",
+                task_type="regression",
+                created_at_utc="2023-01-01",
+                metrics={"rmse": 0.1},
+                metadata={},
+                feature_schema={"feature_names": ["f1", "f2"]},
+                config={"foo": "bar"},
+            )
+
+            class BoosterMock:
+                def feature_importance(self, importance_type="gain"):
+                    return [2.5, 1.0]
+
+                def feature_name(self):
+                    return ["f1", "f2"]
+
+            obj._get_booster = lambda: BoosterMock()
+            return obj
+        return original_load_with_feature(path)
+
+    monkeypatch.setattr(MockArtifact, "load", load_with_booster_fi)
+    res_booster_fi = view_cb("path_boosterfi", None)
+    assert hasattr(res_booster_fi[2], "to_dict")
+    assert len(res_booster_fi[2].data) > 0
+
+    # Nested mean metrics view (artifact metrics contract)
+    original_load = MockArtifact.load
+
+    def load_with_mean(path):
+        if "mean" in path:
+            return MockArtifact(
+                path,
+                "run_mean",
+                metrics={"folds": [], "mean": {"rmse": 0.1, "mae": 0.05, "r2": 0.9}},
+                metadata={},
+                config={},
+            )
+        return original_load(path)
+
+    monkeypatch.setattr(MockArtifact, "load", load_with_mean)
+    res_mean = view_cb("path_mean_metrics", None)
+    assert len(res_mean[1].data) > 0
     
     # Comparison view
     res_comp = view_cb("path_metrics", "path_metrics") # Same path -> no comp

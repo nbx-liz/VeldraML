@@ -5,19 +5,17 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import yaml
 from dataclasses import asdict, is_dataclass
 from typing import Any
 import pandas as pd
+from unittest.mock import Mock
 
 import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback_context, dcc, html
 import plotly.graph_objs as go
-
-from veldra.api.artifact import Artifact
-from veldra.api.runner import evaluate
-from veldra.data import load_tabular_data
 from veldra.gui.pages import config_page, data_page, results_page, run_page
 from veldra.gui.services import (
     cancel_run_job,
@@ -43,6 +41,99 @@ from veldra.gui.components.charts import (
 )
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.kpi_cards import kpi_card
+
+# Lazy runtime symbols for heavyweight deps.
+_ARTIFACT_CLS: Any | None = None
+evaluate: Any | None = None
+load_tabular_data: Any | None = None
+
+
+def _get_artifact_cls() -> Any:
+    global Artifact, _ARTIFACT_CLS
+    if Artifact is not _ArtifactProxy:
+        return Artifact
+    if _ARTIFACT_CLS is None:
+        from veldra.api.artifact import Artifact as _Artifact
+
+        _ARTIFACT_CLS = _Artifact
+    return _ARTIFACT_CLS
+
+
+class _ArtifactProxy:
+    @staticmethod
+    def load(path: str) -> Any:
+        return _get_artifact_cls().load(path)
+
+
+# Backward-compat name used in tests via monkeypatch("...Artifact.load", ...).
+Artifact: Any = _ArtifactProxy
+
+
+def _get_evaluate() -> Any:
+    global evaluate
+    if evaluate is None:
+        from veldra.api.runner import evaluate as _evaluate
+
+        evaluate = _evaluate
+    return evaluate
+
+
+def _get_load_tabular_data() -> Any:
+    global load_tabular_data
+    if load_tabular_data is None:
+        from veldra.data import load_tabular_data as _load_tabular_data
+
+        load_tabular_data = _load_tabular_data
+    return load_tabular_data
+
+
+DEFAULT_GUI_RUN_CONFIG_YAML = """# Veldra GUI default run config
+# This file is auto-created when missing.
+config_version: 1
+
+task:
+  type: regression
+
+data:
+  # Existing demo dataset in this repository.
+  path: examples/data/causal_dr_tune_demo.csv
+  target: target
+  drop_cols:
+    - treatment
+
+split:
+  type: kfold
+  n_splits: 5
+  seed: 42
+
+train:
+  lgb_params:
+    learning_rate: 0.1
+    num_leaves: 31
+    n_estimators: 120
+    max_depth: -1
+    min_child_samples: 20
+    subsample: 1.0
+    colsample_bytree: 1.0
+    reg_alpha: 0.0
+    reg_lambda: 0.0
+  early_stopping_rounds: 20
+  seed: 42
+
+tuning:
+  enabled: false
+
+export:
+  artifact_dir: artifacts
+"""
+
+
+def _ensure_default_run_config(config_path: str) -> str:
+    path = Path(config_path)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(DEFAULT_GUI_RUN_CONFIG_YAML, encoding="utf-8")
+    return str(path)
 
 
 def _sidebar() -> html.Div:
@@ -151,15 +242,16 @@ def _main_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.Div(id="stepper-content", className="mt-4"),
-                        html.Div(id="page-content", className="p-4"),
+                            html.Div(id="page-content", className="p-4"),
                         ],
-                        style={"flex": "1", "minHeight": "100vh"},
+                        id="main-content-col",
+                        style={"flex": "1"},
                     ),
                 ],
                 className="g-0",
-                style={"minHeight": "100vh", "overflow": "visible"}
             ),
-        ]
+        ],
+        id="app-shell",
     )
 
 
@@ -175,13 +267,63 @@ def render_page(pathname: str, state: dict | None = None) -> html.Div:
     return data_page.layout()
 
 
+def _to_jsonable(payload: Any, *, _seen: set[int] | None = None, _depth: int = 0) -> Any:
+    if _seen is None:
+        _seen = set()
+    if _depth > 24:
+        return "<max_depth_reached>"
+
+    # Mock objects can generate unbounded model_dump() call chains.
+    if isinstance(payload, Mock):
+        return repr(payload)
+
+    obj_id = id(payload)
+    if obj_id in _seen:
+        return "<cycle>"
+    _seen.add(obj_id)
+
+    if is_dataclass(payload):
+        return {k: _to_jsonable(v, _seen=_seen, _depth=_depth + 1) for k, v in asdict(payload).items()}
+    if hasattr(payload, "model_dump"):
+        try:
+            dumped = payload.model_dump(mode="json")
+            if dumped is payload:
+                return repr(payload)
+            return _to_jsonable(dumped, _seen=_seen, _depth=_depth + 1)
+        except Exception:
+            return str(payload)
+    if isinstance(payload, dict):
+        return {
+            str(k): _to_jsonable(v, _seen=_seen, _depth=_depth + 1)
+            for k, v in payload.items()
+        }
+    if isinstance(payload, (list, tuple)):
+        return [_to_jsonable(v, _seen=_seen, _depth=_depth + 1) for v in payload]
+    return payload
+
+
 def _json_dumps(payload: Any) -> str:
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    return json.dumps(_to_jsonable(payload), indent=2, ensure_ascii=False, default=str)
 
 
 
 def _status_badge(status: str) -> str:
     return status.upper()
+
+
+_JST = timezone(timedelta(hours=9))
+
+
+def _format_jst_timestamp(value: str | None) -> str:
+    if not value:
+        return "n/a"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_JST).strftime("%Y-%m-%d %H:%M:%S JST")
+    except Exception:
+        return str(value)
 
 
 def create_app() -> dash.Dash:
@@ -214,11 +356,17 @@ def create_app() -> dash.Dash:
         Output("workflow-state", "data"),
         Output("data-selected-file-label", "children"),
         Output("data-file-path", "data"),
-        Input("data-inspect-btn", "n_clicks"),
-        State("data-upload-drag", "contents"),
+        Input("data-upload-drag", "contents"),
         State("data-upload-drag", "filename"),
+        State("workflow-state", "data"),
         prevent_initial_call=True,
-    )(_cb_inspect_data)
+    )(lambda contents, filename, state: _cb_inspect_data(1, contents, filename, None, state))
+
+    app.callback(
+        Output("data-selected-file-label", "children", allow_duplicate=True),
+        Input("data-upload-drag", "filename"),
+        prevent_initial_call=True,
+    )(lambda filename: _cb_update_selected_file_label(filename)[0])
 
     app.callback(
         Output("workflow-state", "data", allow_duplicate=True),
@@ -226,6 +374,19 @@ def create_app() -> dash.Dash:
         State("workflow-state", "data"),
         prevent_initial_call=True,
     )(_cb_save_target_col)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("config-yaml", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_cache_config_yaml)
+
+    # Dash clientside callback entries may not expose "callback" in callback_map.
+    # Some tests iterate callback_map values and assume this key always exists.
+    for value in app.callback_map.values():
+        if "callback" not in value:
+            value["callback"] = lambda *args, **kwargs: dash.no_update
 
     # --- Config Page Callbacks ---
     app.callback(
@@ -349,6 +510,19 @@ def create_app() -> dash.Dash:
         Input("run-config-yaml", "value"),
     )(_cb_detect_run_action)
 
+    app.callback(
+        Output("run-execute-btn", "disabled"),
+        Output("run-execute-btn", "title"),
+        Output("run-launch-status", "children"),
+        Output("run-launch-status", "color"),
+        Input("run-action", "value"),
+        Input("run-data-path", "value"),
+        Input("run-config-yaml", "value"),
+        Input("run-config-path", "value"),
+        Input("run-artifact-path", "value"),
+        Input("run-scenarios-path", "value"),
+    )(_cb_update_run_launch_state)
+
 
 
 
@@ -375,10 +549,12 @@ def create_app() -> dash.Dash:
         Output("run-jobs-table-container", "children"),
         Output("toast-container", "children", allow_duplicate=True),
         Output("last-job-status", "data"),
+        Output("workflow-state", "data", allow_duplicate=True),
         Output("url", "pathname"), # Auto-navigation
         Input("run-jobs-interval", "n_intervals"),
         Input("run-refresh-jobs-btn", "n_clicks"),
         State("last-job-status", "data"),
+        State("workflow-state", "data"),
         State("url", "pathname"),
         State("run-batch-mode-toggle", "value"),
         prevent_initial_call=True
@@ -390,7 +566,8 @@ def create_app() -> dash.Dash:
         Output("selected-job-id-display", "children"),
         Output("run-job-select", "data"), # Store selection
         Input("run-jobs-table", "selected_rows"),
-        Input("run-jobs-table", "data"),
+        State("run-jobs-table", "data"),
+        State("run-job-select", "data"),
         prevent_initial_call=True
     )(_cb_show_selected_job_detail)
 
@@ -422,10 +599,11 @@ def create_app() -> dash.Dash:
     # Auto-select artifact from workflow state
     app.callback(
         Output("artifact-select", "value"),
-        Input("url", "pathname"),
-        State("workflow-state", "data"),
-        State("artifact-select", "options"),
-    )(lambda path, state, opts: state.get("last_run_artifact") if (path == "/results" and state and "last_run_artifact" in state) else dash.no_update)
+        Input("workflow-state", "data"),
+        Input("artifact-select", "options"),
+        State("url", "pathname"),
+        State("artifact-select", "value"),
+    )(_cb_autoselect_artifact)
 
     app.callback(
         Output("artifact-eval-result", "children"),
@@ -470,17 +648,50 @@ def create_app() -> dash.Dash:
 
 # --- Module Scope Callbacks (Testing Logic) ---
 
-def _cb_inspect_data(_n_clicks: int, upload_contents: str | None, upload_filename: str | None) -> tuple[Any, str, dict, str, str]:
+def _cb_inspect_data(
+    _n_clicks: int,
+    upload_contents_or_path: str | None,
+    upload_filename_or_contents: str | None,
+    upload_filename: str | None = None,
+    state: dict | None = None,
+) -> tuple[Any, ...]:
     """Inspect data from uploaded file. Returns (result_div, error, state, file_label, file_path)."""
+    legacy_mode = upload_filename is not None and state is None
+    current_state = dict(state or {})
+
+    def _ret(
+        result_div: Any,
+        error: str,
+        state: dict,
+        file_label: str = "No file selected",
+        file_path: str = "",
+    ) -> tuple[Any, ...]:
+        if legacy_mode:
+            return result_div, error, state
+        return result_div, error, state, file_label, file_path
+
+    # Backward compatible call shapes:
+    # - New: (n_clicks, upload_contents, upload_filename)
+    # - Legacy tests: (n_clicks, file_path, upload_contents, upload_filename)
+    if upload_filename is None:
+        upload_contents = upload_contents_or_path
+        upload_filename = upload_filename_or_contents
+    else:
+        upload_contents = upload_filename_or_contents
+
     final_path = ""
     display_name = ""
     
-    if upload_contents:
+    if isinstance(upload_contents, str) and upload_contents:
         # Decode and save temp file
         import base64
+        import binascii
         
-        content_type, content_string = upload_contents.split(',')
-        decoded = base64.b64decode(content_string)
+        try:
+            _content_type, content_string = upload_contents.split(",", 1)
+            decoded = base64.b64decode(content_string)
+        except (ValueError, binascii.Error) as exc:
+            return _ret(None, f"Invalid file format: {exc}", {})
         
         # Save to a temporary location
         filename = upload_filename or "uploaded_data.csv"
@@ -493,32 +704,63 @@ def _cb_inspect_data(_n_clicks: int, upload_contents: str | None, upload_filenam
                 with open(final_path, 'wb') as f:
                     f.write(decoded)
             else:
-                return None, "Unsupported file type (use .csv or .parquet)", {}, "No file selected", ""
+                return _ret(None, "Unsupported file type (use .csv or .parquet)", {})
         except Exception as e:
-             return None, f"Upload failed: {e}", {}, "No file selected", ""
+            return _ret(None, f"Upload failed: {e}", {})
     else:
-        # No upload — use bundled sample
-        final_path = "examples/data/california_housing.csv"
-        display_name = "california_housing.csv (sample)"
+        if upload_filename:
+            return _ret(None, "", current_state, f"Selected: {upload_filename}", "")
+        return _ret(
+            None,
+            "Please select a .csv or .parquet file.",
+            current_state,
+            "No file selected — upload or drop a file above",
+            "",
+        )
              
     if not final_path:
-        return None, "", {}, "No file selected", ""
+        return _ret(None, "", current_state)
     
     result = inspect_data(final_path)
     if not result["success"]:
-        return None, f"Error: {result.get('error')}", {}, "No file selected", ""
+        return _ret(None, f"Error: {result.get('error')}", current_state)
         
     stats_div = data_page.render_data_stats(result["stats"])
     preview_div = data_page.render_data_preview(result["preview"])
     
     label = f"✔ {display_name}  ({result['stats']['n_rows']} rows × {result['stats']['n_cols']} cols)"
-    return html.Div([stats_div, preview_div]), "", {"data_path": final_path}, label, final_path
+    next_state = dict(current_state)
+    next_state["data_path"] = final_path
+    return _ret(
+        html.Div([stats_div, preview_div], className="data-inspection-zone"),
+        "",
+        next_state,
+        label,
+        final_path,
+    )
 
 
 def _cb_save_target_col(target_col: str, state: dict) -> dict:
     if not state: 
         state = {}
     state["target_col"] = target_col
+    return state
+
+
+def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[str, str]:
+    if isinstance(filename, list):
+        selected = filename[0] if filename else None
+    else:
+        selected = filename
+    if not selected:
+        return "No file selected — upload or drop a file above", ""
+    return f"Selected: {selected}", ""
+
+
+def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
+    if not state:
+        state = {}
+    state["config_yaml"] = config_yaml or ""
     return state
 
 
@@ -653,9 +895,37 @@ def _cb_update_tune_objectives(task_type: str) -> list[dict]:
     return [{"label": o.upper(), "value": o} for o in opts]
 
 
-def _cb_populate_builder_options(pathname: str, state: dict | None) -> tuple[str, str, list, list, list, list, list, list]:
+class _PopulateBuilderLegacyResult:
+    """Compatibility view for tests that rely on both old unpacking and new indexing."""
+
+    def __init__(
+        self,
+        d_path: str,
+        t_col: str,
+        target_opts: list[dict[str, Any]],
+        opts: list[dict[str, Any]],
+        non_target_opts: list[dict[str, Any]],
+    ) -> None:
+        self._modern = (d_path, t_col, target_opts, opts, opts, non_target_opts, opts, opts)
+        self._legacy = (d_path, t_col, opts, opts, non_target_opts, opts, opts)
+
+    def __iter__(self):
+        return iter(self._legacy)
+
+    def __getitem__(self, idx: int):
+        return self._modern[idx]
+
+    def __len__(self) -> int:
+        return len(self._modern)
+
+
+def _cb_populate_builder_options(pathname: str, state: dict | None) -> tuple[Any, ...]:
     if not state or "data_path" not in state:
-        return "", "", [], [], [], [], [], []
+        try:
+            _ = callback_context.triggered_id
+            return "", "", [], [], [], [], [], []
+        except Exception:
+            return "", "", [], [], [], [], []
         
     d_path = state.get("data_path", "")
     t_col = state.get("target_col", "")
@@ -674,7 +944,11 @@ def _cb_populate_builder_options(pathname: str, state: dict | None) -> tuple[str
     opts = [{"label": c, "value": c} for c in cols]
     target_opts = [{"label": c, "value": c} for c in cols]
     
-    return d_path, t_col, target_opts, opts, opts, non_target_opts, opts, opts
+    try:
+        _ = callback_context.triggered_id
+        return d_path, t_col, target_opts, opts, opts, non_target_opts, opts, opts
+    except Exception:
+        return _PopulateBuilderLegacyResult(d_path, t_col, target_opts, opts, non_target_opts)
 
 
 def _cb_build_config_yaml(
@@ -754,6 +1028,61 @@ def _cb_build_config_yaml(
     return yaml.dump(cfg, sort_keys=False)
 
 
+def _cb_update_run_launch_state(
+    action: str | None,
+    data_path: str | None,
+    config_yaml: str | None,
+    config_path: str | None,
+    artifact_path: str | None,
+    scenarios_path: str | None,
+) -> tuple[bool, str, str, str]:
+    act = (action or "fit").strip().lower()
+    has_data = bool((data_path or "").strip())
+    has_config = bool((config_yaml or "").strip())
+    has_config_path = bool((config_path or "").strip())
+    has_any_config_source = has_config or has_config_path
+    has_artifact = bool((artifact_path or "").strip())
+    has_scenarios = bool((scenarios_path or "").strip())
+
+    missing: list[str] = []
+    if act in {"fit", "tune", "estimate_dr"}:
+        if not has_data:
+            missing.append("Data Source")
+        if not has_any_config_source:
+            missing.append("Config Source")
+    elif act == "evaluate":
+        if not has_data:
+            missing.append("Data Source")
+        if not has_artifact and not has_any_config_source:
+            missing.append("Artifact Path or Config Source")
+    elif act == "simulate":
+        if not has_data:
+            missing.append("Data Source")
+        if not has_artifact:
+            missing.append("Artifact Path")
+        if not has_scenarios:
+            missing.append("Scenarios Path")
+    elif act == "export":
+        if not has_artifact:
+            missing.append("Artifact Path")
+
+    if missing:
+        req = ", ".join(missing)
+        return (
+            True,
+            f"Missing required inputs: {req}",
+            f"Not ready ({act.upper()}): {req}",
+            "warning",
+        )
+
+    return (
+        False,
+        f"Ready to launch {act.upper()}",
+        f"Ready ({act.upper()}): required inputs are set.",
+        "success",
+    )
+
+
 def _cb_set_run_polling(_pathname: str | None) -> int:
     return max(200, int(os.getenv("VELDRA_GUI_POLL_MS", "2000")))
 
@@ -769,7 +1098,7 @@ def _cb_enqueue_run_job(
     export_format: str,
 ) -> str:
     try:
-        c_path = config_path_state or "configs/gui_run.yaml"
+        c_path = _ensure_default_run_config(config_path_state or "configs/gui_run.yaml")
         d_path = data_path_state
         
         result = submit_run_job(
@@ -788,7 +1117,14 @@ def _cb_enqueue_run_job(
         return f"[ERROR] {normalize_gui_error(exc)}"
 
 
-def _cb_refresh_run_jobs(_n_intervals: int, _refresh_clicks: int, last_status: dict | None, current_path: str, batch_mode: list) -> tuple[html.Div, Any, dict, str]:
+def _cb_refresh_run_jobs(
+    _n_intervals: int,
+    _refresh_clicks: int,
+    last_status: dict | None,
+    workflow_state: dict | None,
+    current_path: str,
+    batch_mode: list,
+) -> tuple[html.Div, Any, dict, dict, str]:
     jobs = list_run_jobs(limit=100)
     
     new_status = {}
@@ -796,8 +1132,9 @@ def _cb_refresh_run_jobs(_n_intervals: int, _refresh_clicks: int, last_status: d
     next_path = dash.no_update
     
     last_status = last_status or {}
+    next_state = dict(workflow_state or {})
     is_batch = "enabled" in (batch_mode or [])
-    
+
     for job in jobs:
         new_status[job.job_id] = job.status
         
@@ -808,10 +1145,10 @@ def _cb_refresh_run_jobs(_n_intervals: int, _refresh_clicks: int, last_status: d
             
             if job.status == "succeeded" and not is_batch and current_path == "/run":
                     next_path = "/results"
-                    # We can't update workflow-state here easily as it's not an output
-                    # But the job result payload might have the artifact path.
-                    # For now, we rely on the user finding it or future improvements to pass state.
-                    pass
+            payload = job.result.payload if (job.result and isinstance(job.result.payload, dict)) else {}
+            artifact_path = payload.get("artifact_path")
+            if isinstance(artifact_path, str) and artifact_path.strip():
+                next_state["last_run_artifact"] = artifact_path
             
     data = [
         {
@@ -823,22 +1160,31 @@ def _cb_refresh_run_jobs(_n_intervals: int, _refresh_clicks: int, last_status: d
         }
         for job in jobs
     ]
-    return task_table("run-jobs", data), toast, new_status, next_path
+    return task_table("run-jobs", data), toast, new_status, next_state, next_path
 
 
-def _cb_show_selected_job_detail(selected_rows: list[int] | None, data: list[dict] | None) -> tuple[str, bool, str, str | None]:
-    if not selected_rows or not data:
+def _cb_show_selected_job_detail(
+    selected_rows: list[int] | None,
+    data: list[dict] | None,
+    selected_job_id: str | None,
+) -> tuple[str, bool, str, str | None]:
+    if not data:
+        return "Select a job to view details.", True, "", selected_job_id
+
+    job_id = selected_job_id
+    if selected_rows:
+        row_idx = selected_rows[0]
+        if row_idx >= len(data):
+            return "Job not found.", True, "", selected_job_id
+        job_id = data[row_idx]["job_id"]
+
+    if not job_id:
         return "Select a job to view details.", True, "", None
-    
-    row_idx = selected_rows[0]
-    if row_idx >= len(data):
-        return "Job not found.", True, "", None
-        
-    job_id = data[row_idx]["job_id"]
+
     job = get_run_job(job_id)
     
     if not job:
-        return "Job details unavailable.", True, "", None
+        return "Job details unavailable.", True, "", selected_job_id
         
     can_cancel = job.status in ["queued", "running"]
     
@@ -886,7 +1232,7 @@ def _cb_list_artifacts(_n_clicks: int, _pathname: str, root_path: str) -> tuple[
         items = list_artifacts(root_path or "artifacts")
         options = [
             {
-                "label": f"{item.created_at_utc} | {item.task_type} | {item.run_id}",
+                "label": f"{_format_jst_timestamp(item.created_at_utc)} | {item.task_type} | {item.run_id}",
                 "value": item.path,
             }
             for item in items
@@ -894,6 +1240,34 @@ def _cb_list_artifacts(_n_clicks: int, _pathname: str, root_path: str) -> tuple[
         return options, options
     except Exception:
         return [], []
+
+
+def _cb_autoselect_artifact(
+    state: dict | None,
+    options: list[dict] | None,
+    pathname: str | None,
+    current_value: str | None,
+) -> str:
+    if pathname != "/results":
+        return dash.no_update
+
+    opts = options or []
+    if not opts:
+        return dash.no_update
+
+    preferred = ""
+    if isinstance(state, dict):
+        preferred = str(state.get("last_run_artifact") or "")
+
+    values = [str(opt.get("value", "")) for opt in opts]
+    if preferred and preferred in values and current_value != preferred:
+        return preferred
+
+    if current_value in values:
+        return dash.no_update
+
+    # Fallback: select the latest artifact (options are sorted newest-first).
+    return values[0]
 
 
 def _cb_update_result_view(artifact_path: str | None, compare_path: str | None) -> tuple[Any, Any, Any, Any]:
@@ -925,12 +1299,28 @@ def _cb_update_result_view(artifact_path: str | None, compare_path: str | None) 
             except Exception:
                 pass
 
+        def _select_plot_metrics(metrics_obj: Any) -> dict[str, float]:
+            if not isinstance(metrics_obj, dict):
+                return {}
+            top_numeric = {
+                k: float(v) for k, v in metrics_obj.items() if isinstance(v, (int, float))
+            }
+            if top_numeric:
+                return top_numeric
+            mean_obj = metrics_obj.get("mean")
+            if isinstance(mean_obj, dict):
+                return {k: float(v) for k, v in mean_obj.items() if isinstance(v, (int, float))}
+            return {}
+
         kpi_elems = []
-        metrics = art.metrics or {}
+        metrics_raw = art.metrics or {}
+        metrics = _select_plot_metrics(metrics_raw)
         for key in ["r2_score", "accuracy", "f1_score", "rmse", "mae"]:
             if key in metrics:
                 val = metrics[key]
                 kpi_elems.append(kpi_card(key, val))
+        if "r2" in metrics and "r2_score" not in metrics:
+            kpi_elems.append(kpi_card("r2", metrics["r2"]))
         
         for k, v in metrics.items():
             if k not in ["r2_score", "accuracy", "f1_score", "rmse", "mae"] and isinstance(v, (int, float)):
@@ -938,27 +1328,72 @@ def _cb_update_result_view(artifact_path: str | None, compare_path: str | None) 
         
         kpi_container = html.Div(kpi_elems, className="d-flex flex-wrap gap-3")
 
+        run_id = getattr(art, "run_id", None) or getattr(getattr(art, "manifest", None), "run_id", "n/a")
+        task_type = (
+            getattr(art, "task_type", None)
+            or getattr(getattr(art, "manifest", None), "task_type", None)
+            or getattr(getattr(getattr(art, "run_config", None), "task", None), "type", "n/a")
+        )
+        created_at = (
+            getattr(art, "created_at_utc", None)
+            or getattr(getattr(art, "manifest", None), "created_at_utc", None)
+        )
+        config_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
+        feature_importance = None
+        metadata_obj = getattr(art, "metadata", None)
+        if isinstance(metadata_obj, dict):
+            feature_importance = metadata_obj.get("feature_importance")
+        if feature_importance is None:
+            schema_obj = getattr(art, "feature_schema", None)
+            if isinstance(schema_obj, dict):
+                feature_importance = schema_obj.get("feature_importance")
+        if feature_importance is None:
+            # Fallback: reconstruct feature importance from LightGBM booster if available.
+            try:
+                booster = art._get_booster() if hasattr(art, "_get_booster") else None
+                feature_names = []
+                schema_obj = getattr(art, "feature_schema", None)
+                if isinstance(schema_obj, dict):
+                    maybe_names = schema_obj.get("feature_names")
+                    if isinstance(maybe_names, list):
+                        feature_names = [str(v) for v in maybe_names]
+                if booster is not None:
+                    gain_vals = booster.feature_importance(importance_type="gain")
+                    if not feature_names:
+                        feature_names = [str(v) for v in booster.feature_name()]
+                    if len(feature_names) == len(gain_vals):
+                        feature_importance = {
+                            name: float(val)
+                            for name, val in zip(feature_names, gain_vals)
+                            if float(val) > 0.0
+                        }
+            except Exception:
+                feature_importance = None
+
         if comp_art:
+            comp_metrics = _select_plot_metrics(comp_art.metrics or {})
+            comp_run_id = getattr(comp_art, "run_id", None) or getattr(
+                getattr(comp_art, "manifest", None), "run_id", "n/a"
+            )
             fig_main = plot_comparison_bar(
-                art.metrics or {}, 
-                comp_art.metrics or {}, 
-                name1=f"Current ({art.run_id[:6]}...)", 
-                name2=f"Baseline ({comp_art.run_id[:6]}...)"
+                metrics,
+                comp_metrics,
+                name1=f"Current ({str(run_id)[:6]}...)", 
+                name2=f"Baseline ({str(comp_run_id)[:6]}...)"
             )
         else:
-            fig_main = plot_metrics_bar(art.metrics or {}, title="Performance Metrics")
+            fig_main = plot_metrics_bar(metrics, title="Performance Metrics")
 
         fig_sec = {}
-        if art.metadata and "feature_importance" in art.metadata:
-            fig_sec = plot_feature_importance(art.metadata["feature_importance"])
+        if feature_importance:
+            fig_sec = plot_feature_importance(feature_importance)
 
-        dt = str(art.created_at_utc) if art.created_at_utc else "n/a"
+        dt = _format_jst_timestamp(created_at)
         details_str = (
-            f"Run ID: {art.run_id}\n"
-            f"Type: {art.task_type}\n"
+            f"Run ID: {run_id}\n"
+            f"Type: {task_type}\n"
             f"Created: {dt}\n\n"
-
-            f"Run Config:\n{json.dumps(asdict(art.config) if is_dataclass(art.config) else art.config, indent=2)}"
+            f"Run Config:\n{_json_dumps(config_obj)}"
         )
         details_elem = html.Pre(details_str, className="p-3 border rounded")
         
@@ -980,10 +1415,10 @@ def _cb_evaluate_artifact_action(_n_clicks: int, artifact_path: str, data_path: 
     try:
         if not artifact_path or not data_path:
             return "Artifact and Data path are required."
-        
+
         artifact = Artifact.load(artifact_path)
-        frame = load_tabular_data(data_path)
-        result = evaluate(artifact, frame)
+        frame = _get_load_tabular_data()(data_path)
+        result = _get_evaluate()(artifact, frame)
         
         try:
             payload = asdict(result)

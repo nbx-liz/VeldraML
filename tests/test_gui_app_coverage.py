@@ -1,7 +1,9 @@
 from __future__ import annotations
+from datetime import datetime, timezone
+
 import pytest
-from unittest.mock import MagicMock
 import types
+import dash
 import plotly.graph_objs as go
 import json
 from dataclasses import dataclass
@@ -21,16 +23,15 @@ def test_app_coverage_edge_cases(monkeypatch):
     # 1. _inspect_data coverage
     inspect_cb = get_callback(app, "data-inspection-result.children")
     
-    # No upload (uses sample file fallback)
-    monkeypatch.setattr(app_module, "inspect_data", lambda p: {"success": True, "stats": {"columns": ["A"], "n_rows": 1, "n_cols": 1, "numeric_cols": [], "categorical_cols": [], "missing_count": 0}, "preview": [{"A": 1}]})
-    res = inspect_cb(1, None, None)
-    assert res[0] is not None  # stats div
-    assert res[1] == ""  # no error
-    assert "california_housing" in res[4]  # file path (sample)
+    # No upload (requires user file selection)
+    res = inspect_cb(None, None, {})
+    assert res[0] is None
+    assert "Please select" in res[1]
+    assert res[4] == ""
     
     # Inspection error
     monkeypatch.setattr(app_module, "inspect_data", lambda p: {"success": False, "error": "Fail"})
-    res_err = inspect_cb(1, None, None)
+    res_err = inspect_cb("data:text/csv;base64,QQox", "x.csv", {})
     assert "Error: Fail" in res_err[1]
     assert len(res_err) == 5
 
@@ -80,27 +81,34 @@ def test_app_coverage_edge_cases(monkeypatch):
     # Last status was queued
     last_status = {"j1": "queued"}
     
-    _, toast, new_status, _ = refresh_cb(1, 0, last_status, "/run", [])
+    _, toast, new_status, _, _ = refresh_cb(1, 0, last_status, {}, "/run", [])
     assert "Toast" in str(toast)
     assert "success" in str(toast)
     assert new_status["j1"] == "succeeded"
+
+    # First-poll completion should not force-redirect from /run.
+    now = datetime.now(timezone.utc).isoformat()
+    job_first_poll = GuiJobRecord("jx", "succeeded", "fit", now, now, RunInvocation("fit"), None)
+    monkeypatch.setattr(app_module, "list_run_jobs", lambda limit=100: [job_first_poll])
+    _, _, _, _, next_path = refresh_cb(1, 0, {}, {}, "/run", [])
+    assert next_path is dash.no_update
     
     # 5. _show_selected_job_detail coverage
     detail_cb = get_callback(app, "run-job-detail.children")
     
     # Index out of bounds
-    res_oob = detail_cb([99], [{"job_id": "j1"}])
+    res_oob = detail_cb([99], [{"job_id": "j1"}], None)
     assert "Job not found" in res_oob[0]
     
     # Job not found in store
     monkeypatch.setattr(app_module, "get_run_job", lambda jid: None)
-    res_gone = detail_cb([0], [{"job_id": "j1"}])
+    res_gone = detail_cb([0], [{"job_id": "j1"}], None)
     assert "unavailable" in res_gone[0]
     
     # Job with error
     job_err = GuiJobRecord("j2", "failed", "fit", "now", "now", RunInvocation("fit"), None, error_message="Fatal Error")
     monkeypatch.setattr(app_module, "get_run_job", lambda jid: job_err)
-    res_err_msg = detail_cb([0], [{"job_id": "j2"}])
+    res_err_msg = detail_cb([0], [{"job_id": "j2"}], None)
     # Returns html.Div, check string repr
     assert "Fatal Error" in str(res_err_msg[0])
     
@@ -113,7 +121,7 @@ def test_app_coverage_edge_cases(monkeypatch):
         result=res_obj
     )
     monkeypatch.setattr(app_module, "get_run_job", lambda jid: job_payload)
-    res_pay = detail_cb([0], [{"job_id": "j3"}])
+    res_pay = detail_cb([0], [{"job_id": "j3"}], None)
     assert "acc" in str(res_pay[0])
     
     # 6. _cancel_job coverage
@@ -151,19 +159,27 @@ def test_app_coverage_edge_cases(monkeypatch):
     assert "layout" in res_empty[1]
     assert "annotations" in res_empty[1]["layout"]
     assert res_empty[3] == "Select an artifact to view results."
-    mock_art = MagicMock()
-    mock_art.metrics = {"r2_score": 0.5, "custom": 10}
-    mock_art.metadata = {}
-    mock_art.created_at_utc = "now"
-    mock_art.run_id = "r1"
-    mock_art.task_type = "reg"
-    mock_art.config = {}
+    class ArtifactStub:
+        def __init__(self) -> None:
+            self.metrics = {"r2_score": 0.5, "custom": 10}
+            self.metadata = {}
+            self.created_at_utc = "now"
+            self.run_id = "r1"
+            self.task_type = "reg"
+            self.config = {}
+
+    mock_art = ArtifactStub()
     
     def load_side_effect(path):
         if "bad" in path: raise ValueError("Bad")
         return mock_art
         
-    monkeypatch.setattr(app_module, "Artifact", MagicMock(load=load_side_effect))
+    class ArtifactLoader:
+        @staticmethod
+        def load(path):
+            return load_side_effect(path)
+
+    monkeypatch.setattr(app_module, "Artifact", ArtifactLoader)
     
     res_comp_err = view_cb("good", "bad")
     assert "Performance Metrics" in str(res_comp_err[1]) # generic title, check repr of figure object or just str
@@ -178,7 +194,7 @@ def test_app_coverage_edge_cases(monkeypatch):
     eval_cb = get_callback(app, "artifact-eval-result.children")
     
     # asdict failure fallback
-    monkeypatch.setattr(app_module, "Artifact", MagicMock(load=lambda p: mock_art))
+    monkeypatch.setattr(app_module, "Artifact", ArtifactLoader)
     monkeypatch.setattr(app_module, "load_tabular_data", lambda p: "data")
     
     class NonDataclass:
@@ -281,4 +297,3 @@ def test_app_coverage_edge_cases(monkeypatch):
     # 12. _set_run_polling
     poll_cb = get_callback(app, "run-jobs-interval.interval")
     assert poll_cb("/") >= 200
-

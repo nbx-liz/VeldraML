@@ -1,6 +1,6 @@
 
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import mock_open, patch
 import dash
 from dash import html
 import plotly.graph_objs as go
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 # Import the callbacks to test
 from veldra.gui.app import (
     _cb_inspect_data,
+    _cb_update_selected_file_label,
     _cb_detect_run_action,
     _cb_build_config_yaml,
     _cb_update_result_view,
@@ -25,7 +26,7 @@ from veldra.gui.app import (
 # --- 1. _cb_inspect_data (Upload) ---
 
 @patch("veldra.gui.app.inspect_data")
-@patch("builtins.open", new_callable=MagicMock)
+@patch("builtins.open", new_callable=mock_open)
 @patch("os.makedirs")
 def test_inspect_data_upload_csv(mock_makedirs, mock_open, mock_inspect):
     """Test CSV upload handling."""
@@ -55,6 +56,11 @@ def test_inspect_data_upload_unsupported(mock_inspect):
     upload_contents = "data:text/plain;base64,MTIz"
     res = _cb_inspect_data(1, upload_contents, "data.txt")
     assert "Unsupported file type" in res[1]
+
+
+def test_update_selected_file_label():
+    assert _cb_update_selected_file_label(None)[0].startswith("No file selected")
+    assert "sample.csv" in _cb_update_selected_file_label("sample.csv")[0]
 
 # --- 2. _cb_detect_run_action ---
 

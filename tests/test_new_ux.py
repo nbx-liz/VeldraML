@@ -1,8 +1,7 @@
 """Test GUI UX Flows - Simplified."""
 import pytest
-from unittest.mock import MagicMock, patch
-from dash import html
-import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from veldra.gui.app import (
     _cb_inspect_data, 
@@ -36,19 +35,22 @@ def test_01_data_page_inspection_flow(mock_inspect_data):
         "preview": [{"col1": 1, "col2": "a"}]
     }
     
-    # Callback args: n_clicks, upload_contents, upload_filename
-    # Returns: (stats_div, error_msg, workflow_state, file_label, file_path)
+    # No upload selected
     result = _cb_inspect_data(1, None, None)
-    
-    # Assertions
-    assert result[0] is not None # stats_div
-    assert result[1] == ""       # error_msg
-    assert "data_path" in result[2]  # workflow state has data_path
+    assert result[0] is None
+    assert "Please select" in result[1]
+    assert result[2] == {}
+
+    # With uploaded content
+    output_ok = _cb_inspect_data(1, "data:text/csv;base64,QQox", "x.csv")
+    assert output_ok[0] is not None
+    assert output_ok[1] == ""
+    assert "data_path" in output_ok[2]
 
     mock_inspect_data.return_value = {"success": False, "error": "File not found"}
-    output_fail = _cb_inspect_data(1, None, None)
-    assert output_fail[1] == "Error: File not found" # error_msg for failure
-    assert output_fail[2] == {} # workflow_state should be empty on failure
+    output_fail = _cb_inspect_data(1, "data:text/csv;base64,QQox", "x.csv")
+    assert output_fail[1] == "Error: File not found"
+    assert output_fail[2] == {}
 
 def test_02_config_builder_population(mock_inspect_data):
     """Test Config Builder options population."""
@@ -86,7 +88,7 @@ def test_03_config_builder_yaml_generation():
 
 def test_04_run_page_submission(mock_submit_run):
     """Test Run Page job submission."""
-    mock_submit_run.return_value = MagicMock(message="Job started", job_id="job-123")
+    mock_submit_run.return_value = SimpleNamespace(message="Job started", job_id="job-123")
     
     # config_path_state fallback logic
     res = _cb_enqueue_run_job(

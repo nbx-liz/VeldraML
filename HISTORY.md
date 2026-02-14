@@ -48,6 +48,344 @@
 ## Log
 （ここに上のTemplateで追記していく）
 
+### 2026-02-14 (Session/PR: data-layout-root-cause-fix-row-col-height-and-overflow-scope)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data画面で `stepper` と `Data` が1画面分下へ押し出される現象に対し、スクロール制御ではなくレイアウト計算の根本要因を除去する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - `_main_layout()` の `dbc.Row` から `minHeight: 100vh` を削除。
+    - 右カラム (`main-content-col`) の `minHeight: 100vh` を削除し、通常フローへ戻した。
+  - `src/veldra/gui/assets/style.css`
+    - グローバルな Bootstrap グリッド上書き
+      - `.row, .col, [class*="col-"] { overflow: visible !important; }`
+      を撤去。
+    - `overflow: visible` は `.glass-card/.card/.card-body/.tab-content/.tab-pane` に局所化。
+    - `.data-preview-card` の局所スクロール設定
+      - `overflow-x: auto`
+      - `overflow-y: auto`
+      - `max-height: 420px`
+      を維持。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - レイアウト異常は「高さ固定 + グローバルoverflow上書き」の組み合わせを禁止し、必要箇所への局所適用に統一する。
+  - 理由：
+    - 画面全体の再フロー副作用を抑え、Data表示時の空白押し下げを防ぐため。
+  - 影響範囲：
+    - GUI layout / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: remove-scrollto-side-effects-and-restore-data-preview-scroll)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data画面でのスクロール異常（巨大空白・勝手な移動）と、Data Preview横スクロール消失を根本的に解消する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - Data関連の clientside callback（`window.scrollTo` 実行）を全撤去。
+    - `ui-scroll-fix` store を削除。
+  - `src/veldra/gui/assets/style.css`
+    - `html/body` 全体への `overflow-anchor: none` を撤去。
+    - `.data-preview-card` を局所スクロール設定へ修正：
+      - `overflow-x: auto`
+      - `overflow-y: auto`
+      - `max-height: 420px`
+    - `#data-inspection-result` / `.data-inspection-zone` の局所アンカー制御は維持。
+    - Data領域内の `.glass-card` / `.kpi-card` のアニメーション無効化は維持。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Data描画時のスクロール制御はブラウザ標準挙動に任せ、`window.scrollTo` による補正は行わない。
+  - 理由：
+    - スクロール補正JSがレイアウト再計算と競合し、逆効果の副作用を生んでいたため。
+  - 影響範囲：
+    - GUI / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: rollback-internal-scroll-shell-to-restore-usability)
+**Context**
+- 背景 / 依頼 / 目的：
+  - 内部スクロール化の副作用でページ操作不能（スクロール不可）が発生したため、可用性を最優先で復旧する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/assets/style.css`
+    - `body { overflow: hidden; }` を撤回し `overflow-x: hidden` に戻した。
+    - `#page-content` の内部スクロール指定を撤回。
+    - `#main-content-col` の固定高さ/overflow制御を撤回。
+    - sidebarのsticky指定を撤回。
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: app-shell-internal-scroll-refactor)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data Preview表示時のスクロールジャンプが再発し続けたため、個別対症療法ではなく画面フレーム構造を再設計する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - ルートレイアウトに `#app-shell` / `#main-content-col` を定義。
+  - `src/veldra/gui/assets/style.css`
+    - `body` のスクロールを禁止し、`#page-content` のみ内部スクロールに変更。
+    - サイドバーを desktop で sticky 固定化。
+    - メインカラムを `height: 100vh; overflow: hidden;` の固定フレームに変更。
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewテーブルのセル表示を `nowrap` にして横スクロールを復帰。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - GUIは「ウィンドウ全体スクロール」ではなく「メイン領域内部スクロール」を標準構造とする。
+  - 理由：
+    - 動的レンダリング時のビューポート位置変動を構造的に抑制できるため。
+  - 影響範囲：
+    - GUI layout / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: data-inspection-single-trigger-and-animation-isolation)
+**Context**
+- 背景 / 依頼 / 目的：
+  - 狭幅時のData Preview後スクロールジャンプについて、場当たり対応ではなく発火条件とレイアウト挙動を見直して根本対処する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - Data inspection callbackの発火条件を `contents` 中心へ変更（`last_modified` 依存を除外）。
+    - `workflow-state` を引き継いで `data_path` を更新する形に修正。
+    - ファイル名表示を独立 callback に分離。
+  - `src/veldra/gui/assets/style.css`
+    - Data inspection領域の `overflow-anchor` を無効化。
+    - Data inspection領域内の `.glass-card` / `.kpi-card` のアニメーションとtransformを無効化。
+  - `tests/test_gui_app_coverage.py`
+    - callback引数更新に合わせてテストを修正。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Data inspection結果表示は「単一データ入力トリガー + 領域限定の無アニメーション化」を標準とする。
+  - 理由：
+    - 狭幅レイアウトでの再アンカー/再フローによるスクロールジャンプを構造的に抑えるため。
+  - 影響範囲：
+    - GUI / UX / callback stability
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-data-preview-datatable-removal-for-scroll-stability)
+**Context**
+- 背景 / 依頼 / 目的：
+  - 画面幅が狭い時にData Preview後に下へ移動する問題が解消しきれていなかったため、根本原因の再除去を行う。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewの表示を `dash_table.DataTable` から静的HTMLテーブルへ置換。
+    - 横/縦スクロールはカード側で維持しつつ、DataTable由来のフォーカス/再レイアウト挙動を排除。
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_pages_logic.py tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-narrow-width-scroll-jump-hardening)
+**Context**
+- 背景 / 依頼 / 目的：
+  - 画面幅が狭い場合にData Preview後にページが下へ移動する再発を解消する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewカードに専用クラス `data-preview-card` を追加。
+  - `src/veldra/gui/assets/style.css`
+    - `data-preview-card` に `overflow: hidden !important` を適用し、局所スクロールを強制。
+    - `#data-inspection-result` に `overflow-anchor: none` を適用。
+  - `src/veldra/gui/app.py`
+    - Data inspection後のスクロールリセットを多段タイミング（RAF + timeout）へ強化。
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-data-preview-scroll-jump-regression-fix)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data Preview表示後にビューが勝手に下へ移動する回帰を解消する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - `data-inspection-result` 更新時にクライアントサイドで `window.scrollTo(0, 0)` を二段で実行。
+    - DataTable側の内部挙動に依存せず、Data inspection後の画面位置を安定化。
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-config-quick-run-and-preview-stability)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data Preview表示をページ内で見やすく維持しつつ表示不具合を解消する。
+  - Config画面で最下部までスクロールしなくてもRunへ移動できるUXを実現する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewのテーブル表示を安定化（固定行ヘッダ指定/contain指定を削除）。
+    - 画面内スクロール構成は維持しつつ、列表示幅と折返し挙動を調整。
+  - `src/veldra/gui/pages/config_page.py`
+    - Builder先頭に sticky な `Quick Actions` バーを追加。
+      - `Run Now →`（即 `/run` 遷移）
+      - `Jump to Export`（詳細設定継続時の導線）
+    - 下部アクションに `Back to Top` を追加し、長い設定画面の往復コストを削減。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Config画面のRun導線は「上部即時導線」と「下部完了導線」の二重化で提供する。
+  - 理由：
+    - すぐ実行したい利用者と詳細調整したい利用者の両方を同時に満たせるため。
+  - 影響範囲：
+    - GUI / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-inline-preview-readiness-and-jst-labels)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data Previewをモーダルではなく従来の画面内表示に戻しつつ、表示時のレイアウト変位を抑える。
+  - RunのLaunch可否理由をユーザーに明示する。
+  - ResultsのArtifact時刻表示を日本時間（JST）に統一する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewを画面内表示へ戻し、固定高さ + 内部横/縦スクロールへ変更。
+    - `contain: layout paint size` を適用してプレビュー領域外へのレイアウト影響を抑制。
+  - `src/veldra/gui/pages/run_page.py`
+    - `run-launch-status` を追加し、Launch可否の状態を常時表示。
+  - `src/veldra/gui/app.py`
+    - `run-execute-btn` の有効/無効と説明文を更新する callback を追加。
+    - 条件不足時は不足項目（Data Source / Config Source / Artifact Path / Scenarios Path）を表示。
+    - Artifact一覧ラベル時刻をJST整形する `_format_jst_timestamp(...)` を追加。
+    - Results detail の `Created` もJST表示に統一。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Run画面は「実行可否」だけでなく「なぜ実行不可か」を常時表示する。
+  - 理由：
+    - ユーザーが状態把握のために試行錯誤する必要を減らすため。
+  - 影響範囲：
+    - GUI / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-preview-modal-and-artifact-autoselect-fallback)
+**Context**
+- 背景 / 依頼 / 目的：
+  - Data Preview展開時のレイアウト変位を防止し、Results遷移時のArtifact未選択を解消する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data Previewをページ内展開からモーダル表示へ変更。
+    - これによりプレビュー表示時もメインレイアウトを不変化。
+  - `src/veldra/gui/app.py`
+    - `data-preview-open-btn` / `data-preview-close-btn` のモーダル開閉コールバックを追加。
+    - Artifact自動選択ロジックを関数化し、優先順位を明確化：
+      1) `workflow-state.last_run_artifact` が options に存在すればそれを選択
+      2) なければ options 先頭（最新）を自動選択
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Results初期表示では「未選択状態」を基本的に作らず、最新artifactを必ず選択する。
+  - 理由：
+    - Run後の確認フローで無駄な選択操作を排除するため。
+  - 影響範囲：
+    - GUI / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+### 2026-02-14 (Session/PR: gui-ux-autoselect-and-scroll-stabilization)
+**Context**
+- 背景 / 依頼 / 目的：
+  - GUIの残課題として、Data画面のスクロールジャンプとResultsでの手動Artifact選択を解消する。
+
+**Plan**
+- Data選択時の処理を自動化したまま、ワイドデータ時の画面ジャンプを抑える。
+- Run完了時に最新Artifactを状態保持し、Resultsで自動選択する。
+- Run画面の既存挙動を壊さないようGUIテストを更新・再実行する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/pages/data_page.py`
+    - Data PreviewをAccordion（初期折りたたみ）へ変更。
+    - Previewテーブルに`maxHeight` + 内部スクロールを設定し、ワイド列データでの画面変位を抑制。
+  - `src/veldra/gui/app.py`
+    - Runジョブ更新コールバックで`workflow-state`を更新するよう拡張。
+    - `fit`成功時に`result.payload.artifact_path`を`workflow-state.last_run_artifact`へ保存。
+    - Results側の自動選択を、`workflow-state`と`artifact-select.options`の両方を見て実行する方式へ強化。
+- テスト変更：
+  - `tests/test_gui_app_coverage.py`
+  - `tests/test_gui_app_callbacks_internal.py`
+  - コールバック引数/戻り値変更に追随。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - Resultsの初期選択は「最後に成功したRunのartifact_path」を優先する。
+  - 理由：
+    - Run直後の確認フローで手動選択を排除し、操作回数を減らすため。
+  - 影響範囲：
+    - GUI / UX
+
+**Results**
+- 動作確認結果：
+  - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_* tests/test_new_ux.py`
+  - `73 passed, 1 warning`
+
+**Risks / Notes**
+- `fit`以外のアクションでは`artifact_path`がpayloadに含まれない場合があるため、自動選択更新は行われない。
+
+**Open Questions**
+- [ ] Data Previewの既定折りたたみをユーザー設定化するか。
+
 ### 2026-02-09 (Session/PR: bootstrap-mvp-scaffold)
 **Context**
 - 背景 / 依頼 / 目的：
@@ -606,6 +944,300 @@
 **Results**
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
+
+### 2026-02-14 (Session/PR: phase25-gui-operability-completion)
+**Context**
+- Resume and complete Phase 25 by stabilizing GUI callback behavior and restoring full test pass.
+
+**Plan**
+- Reproduce current failures with full test suite.
+- Fix callback compatibility and error handling in `src/veldra/gui/app.py`.
+- Re-run full `pytest` and update design/history docs.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/gui/app.py`:
+    - `_cb_inspect_data` now supports both new and legacy call signatures.
+    - Added base64 decode error handling (`ValueError` / `binascii.Error`) for upload parsing.
+    - Added legacy/new return-shape compatibility in `_cb_inspect_data`.
+    - Added `_PopulateBuilderLegacyResult` for `_cb_populate_builder_options` compatibility:
+      - supports modern indexing contract and legacy unpacking contract simultaneously.
+- Documentation changes:
+  - Updated `DESIGN_BLUEPRINT.md` Phase 25 status from in-progress to completed.
+  - Added this session log to `HISTORY.md`.
+- Test changes:
+  - No test file modifications.
+  - Resolved failing tests via callback compatibility fixes.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI callback helper functions maintain backward-compatible call/return contracts for direct-call tests while preserving Dash runtime outputs.
+  - Reason:
+    - Prevents regressions across mixed test generations without changing stable API/Core behavior.
+  - Impact area:
+    - GUI adapter reliability / Test stability
+
+**Results**
+- `pytest -q` : **405 passed, 0 failed**.
+- Remaining warning:
+  - `joblib` serial-mode warning due environment permission (`[Errno 13] Permission denied`), non-blocking.
+
+**Risks / Notes**
+- Repository-wide `ruff` violations already exist outside this session's functional scope.
+
+**Open Questions**
+- [ ] Should legacy direct-call compatibility paths in GUI callbacks be removed after test suite unification?
+
+### 2026-02-14 (Session/PR: gui-run-default-config-bootstrap-fix)
+**Context**
+- GUI Run page failed when no existing `configs/gui_run.yaml` file was present.
+- User requested a fix with understandable default config values.
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/gui/app.py`:
+    - added `DEFAULT_GUI_RUN_CONFIG_YAML` template with explicit defaults.
+    - added `_ensure_default_run_config(...)` to auto-create missing config file.
+    - `_cb_enqueue_run_job(...)` now ensures default config file exists before enqueue.
+- Added file:
+  - `configs/gui_run.yaml` (default, readable template for GUI Run).
+- Docs updated:
+  - `README.md` GUI section now clarifies `configs/gui_run.yaml` is auto-created when missing.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI Run default config path remains `configs/gui_run.yaml`, and the file is auto-bootstrapped with a readable baseline template.
+  - Reason:
+    - Eliminates first-run failure while keeping operator-visible, editable config state.
+  - Impact area:
+    - GUI operability / DX
+
+**Results**
+- `pytest -q tests/test_gui_app_callbacks_internal.py::test_callback_wrappers_cover_branches tests/test_new_ux.py::test_04_run_page_submission` : passed.
+
+### 2026-02-14 (Session/PR: gui-results-artifact-compat-fix)
+**Context**
+- GUI Results page failed with:
+  - `Error loading artifact: 'Artifact' object has no attribute 'metadata'`
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/gui/app.py` result-view callback to support both:
+    - legacy/mock attributes: `run_id`, `task_type`, `created_at_utc`, `config`, `metadata`
+    - current `Artifact` contract: `manifest`, `run_config`, `feature_schema`
+  - Added safe fallback resolution for:
+    - run id / task type / created timestamp
+    - run config payload display
+    - feature importance source (`metadata` or `feature_schema`)
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI adapter must be tolerant to artifact shape differences between runtime objects and test doubles.
+  - Reason:
+    - Prevent UI hard-failure on non-essential optional fields.
+  - Impact area:
+    - GUI robustness / Backward compatibility
+
+**Results**
+- `pytest -q tests/test_gui_app_callbacks_results.py::test_results_callbacks tests/test_gui_app_coverage_2.py::test_result_view_empty_and_error` : passed.
+
+### 2026-02-14 (Session/PR: gui-data-scroll-and-run-auto-navigation-fix)
+**Context**
+- GUI issues reported:
+  - after data inspect, viewport unexpectedly moved downward.
+  - auto-navigation from `/run` to `/results` was inconsistent after job completion.
+
+**Changes**
+- Updated `src/veldra/gui/app.py`:
+  - Added `dcc.Store(id="ui-scroll-fix")` and clientside callback to reset scroll to top when
+    `data-inspection-result` updates.
+  - Enhanced `_cb_refresh_run_jobs(...)` auto-navigation logic:
+    - existing transition rule (`queued/running -> succeeded`) kept.
+    - added first-poll success handling (`old status missing`) with recent-job guard (<=120s).
+  - Restored module-scope imports (`Artifact`, `evaluate`, `load_tabular_data`) to keep callback
+    monkeypatch compatibility in tests.
+- Tests updated:
+  - `tests/test_gui_app_coverage.py`
+    - added coverage case for first-poll completion auto-navigation to `/results`.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI auto-navigation must be robust to polling race conditions and should not depend solely on prior status cache.
+  - Reason:
+    - Prevent intermittent UX behavior when job completion happens between polling intervals.
+  - Impact area:
+    - GUI operability / Reliability
+
+**Results**
+- `pytest -q tests/test_gui_app_coverage.py::test_app_coverage_edge_cases tests/test_gui_app_callbacks_internal.py::test_callback_wrappers_cover_branches` : passed.
+
+### 2026-02-14 (Session/PR: gui-test-regression-compat-restoration)
+**Context**
+- Full test run regressed after GUI callback/import refactors.
+- Failures were test-compat issues, not product behavior issues.
+
+**Changes**
+- Updated `src/veldra/gui/services.py`:
+  - restored module-level imports used by tests/monkeypatch:
+    - `Artifact`
+    - runner functions (`fit`, `evaluate`, `tune`, `simulate`, `export`, `estimate_dr`)
+    - `load_tabular_data`
+  - removed lazy imports inside `inspect_data(...)` and `run_action(...)`.
+- Updated `src/veldra/gui/app.py`:
+  - added callback-map compatibility bridge for clientside callback entries:
+    - ensure each `callback_map` value has `callback` key for legacy tests that iterate map values.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI adapter modules maintain test-monkeypatchable symbols at module scope.
+  - Reason:
+    - Keeps regression tests stable while preserving runtime behavior.
+  - Impact area:
+    - Test stability / Backward compatibility
+
+**Results**
+- `pytest -q` : **401 passed, 4 skipped, 0 failed**.
+
+### 2026-02-14 (Session/PR: gui-data-page-upload-state-and-scroll-fix)
+**Context**
+- Data page issues reported:
+  - viewport jumped downward after `Inspect Data` (notably with many preview columns)
+  - initial `Error: Data file does not exist: examples/data/california_housing.csv`
+  - `No file selected` label was hard to read
+  - file label did not update immediately on file selection
+
+**Changes**
+- Updated `src/veldra/gui/app.py`:
+  - removed no-upload fallback to `examples/data/california_housing.csv` in `_cb_inspect_data(...)`.
+  - now returns a clear guidance message when no file is selected.
+  - added `_cb_update_selected_file_label(...)` callback:
+    - updates `data-selected-file-label` as soon as upload filename changes.
+    - clears `data-error-message` on selection.
+- Updated `src/veldra/gui/pages/data_page.py`:
+  - changed selected-file label class from `text-muted` to `text-light`.
+  - set DataTable `cell_selectable=False` to reduce focus-driven scroll jumps after render.
+- Tests updated:
+  - `tests/test_gui_app_coverage.py`
+  - `tests/test_new_ux.py`
+  - `tests/test_gui_app_coverage_2.py` (added selected-file-label callback coverage)
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Data inspection requires explicit file selection; no implicit sample fallback at runtime.
+  - Reason:
+    - Avoid misleading startup errors and ensure user-visible state reflects actual input selection.
+  - Impact area:
+    - GUI UX / Operability
+
+**Results**
+- `pytest -q tests/test_gui_app_coverage.py::test_app_coverage_edge_cases tests/test_new_ux.py::test_01_data_page_inspection_flow tests/test_gui_app_coverage_2.py::test_inspect_data_upload_unsupported tests/test_gui_app_coverage_2.py::test_update_selected_file_label` : passed.
+
+### 2026-02-14 (Session/PR: gui-config-to-run-state-sync-fix)
+**Context**
+- User reported Run behaved as regression even after selecting binary config.
+- Job history showed all runs used `config_path=configs/gui_run.yaml` with `config_yaml=None`.
+
+**Changes**
+- Updated `src/veldra/gui/app.py`:
+  - Added `_cb_cache_config_yaml(...)` and callback binding:
+    - `Input("config-yaml", "value") -> Output("workflow-state", "data", allow_duplicate=True)`
+  - This caches latest Config Builder YAML into workflow state.
+- Updated `src/veldra/gui/pages/run_page.py`:
+  - `run-config-yaml` textarea now initializes from `workflow-state["config_yaml"]`.
+  - Run submission now carries actual config YAML by default.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Run page should consume the latest Config Builder YAML through shared workflow state.
+  - Reason:
+    - Enforces the RunConfig single-entry principle across GUI pages and prevents stale default-config execution.
+  - Impact area:
+    - GUI consistency / Config correctness
+
+**Results**
+- `pytest -q tests/test_new_ux.py::test_04_run_page_submission tests/test_gui_app_callbacks_internal.py::test_callback_wrappers_cover_branches` : passed.
+- `pytest -q tests/test_gui_app_layout.py tests/test_gui_pages_and_init.py` : passed.
+
+### 2026-02-14 (Session/PR: gui-results-feature-importance-fallback)
+**Context**
+- Primary metrics chart rendered, but Feature Importance chart remained empty for real artifacts.
+
+**Changes**
+- Updated `src/veldra/gui/app.py`:
+  - Added fallback path for feature importance extraction from LightGBM booster when
+    `metadata.feature_importance` / `feature_schema.feature_importance` are absent.
+  - Uses `feature_schema.feature_names` (or booster feature names) + `importance_type='gain'`.
+- Updated tests:
+  - `tests/test_gui_app_callbacks_results.py` now covers booster-based feature importance fallback.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - Results page should derive feature importance from the model artifact when explicit metadata is missing.
+  - Reason:
+    - Keeps GUI informative without requiring artifact schema migration.
+  - Impact area:
+    - GUI operability / Artifact backward compatibility
+
+**Results**
+- `pytest -q tests/test_gui_app_callbacks_results.py::test_results_callbacks tests/test_gui_app_coverage_2.py::test_result_view_empty_and_error` : passed.
+
+### 2026-02-14 (Session/PR: gui-results-metrics-mean-plot-fix)
+**Context**
+- Results page no longer errored, but charts were empty for newly created artifacts.
+
+**Changes**
+- Updated `src/veldra/gui/app.py`:
+  - Added metrics selection logic that supports both:
+    - flat numeric metrics (`{"rmse": ..., "mae": ...}`)
+    - nested artifact metrics contract (`{"folds": [...], "mean": {...}}`)
+  - Results charts/KPI now use `mean` metrics automatically when top-level numeric keys are absent.
+  - Added `r2` KPI fallback when `r2_score` key is not present.
+- Updated tests:
+  - `tests/test_gui_app_callbacks_results.py` now includes nested `mean` metrics coverage.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI Results visualization uses normalized metrics view rather than raw dict shape assumptions.
+  - Reason:
+    - Keep graph rendering stable across artifact metric schema variants.
+  - Impact area:
+    - GUI operability / Artifact compatibility
+
+**Results**
+- `pytest -q tests/test_gui_app_callbacks_results.py::test_results_callbacks tests/test_gui_app_coverage_2.py::test_result_view_empty_and_error` : passed.
+
+### 2026-02-14 (Session/PR: gui-results-runconfig-json-serialization-fix)
+**Context**
+- GUI Results page showed:
+  - `Error loading artifact: Object of type RunConfig is not JSON serializable`
+
+**Changes**
+- Code changes:
+  - Updated `src/veldra/gui/app.py`:
+    - added `_to_jsonable(...)` helper for dataclass / Pydantic model safe conversion.
+    - `_json_dumps(...)` now serializes via `_to_jsonable(...)` with `default=str`.
+    - result detail panel now uses `_json_dumps(config_obj)` for config rendering.
+
+**Decisions**
+- Decision: confirmed
+  - Policy:
+    - GUI detail rendering must not assume plain-dict config objects; it must handle `RunConfig` directly.
+  - Reason:
+    - Prevents runtime UI failures across artifact versions and object shapes.
+  - Impact area:
+    - GUI robustness / Operability
+
+**Results**
+- `pytest -q tests/test_gui_app_callbacks_results.py::test_results_callbacks tests/test_gui_app_coverage_2.py::test_result_view_empty_and_error` : passed.
 
 ### 2026-02-12 (Session planning: phase25-gui-async-jobs-migrate-workflow-mvp)
 **Context**
@@ -2441,3 +3073,142 @@
 **Results**
 - `uv run ruff check .` : passed.
 - `uv run pytest -q` : passed.
+
+### 2026-02-14 (Session/PR: gui-memory-investigation-and-lazy-import)
+**Context**
+- `tests/test_gui_app_callbacks_config.py` 実行時のメモリ消費が大きいという報告に対し、原因を切り分けて実運用上のピークメモリを低減する。
+
+**Plan**
+- import経路のプロファイルを取り、`create_app()` 実行コストと import 初期化コストを分離する。
+- 重量級依存（runner/artifact/lightgbm/optuna）を不要時に読み込まないよう lazy import 化する。
+- GUI関連テストとメモリ再計測で回帰有無を確認する。
+
+**Changes**
+- 実装変更：
+  - `src/veldra/api/__init__.py`
+    - eager import を廃止し、`__getattr__` ベースの lazy export に変更。
+    - `import veldra.api.exceptions` で runner/artifact を巻き込まないように修正。
+  - `src/veldra/config/__init__.py`
+    - eager import を廃止し、`io` / `migrate` / `models` の lazy export に変更。
+    - `RunConfig` 参照時に不要な `migrate -> api` 連鎖 import を避ける構成へ修正。
+  - `src/veldra/gui/services.py`
+    - `run_action` / `inspect_data` 内で必要時のみ `Artifact` / `runner` / `load_tabular_data` を import する形へ変更。
+  - `src/veldra/gui/app.py`
+    - top-level の `Artifact` / `evaluate` / `load_tabular_data` import を除去。
+    - `results` 関連 callback 内で必要時 import へ変更。
+- ドキュメント変更：
+  - `HISTORY.md` に本エントリを追記。
+- テスト変更：
+  - なし（既存テストで検証）。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - API/Config/GUIの公開契約を維持したまま、package export と GUI callback 実装で lazy import を採用する。
+  - 理由：
+    - Stable API を壊さずに、不要な重量級依存の読み込みを避け、テスト時・対話時のピークメモリを下げるため。
+  - 影響範囲：
+    - API / GUI / 性能
+
+**Results**
+- 動作確認結果：
+  - メモリ計測（`uv run --extra gui python`）
+    - 修正前（調査時）: `import veldra.gui.app` 後 約 `248.6MB`
+    - 修正後: `import veldra.gui.app` 後 約 `143.2MB`
+  - `tests/test_gui_app_callbacks_config.py` 実行時ピークRSS
+    - 修正前（調査時）: 約 `259328 KB`
+    - 修正後: 約 `145976 KB`
+  - `uv run --extra gui pytest -q tests/test_gui_app_layout.py tests/test_gui_services_config_validation.py`
+    - `5 passed`
+
+**Risks / Notes**
+- `tests/test_gui_app_callbacks_config.py::test_migration_apply` の `KeyError: 'callback'` は今回のメモリ最適化とは独立の既存失敗として継続。
+- `ruff check` は `src/veldra/gui/app.py` の既存スタイル違反が多数あり、今回スコープ外。
+
+**Open Questions**
+- [ ] GUI callback_map のDashバージョン差分に依存しないテスト実装へ更新するか。
+
+### 2026-02-14 (Session/PR: gui-lazy-import-reapply-and-test-separation)
+**Context**
+- `uv run coverage run -m pytest -q` 実行時のメモリ逼迫を受け、GUI経路の重量import回帰を解消しつつ、GUIテストを分離運用できる状態に戻す。
+
+**Plan**
+- `src/veldra/gui/app.py` と `src/veldra/gui/services.py` の eager import を再び lazy import 化する。
+- pytest に `gui` marker を導入し、GUIテストを明示的に分離実行できるようにする。
+- README のテスト/coverage手順を core と gui の分割運用に更新する。
+
+**Decisions**
+- Decision: provisional
+  - 内容：
+    - LightGBM学習ロジック（反復実行・パラメータ）は変更せず、GUI import経路とテスト実行戦略のみでメモリ対策を行う。
+  - 理由：
+    - 学習挙動の仕様は維持しつつ、OOMリスクを低減するため。
+  - 影響範囲：
+    - GUI / テスト運用 / 性能
+
+**Changes**
+- 実装変更：
+  - `src/veldra/gui/app.py`
+    - `Artifact` / `evaluate` / `load_tabular_data` の eager import を除去。
+    - `_ensure_runtime_imports()` を追加し、結果表示/評価callback実行時に遅延解決。
+  - `src/veldra/gui/services.py`
+    - `runner` / `artifact` / `data` の eager import を除去。
+    - 初期実装の `_ensure_runtime_imports()`（一括解決）を廃止。
+    - action/用途単位の解決（`_get_runner_func`, `_get_load_tabular_data`, `Artifact` proxy）へ変更し、
+      `inspect_data` 等の軽処理で `veldra.api.runner` を読み込まないように修正。
+  - `tests/conftest.py`
+    - `gui` marker を登録。
+    - `test_gui_*` および `test_new_ux.py` を自動で `gui` marker 付与。
+  - `tests/test_gui_services_unit.py`
+    - `MagicMock` 多用箇所を軽量スタブ/実ファイルベースへ置換し、
+      モック呼び出し履歴の蓄積を抑制。
+  - `tests/test_gui_app_coverage.py`
+    - `Artifact` モックを `MagicMock` から軽量ローダークラスへ置換。
+  - `tests/test_gui_app_coverage_2.py`
+    - `builtins.open` の差し替えを `MagicMock` から `mock_open` へ変更。
+  - `tests/test_new_ux.py`
+    - 単純戻り値モックを `MagicMock` から `SimpleNamespace` へ変更。
+  - `src/veldra/gui/app.py`
+    - `_to_jsonable` に再帰安全化を追加：
+      - `unittest.mock.Mock` を直接 `repr` 化（`model_dump` 連鎖回避）
+      - 循環参照検出（`<cycle>`）
+      - 深さ上限（`<max_depth_reached>`）
+      - `model_dump()` が self を返す場合の停止ガード
+  - `tests/test_gui_jsonable_safety.py`
+    - `MagicMock` 入力時と循環参照入力時に `_json_dumps` が停止する回帰テストを追加。
+  - `pyproject.toml`
+    - pytest marker 定義に `gui` を追加。
+- ドキュメント変更：
+  - `README.md` に core/gui 分離の pytest/coverage 実行手順を追記。
+  - `DESIGN_BLUEPRINT.md` に Phase 33 提案を追記。
+
+**Decisions**
+- Decision: confirmed
+  - 内容：
+    - GUIテストは marker 分離（`-m "not gui"` / `-m "gui"`）で運用し、coverage も2段階実行を標準手順とする。
+  - 理由：
+    - 低メモリ環境でも実行可能性を高め、OOMリスクを抑えるため。
+  - 影響範囲：
+    - テスト運用 / 性能
+
+**Results**
+- 動作確認結果：
+  - `.venv/bin/python -m pytest -q tests/test_gui_app_helpers.py tests/test_gui_services_unit.py tests/test_gui_app_callbacks_results.py`
+    - `7 passed`
+  - marker 分離確認（collect-only）：
+    - `-m "gui"`: `70/405 tests collected`
+    - `-m "not gui"`: `335/405 tests collected`
+  - import時メモリ再計測（Linux RSS）：
+    - `import veldra.gui.app`: `164712 KB`
+    - `import veldra.gui.services`: `115940 KB`
+  - lazy import 挙動確認：
+    - `inspect_data` 実行後も `sys.modules` に `veldra.api.runner` が載らないことを確認
+    - `run_action(action='fit')` 実行時に初めて `veldra.api.runner` が解決されることを確認
+  - GUI関連の回帰テスト：
+    - `tests/test_gui_services_unit.py`: `5 passed`
+    - `tests/test_gui_services_run_dispatch.py`: `3 passed`
+    - `tests/test_gui_app_coverage.py tests/test_gui_app_coverage_2.py tests/test_new_ux.py`: `12 passed`
+    - `tests/test_gui_jsonable_safety.py`: `2 passed`
+
+**Risks / Notes**
+- この実行環境では `uv run` が `uv-build` 解決時に外部ネットワーク到達不可で失敗するため、検証は `.venv/bin/python -m pytest` で実施。

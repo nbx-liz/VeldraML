@@ -1,7 +1,7 @@
 """Data selection page."""
 from __future__ import annotations
 
-from dash import dcc, html, dash_table
+from dash import dcc, html
 import dash_bootstrap_components as dbc
 from veldra.gui.components.kpi_cards import kpi_card
 
@@ -40,7 +40,7 @@ def layout() -> html.Div:
                         [
                             html.I(className="bi bi-file-earmark-text me-2"),
                             html.Span("No file selected — upload or drop a file above", id="data-selected-file-label",
-                                       className="text-muted"),
+                                       className="text-light"),
                         ],
                         id="data-selected-file",
                         className="d-flex align-items-center p-3 mb-3 rounded",
@@ -51,7 +51,10 @@ def layout() -> html.Div:
                     ),
                     # Hidden store for the actual data path
                     dcc.Store(id="data-file-path", data=""),
-                    dbc.Button("Inspect Data", id="data-inspect-btn", color="primary", className="w-100"),
+                    html.Div(
+                        "Data inspection starts automatically after file selection.",
+                        className="small text-muted",
+                    ),
                     html.Div(id="data-error-message", className="text-danger small mb-3 mt-2"),
                 ],
                 className="glass-card mb-4",
@@ -94,36 +97,58 @@ def render_data_preview(preview: list[dict]) -> html.Div:
     """Render data preview table."""
     if not preview:
         return html.Div()
-        
-    cols = [{"name": i, "id": i} for i in preview[0].keys()]
-    
+
+    columns = list(preview[0].keys())
+    header = html.Thead(
+        html.Tr(
+            [html.Th(col, style={"whiteSpace": "nowrap"}) for col in columns]
+        )
+    )
+    body_rows = []
+    for row in preview:
+        body_rows.append(
+            html.Tr(
+                [
+                    html.Td(
+                        str(row.get(col, "")),
+                        style={
+                            "whiteSpace": "nowrap",
+                            "verticalAlign": "top",
+                        },
+                    )
+                    for col in columns
+                ]
+            )
+        )
+    body = html.Tbody(body_rows)
+
     return html.Div(
         [
             html.H4("Data Preview (First 10 Rows)", className="mb-3 mt-4"),
             html.Div(
-                dash_table.DataTable(
-                    columns=cols,
-                    data=preview,
-                    style_as_list_view=True,
-                    style_cell={
-                        "padding": "10px",
-                        "textAlign": "left",
-                        "backgroundColor": "#1a1b2e",
-                        "color": "#e2e8f0",
-                        "borderBottom": "1px solid rgba(148, 163, 184, 0.1)",
-                        "minWidth": "100px",
-                    },
-                    style_header={
-                        "backgroundColor": "#0f1117",
-                        "fontWeight": "bold",
-                        "color": "#e2e8f0",
-                        "borderBottom": "2px solid #7c3aed",
-                    },
-                    style_table={"overflowX": "auto"},
-                ),
+                [
+                    html.Div(
+                        html.Table(
+                            [header, body],
+                            className="table table-dark table-striped table-hover mb-0",
+                            style={
+                                "minWidth": "100%",
+                                "tableLayout": "auto",
+                            },
+                        ),
+                        className="data-preview-card",
+                        style={
+                            "overflowX": "auto",
+                            "overflowY": "auto",
+                            "maxHeight": "420px",
+                        },
+                    ),
+                ],
                 className="glass-card",
-                style={"overflow": "hidden"}
-            )
+            ),
+            html.Div(
+                "Wide tables are confined to this preview area with horizontal/vertical scroll.",
+                className="small text-muted mt-2",
+            ),
         ]
     )
-
