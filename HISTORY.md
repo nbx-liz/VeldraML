@@ -3307,3 +3307,46 @@
 - `uv run pytest -q tests/test_doc_contract.py`: passed
 - `uv run pytest -q -m "not gui"`: passed
 - `uv run pytest -q -m "gui"`: passed
+
+### 2026-02-15 (Session/PR: readme-why-runbook-runconfig-reference)
+**Context**
+- README において、RunConfig の完全参照、Quick Start から実運用への導線、プロジェクトの位置づけ表現が不足していた。
+
+**Plan**
+- Features 前に `Why VeldraML?` を追加して課題/解決/差別化を明示する。
+- `From Quick Start to Production` runbook を追加して、実運用までの段階手順と成功判定を記載する。
+- `RunConfig Reference (Complete)` を README 内に追加し、`models.py` から自動生成 + 整合テストで維持する。
+
+**Changes**
+- ドキュメント変更:
+  - `README.md`
+    - `## Why VeldraML?` を追加（課題→解決→位置づけ）。
+    - `## From Quick Start to Production` を追加（6-step runbook + checklist）。
+    - `## RunConfig Reference (Complete)` を追加。
+    - 参照生成ブロックマーカーを追加:
+      - `<!-- RUNCONFIG_REF:START -->`
+      - `<!-- RUNCONFIG_REF:END -->`
+- 生成/保守機構:
+  - `scripts/generate_runconfig_reference.py`（新規）
+    - `src/veldra/config/models.py` からフィールド表、objective行列、主要交差制約、最小テンプレートを生成。
+    - `--write` で README ブロック更新、`--check` で差分検出。
+- テスト追加:
+  - `tests/test_readme_runconfig_reference.py`（新規）
+    - 必須見出し（Why/Runbook/RunConfig Complete）存在確認。
+    - 生成ブロック整合（`--check`）確認。
+
+**Decisions**
+- Decision: confirmed
+  - 内容:
+    - README は単一の正本として維持し、RunConfig リファレンスは README 内に埋め込みで管理する。
+    - 将来の仕様追随漏れ対策として「自動生成 + 整合テスト」を採用する。
+  - 理由:
+    - 参照性と運用性を両立し、手動同期漏れリスクを抑えるため。
+  - 影響範囲:
+    - README / 開発運用 / ドキュメント品質
+
+**Results**
+- `uv run ruff check .`: passed
+- `uv run pytest -q tests/test_readme_runconfig_reference.py`: passed
+- `uv run pytest -q -m "not gui"`: passed
+- `uv run pytest -q -m "gui"`: passed
