@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from veldra.gui.pages import artifacts_page, config_page, run_page
+from veldra.gui.pages import config_page, run_page, results_page
 
 _DASH_AVAILABLE = (
     importlib.util.find_spec("dash") is not None
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(not _DASH_AVAILABLE, reason="Dash GUI dependenci
 def test_page_layouts_have_expected_component_ids() -> None:
     config = config_page.layout()
     run = run_page.layout()
-    artifacts = artifacts_page.layout()
+    results = results_page.layout()
 
     def _collect_ids(component, out: set[str]) -> None:
         if component is None:
@@ -36,7 +36,7 @@ def test_page_layouts_have_expected_component_ids() -> None:
     ids: set[str] = set()
     _collect_ids(config, ids)
     _collect_ids(run, ids)
-    _collect_ids(artifacts, ids)
+    _collect_ids(results, ids)
     assert "config-yaml" in ids
     assert "config-migrate-preview-btn" in ids
     assert "run-action" in ids

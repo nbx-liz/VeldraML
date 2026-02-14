@@ -1,0 +1,8 @@
+﻿python : Python 
+発生場所 行:1 文字:1
++ python run_tests_debug.py 2>&1 | Out-File -Encoding utf8 test_debug_o ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Python :String) [], RemoteE    xc
+eption
+    + FullyQualifiedErrorId : NativeCommandError
+ 

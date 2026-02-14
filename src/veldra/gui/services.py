@@ -40,6 +40,45 @@ _JOB_STORE: GuiJobStore | None = None
 _JOB_WORKER: Any | None = None
 
 
+def inspect_data(path: str) -> dict[str, Any]:
+    """Inspect a data file and return preview and statistics."""
+    try:
+        data_path = Path(_require(path, "path"))
+        if not data_path.exists():
+            raise VeldraValidationError(f"Data file does not exist: {data_path}")
+
+        df = load_tabular_data(str(data_path))
+        
+        # Calculate column stats
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        cat_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
+        
+        stats = {
+            "n_rows": len(df),
+            "n_cols": len(df.columns),
+            "columns": list(df.columns),
+            "numeric_cols": numeric_cols,
+            "categorical_cols": cat_cols,
+            "missing_count": int(df.isnull().sum().sum()),
+            "memory_usage_mb": float(df.memory_usage(deep=True).sum() / 1024 / 1024),
+        }
+
+        # Preview data (handle non-serializable types if any)
+        preview = df.head(10).astype(object).where(pd.notnull(df), None)
+        
+        return {
+            "success": True,
+            "stats": stats,
+            "preview": preview.to_dict(orient="records"),
+            "path": str(data_path.resolve()),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+        }
+
+
 def default_job_db_path() -> Path:
     return Path(os.getenv("VELDRA_GUI_JOB_DB_PATH", ".veldra_gui/jobs.sqlite3"))
 
@@ -119,43 +158,75 @@ def save_config_yaml(path: str, yaml_text: str) -> str:
 
 def migrate_config_from_yaml(
     yaml_text: str,
-    *,
     target_version: int = 1,
-) -> tuple[str, str, dict[str, Any]]:
-    payload = yaml.safe_load(yaml_text)
-    if not isinstance(payload, dict):
-        raise VeldraValidationError("Config YAML must deserialize to an object.")
-    normalized, result = migrate_run_config_payload(payload, target_version=target_version)
-    normalized_yaml = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True)
-    diff = "\n".join(
-        difflib.unified_diff(
-            yaml_text.splitlines(),
-            normalized_yaml.splitlines(),
-            fromfile="input.yaml",
-            tofile="normalized.yaml",
-            lineterm="",
+) -> tuple[str, str]:
+    """Migrate config from YAML string. Returns (normalized_yaml, diff)."""
+    try:
+        payload = yaml.safe_load(yaml_text or "")
+        if not isinstance(payload, dict):
+            raise VeldraValidationError("Config YAML must deserialize to an object.")
+        normalized, result = migrate_run_config_payload(payload, target_version=target_version)
+        normalized_yaml = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True)
+        
+        # Calculate diff
+        input_lines = (yaml_text or "").splitlines()
+        output_lines = normalized_yaml.splitlines()
+        diff = "\n".join(
+            difflib.unified_diff(
+                input_lines,
+                output_lines,
+                fromfile="Original",
+                tofile="Normalized",
+                lineterm="",
+            )
         )
-    )
-    return normalized_yaml, diff, asdict(result)
+        return normalized_yaml, diff
+    except Exception as exc:
+        raise VeldraValidationError(f"Migration failed: {exc}")
 
 
 def migrate_config_file_via_gui(
-    *,
     input_path: str,
     output_path: str | None = None,
     target_version: int = 1,
-) -> dict[str, Any]:
-    result = migrate_run_config_file(
-        input_path=input_path,
-        output_path=output_path,
-        target_version=target_version,
-    )
-    return asdict(result)
+) -> str:
+    """Migrate config file. Returns summary message."""
+    try:
+        result = migrate_run_config_file(
+            input_path=input_path,
+            output_path=output_path,
+            target_version=target_version,
+        )
+        return (
+            f"Migration successful.\\n"
+            f"Source: {result.input_path}\\n"
+            f"Output: {result.output_path}\\n"
+            f"Version: {result.source_version} -> {result.target_version}\\n"
+            f"Changed: {result.changed}"
+        )
+    except Exception as exc:
+        raise VeldraValidationError(f"File migration failed: {exc}")
 
 
 def _result_to_payload(result: Any) -> dict[str, Any]:
     if is_dataclass(result):
-        payload = asdict(result)
+        # Handle EvalResult or others that might have DataFrame in fields
+        # asdict fails on DataFrame. We need to handle it manually or use asdict safely
+        try:
+            payload = asdict(result)
+        except Exception:
+            # Fallback for when asdict fails (e.g. DataFrame in field)
+            payload = {}
+            for field in result.__dataclass_fields__:
+                val = getattr(result, field)
+                if isinstance(val, pd.DataFrame):
+                    payload[field] = {
+                        "n_rows": int(len(val)),
+                        "columns": list(val.columns),
+                        "preview": val.head(20).to_dict(orient="records"),
+                    }
+                else:
+                     payload[field] = val
     elif isinstance(result, pd.DataFrame):
         payload = {
             "n_rows": int(len(result)),
@@ -336,3 +407,6 @@ def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
 
     summaries.sort(key=lambda item: item.created_at_utc or "", reverse=True)
     return summaries
+
+
+

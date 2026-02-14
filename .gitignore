@@ -92,3 +92,6 @@ notebooks/.uv_cache/
 notebooks/examples/out/
 
 .ipython/
+.agent/
+.claude
+configs/

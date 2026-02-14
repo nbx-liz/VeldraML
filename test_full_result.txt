@@ -1,0 +1,33 @@
+........................................................................ [ 18%]
+........................................................................ [ 36%]
+ss..........s.......s............................FF..................... [ 54%]
+.................................................F.F.................... [ 72%]
+........................................................................ [ 90%]
+......................................                                   [100%]
+================================== FAILURES ===================================
+___________________________ test_results_callbacks ____________________________
+tests\test_gui_app_callbacks_results.py:81: in test_results_callbacks
+    assert res[2] == {}
+E   AssertionError: assert Figure({\n    ...e': False}}\n}) == {}
+E     
+E     Use -v to get more diff
+________________________ test_app_coverage_edge_cases _________________________
+tests\test_gui_app_coverage.py:25: in test_app_coverage_edge_cases
+    res = inspect_cb(1, "")
+          ^^^^^^^^^^^^^^^^^
+E   TypeError: _cb_inspect_data() missing 2 required positional arguments: 'upload_contents' and 'upload_filename'
+______________________ test_01_data_page_inspection_flow ______________________
+tests\test_new_ux.py:41: in test_01_data_page_inspection_flow
+    result = _cb_inspect_data(1, "dummy.csv")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: _cb_inspect_data() missing 2 required positional arguments: 'upload_contents' and 'upload_filename'
+___________________ test_03_config_builder_yaml_generation ____________________
+tests\test_new_ux.py:73: in test_03_config_builder_yaml_generation
+    yaml_out = _cb_build_config_yaml(
+E   TypeError: _cb_build_config_yaml() missing 10 required positional arguments: 'causal_en', 'causal_method', 'tune_lr_min', 'tune_lr_max', 'tune_leaves_min', 'tune_leaves_max', 'tune_depth_min', 'tune_depth_max', 'tune_ff_min', and 'tune_ff_max'
+=========================== short test summary info ===========================
+FAILED tests/test_gui_app_callbacks_results.py::test_results_callbacks - Asse...
+FAILED tests/test_gui_app_coverage.py::test_app_coverage_edge_cases - TypeErr...
+FAILED tests/test_new_ux.py::test_01_data_page_inspection_flow - TypeError: _...
+FAILED tests/test_new_ux.py::test_03_config_builder_yaml_generation - TypeErr...
+4 failed, 390 passed, 4 skipped in 60.70s (0:01:00)

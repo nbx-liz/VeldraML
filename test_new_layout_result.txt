@@ -1,0 +1,10 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.14, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\home\VeldraML
+configfile: pyproject.toml
+plugins: dash-2.18.2, cov-7.0.0
+collected 8 items
+
+tests\test_gui_new_layout.py ........                                    [100%]
+
+============================== 8 passed in 1.12s ==============================
