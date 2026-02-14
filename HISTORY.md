@@ -775,3 +775,113 @@
 
 **検証結果**
 - GUIテスト群・カバレッジ確認を実施し、`app.py` / `services.py` のカバレッジ改善を確認。
+
+### 2026-02-15（作業/PR: phase25.6-gui-ux-polish-css-layout-only）
+**背景**
+- ダークテーマ上の補助テキスト可読性、データプレビューの視認性、Config導線の一貫性に改善余地があった。
+- 機能追加を避け、既存契約を維持したまま CSS/レイアウトのみでUXを改善する必要があった。
+
+**変更内容**
+- `src/veldra/gui/assets/style.css` に `text-muted-readable`、データプレビュー sticky header fallback、active step glow を追加。
+- `src/veldra/gui/pages/data_page.py` で補助テキストclassを `text-muted-readable` へ置換し、プレビュー `thead th` に sticky style を追加。
+- `src/veldra/gui/pages/config_page.py` で `cfg-container-id-cols` を Split Strategy 配下へ移設し、進行ボタン色を `primary` へ統一、export preset初期値を `artifacts` に固定。
+- `src/veldra/gui/app.py` の `_stepper_bar` で完了済みコネクタの色を `var(--success)` に変更。
+- `tests/test_gui_pages_logic.py` / `tests/test_gui_pages_and_init.py` / `tests/test_gui_app_callbacks_config.py` / `tests/test_gui_app_additional_branches.py` を更新し、新UX契約を検証。
+- `DESIGN_BLUEPRINT.md` に `12.6 Phase25.6` セクションを追記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase25.6は CSS/HTML レイアウト変更に限定し、GUI callback ID契約と公開API契約を維持する。
+  - 理由: UX改善を最小リスクで実施し、回帰範囲を限定するため。
+  - 影響範囲: GUI presentation / tests / docs
+
+**検証結果**
+- `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v` を通過。
+- `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v` を通過。
+- `uv run pytest tests -x --tb=short` を通過。
+
+### 2026-02-15（作業/PR: phase25.6-timeseries-time-column-warning-ui）
+**背景**
+- Time Series split では `split.time_col` が必須だが、GUI上で必須条件が明示されず入力漏れ余地が残っていた。
+
+**変更内容**
+- `src/veldra/gui/pages/config_page.py` の Time Column 直下に `cfg-timeseries-time-warning` を追加。
+- `src/veldra/gui/app.py` に `_cb_timeseries_time_warning` を追加し、
+  `split=timeseries` かつ `time_col` 未選択時のみ警告を表示する callback を配線。
+- `tests/test_gui_app_additional_branches.py` に warning callback の分岐テストを追加。
+- `tests/test_gui_pages_and_init.py` / `tests/test_gui_app_callbacks_internal.py` を更新し、
+  レイアウト存在と callback wiring を検証。
+- `DESIGN_BLUEPRINT.md` の Phase25.6成果物へ Time Column 必須警告を追記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Time Column セレクタの表示条件は `Time Series` 選択時のみを維持し、未選択時は警告表示で補助する。
+  - 理由: 既存UI導線を崩さず、必須入力漏れを事前に減らすため。
+  - 影響範囲: GUI UX / gui tests / docs
+
+**検証結果**
+- `uv run pytest tests/test_gui_app_additional_branches.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_internal.py -v` を通過。
+- `uv run pytest tests -x --tb=short` を通過。
+
+### 2026-02-15（作業/PR: phase25.6-remove-id-columns-visual-ui）
+**背景**
+- Split Strategy 上で `Group Column` と `ID Columns (Optional - for Group K-Fold)` が併存し、導線が重複していた。
+
+**変更内容**
+- `src/veldra/gui/pages/config_page.py` から `ID Columns (Optional - for Group K-Fold)` の表示UIを削除。
+- `cfg-data-id-cols` / `cfg-container-id-cols` は callback互換のため Data Settings 内の非表示要素として維持。
+- `src/veldra/gui/app.py` の `cfg-container-id-cols.style` 表示制御callbackを削除。
+- `tests/test_gui_pages_and_init.py` / `tests/test_gui_app_callbacks_config.py` を更新し、新しいUI契約へ合わせた。
+- `DESIGN_BLUEPRINT.md` の Phase25.6成果物記述を「移動」から「表示削除」へ更新。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: ID ColumnsはGUI表示から外し、必要最小限の内部互換IDのみ非表示で残す。
+  - 理由: UXの重複を減らしつつ、既存callback契約を壊さないため。
+  - 影響範囲: GUI layout / callback wiring / tests / docs
+
+**検証結果**
+- `uv run pytest tests/test_gui_app_additional_branches.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_internal.py -v` を通過。
+- `uv run pytest tests -x --tb=short` を通過。
+
+### 2026-02-15（作業/PR: phase25.6-split-timeseries-visibility-callback-fix）
+**背景**
+- Split Strategy の Time Series ブロックが表示されず、Time Column セレクタに到達できない不具合があった。
+
+**変更内容**
+- `src/veldra/gui/app.py` に `cfg-container-group/cfg-container-timeseries` の表示切替 callback 配線を復元。
+- `tests/test_gui_app_callbacks_internal.py` の必須callback配線検証に
+  `cfg-container-timeseries.style` を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Split種別に応じた Group/TimeSeries パネル表示は `_cb_update_split_options` で一元制御する。
+  - 理由: レイアウト条件分岐の欠落再発を防ぐため。
+  - 影響範囲: GUI callback wiring / tests
+
+**検証結果**
+- `uv run pytest tests/test_gui_app_additional_branches.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_internal.py -v` を通過。
+- `uv run pytest tests -x --tb=short` を通過。
+
+### 2026-02-15（作業/PR: phase25.6-data-settings-categorical-hide-and-split-refresh）
+**背景**
+- Data Settings に `Categorical Columns (Optional override)` が残存し、簡素化方針と不一致だった。
+- Split Strategy の Time Series 必須入力案内を、よりUI上で明確にする必要があった。
+
+**変更内容**
+- `src/veldra/gui/pages/config_page.py` で `Categorical Columns (Optional override)` 表示を除去し、
+  `cfg-data-cat-cols` は互換のため非表示コンテナで維持。
+- Time Column の placeholder を `Select required time column...` へ変更し、
+  `Required for Time Series validation.` の常時補助文言を追加。
+- `tests/test_gui_pages_and_init.py` を更新し、Categorical表示の非存在とTime Column UI契約を検証。
+- `DESIGN_BLUEPRINT.md` の Phase25.6成果物へ Data Settings簡素化を追記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: `cfg-data-cat-cols` の内部ID契約は維持しつつ、Data Settings の操作UIからは非表示にする。
+  - 理由: callback互換を維持しながら利用者導線を簡素化するため。
+  - 影響範囲: GUI layout / gui tests / docs
+
+**検証結果**
+- `uv run pytest tests/test_gui_app_additional_branches.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_internal.py -v` を通過。
+- `uv run pytest tests -x --tb=short` を通過。

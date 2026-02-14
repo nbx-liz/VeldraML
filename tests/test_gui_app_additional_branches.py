@@ -86,6 +86,17 @@ def test_stepper_bar_and_timestamp_helpers() -> None:
     assert app_module._format_jst_timestamp("2026-01-01T00:00:00") == "2026-01-01 09:00:00 JST"
 
 
+def test_stepper_connector_colors_follow_progress() -> None:
+    run_bar = app_module._stepper_bar("/run")
+    connector_lines = [
+        child for child in run_bar.children if getattr(child, "style", {}).get("flexGrow") == "1"
+    ]
+    assert len(connector_lines) == 3
+    assert connector_lines[0].style["backgroundColor"] == "var(--success)"
+    assert connector_lines[1].style["backgroundColor"] == "var(--success)"
+    assert connector_lines[2].style["backgroundColor"] == "rgba(148, 163, 184, 0.1)"
+
+
 def test_cb_inspect_data_branches(monkeypatch) -> None:
     # Invalid base64 payload.
     bad = app_module._cb_inspect_data(1, "data:text/csv;base64", "a.csv", None, {})
@@ -157,6 +168,13 @@ def test_config_related_callbacks_branches(monkeypatch, tmp_path: Path) -> None:
 
     assert app_module._cb_update_split_options("group")[0]["display"] == "block"
     assert app_module._cb_update_split_options("timeseries")[1]["display"] == "block"
+    warn_empty = app_module._cb_timeseries_time_warning("timeseries", None)
+    assert "requires selecting Time Column" in warn_empty[0]
+    assert warn_empty[1]["display"] == "block"
+    warn_set = app_module._cb_timeseries_time_warning("timeseries", "ts")
+    assert warn_set == ("", {"display": "none"})
+    warn_not_ts = app_module._cb_timeseries_time_warning("kfold", "")
+    assert warn_not_ts == ("", {"display": "none"})
     assert app_module._cb_update_tune_visibility(True)["display"] == "block"
     assert app_module._cb_update_tune_visibility(False)["display"] == "none"
 

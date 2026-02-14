@@ -246,12 +246,13 @@ def _stepper_bar(pathname: str) -> html.Div:
 
         # Add connector line if not last item
         if i < len(steps) - 1:
+            connector_color = "var(--success)" if i < current_idx else "rgba(148, 163, 184, 0.1)"
             step_elems.append(
                 html.Div(
                     style={
                         "flexGrow": "1",
                         "height": "2px",
-                        "backgroundColor": "rgba(148, 163, 184, 0.1)",
+                        "backgroundColor": connector_color,
                         "margin": "0 10px",
                     }
                 )
@@ -522,9 +523,17 @@ def create_app() -> dash.Dash:
     )(_cb_update_tune_visibility)  # Reuse same logic (block/none)
 
     app.callback(
-        Output("cfg-container-id-cols", "style"),
+        Output("cfg-container-group", "style"),
+        Output("cfg-container-timeseries", "style"),
         Input("cfg-split-type", "value"),
-    )(lambda st: {"display": "block"} if st == "group" else {"display": "none"})
+    )(_cb_update_split_options)
+
+    app.callback(
+        Output("cfg-timeseries-time-warning", "children"),
+        Output("cfg-timeseries-time-warning", "style"),
+        Input("cfg-split-type", "value"),
+        Input("cfg-split-time-col", "value"),
+    )(_cb_timeseries_time_warning)
 
     # --- Run Page Auto-Action ---
     app.callback(
@@ -888,6 +897,21 @@ def _cb_update_split_options(split_type: str) -> tuple[dict, dict]:
         ts_style = {"display": "block"}
 
     return group_style, ts_style
+
+
+def _cb_timeseries_time_warning(
+    split_type: str | None, time_col: str | None
+) -> tuple[str, dict[str, str]]:
+    if split_type != "timeseries":
+        return "", {"display": "none"}
+
+    if not (time_col or "").strip():
+        return (
+            "Time Series validation requires selecting Time Column (split.time_col).",
+            {"display": "block"},
+        )
+
+    return "", {"display": "none"}
 
 
 def _cb_update_tune_visibility(enabled: bool) -> dict:

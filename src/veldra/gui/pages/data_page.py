@@ -55,7 +55,7 @@ def layout() -> html.Div:
                     dcc.Store(id="data-file-path", data=""),
                     html.Div(
                         "Data inspection starts automatically after file selection.",
-                        className="small text-muted",
+                        className="small text-muted-readable",
                     ),
                     html.Div(id="data-error-message", className="text-danger small mb-3 mt-2"),
                 ],
@@ -101,7 +101,7 @@ def render_data_stats(stats: dict) -> html.Div:
             dbc.Button(
                 "Next: Configure →",
                 id="data-to-config-btn",
-                color="success",
+                color="primary",
                 href="/config",
                 className="w-100",
             ),
@@ -115,7 +115,23 @@ def render_data_preview(preview: list[dict]) -> html.Div:
         return html.Div()
 
     columns = list(preview[0].keys())
-    header = html.Thead(html.Tr([html.Th(col, style={"whiteSpace": "nowrap"}) for col in columns]))
+    header = html.Thead(
+        html.Tr(
+            [
+                html.Th(
+                    col,
+                    style={
+                        "whiteSpace": "nowrap",
+                        "position": "sticky",
+                        "top": "0",
+                        "zIndex": "10",
+                        "backgroundColor": "var(--bg-secondary)",
+                    },
+                )
+                for col in columns
+            ]
+        )
+    )
     body_rows = []
     for row in preview:
         body_rows.append(
@@ -160,7 +176,7 @@ def render_data_preview(preview: list[dict]) -> html.Div:
             ),
             html.Div(
                 "Wide tables are confined to this preview area with horizontal/vertical scroll.",
-                className="small text-muted mt-2",
+                className="small text-muted-readable mt-2",
             ),
         ]
     )
