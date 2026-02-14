@@ -7,17 +7,15 @@ from veldra.config.models import RunConfig
 from veldra.modeling import regression
 
 
-def _config_payload() -> dict:
-    return {
-        "config_version": 1,
-        "task": {"type": "regression"},
-        "data": {"path": "dummy.csv", "target": "target"},
-        "split": {"type": "kfold", "n_splits": 2, "seed": 7},
-    }
-
-
 def _build_config() -> RunConfig:
-    return RunConfig.model_validate(_config_payload())
+    return RunConfig.model_validate(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": "dummy.csv", "target": "target"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 7},
+        }
+    )
 
 
 def _build_frame() -> pd.DataFrame:
@@ -46,55 +44,15 @@ def test_build_feature_frame_validation_errors() -> None:
         regression._build_feature_frame(config, frame)
 
 
-def test_iter_cv_splits_validation_errors() -> None:
-    config = _build_config()
-    frame = _build_frame()
-    x = frame[["x1", "x2"]]
-
-    config.split.type = "group"  # type: ignore[assignment]
-    config.split.group_col = None
-    with pytest.raises(VeldraValidationError):
-        regression._iter_cv_splits(config, frame, x)
-
-    config.split.group_col = "missing_group"
-    with pytest.raises(VeldraValidationError):
-        regression._iter_cv_splits(config, frame, x)
-
-    config.split.type = "timeseries"  # type: ignore[assignment]
-    config.split.time_col = None
-    with pytest.raises(VeldraValidationError):
-        regression._iter_cv_splits(config, frame, x)
-
-    config.split.type = "stratified"  # type: ignore[assignment]
-    with pytest.raises(VeldraValidationError):
-        regression._iter_cv_splits(config, frame, x)
-
-    config.split.type = "unknown"  # type: ignore[assignment]
-    with pytest.raises(VeldraValidationError):
-        regression._iter_cv_splits(config, frame, x)
-
-
-def test_iter_cv_splits_group_and_timeseries_success() -> None:
-    config = _build_config()
-    frame = _build_frame()
-    x = frame[["x1", "x2"]]
-
-    config.split.type = "group"  # type: ignore[assignment]
-    config.split.group_col = "group"
-    group_splits = regression._iter_cv_splits(config, frame, x)
-    assert group_splits
-
-    config.split.type = "timeseries"  # type: ignore[assignment]
-    config.split.time_col = "ts"
-    ts_splits = regression._iter_cv_splits(config, frame, x)
-    assert ts_splits
-
-
 def test_train_regression_with_cv_early_validation() -> None:
     frame = _build_frame()
 
-    non_reg_payload = _config_payload()
-    non_reg_payload["task"] = {"type": "binary"}
+    non_reg_payload = {
+        "config_version": 1,
+        "task": {"type": "binary"},
+        "data": {"path": "dummy.csv", "target": "target"},
+        "split": {"type": "kfold", "n_splits": 2, "seed": 7},
+    }
     non_reg = RunConfig.model_validate(non_reg_payload)
     with pytest.raises(VeldraValidationError):
         regression.train_regression_with_cv(non_reg, frame)
@@ -124,8 +82,10 @@ def test_train_regression_with_cv_rejects_empty_split(monkeypatch) -> None:
 
     monkeypatch.setattr(
         regression,
-        "_iter_cv_splits",
-        lambda config, data, x: [(np.array([], dtype=int), np.array([0, 1], dtype=int))],
+        "iter_cv_splits",
+        lambda config, data, x, y=None: [
+            (np.array([], dtype=int), np.array([0, 1], dtype=int))
+        ],
     )
 
     with pytest.raises(VeldraValidationError):
@@ -138,8 +98,10 @@ def test_train_regression_with_cv_rejects_nan_oof(monkeypatch) -> None:
 
     monkeypatch.setattr(
         regression,
-        "_iter_cv_splits",
-        lambda config, data, x: [(np.array([0, 1], dtype=int), np.array([2, 3], dtype=int))],
+        "iter_cv_splits",
+        lambda config, data, x, y=None: [
+            (np.array([0, 1], dtype=int), np.array([2, 3], dtype=int))
+        ],
     )
     monkeypatch.setattr(
         regression,
@@ -164,8 +126,8 @@ def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         regression,
-        "_iter_cv_splits",
-        lambda config, data, x: [
+        "iter_cv_splits",
+        lambda config, data, x, y=None: [
             (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5], dtype=int)),
             (np.array([2, 3, 4, 5], dtype=int), np.array([0, 1], dtype=int)),
             (np.array([0, 1, 4, 5], dtype=int), np.array([2, 3], dtype=int)),
@@ -173,51 +135,3 @@ def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
     )
     output = regression.train_regression_with_cv(cfg, frame)
     assert output.metrics["mean"]["rmse"] >= 0.0
-
-
-def test_regression_timeseries_splitter_receives_extended_params(monkeypatch) -> None:
-    cfg = _build_config()
-    cfg.split.type = "timeseries"  # type: ignore[assignment]
-    cfg.split.time_col = "ts"
-    cfg.split.timeseries_mode = "blocked"
-    cfg.split.test_size = 2
-    cfg.split.gap = 1
-    cfg.split.embargo = 2
-    cfg.split.train_size = 3
-
-    frame = _build_frame()
-    x = frame[["x1", "x2"]]
-    captured: dict[str, int | str | None] = {}
-
-    class _FakeSplitter:
-        def __init__(
-            self,
-            n_splits: int,
-            test_size: int | None,
-            gap: int,
-            embargo: int,
-            mode: str,
-            train_size: int | None,
-        ) -> None:
-            captured["n_splits"] = n_splits
-            captured["test_size"] = test_size
-            captured["gap"] = gap
-            captured["embargo"] = embargo
-            captured["mode"] = mode
-            captured["train_size"] = train_size
-
-        def split(self, data: int) -> list[tuple[np.ndarray, np.ndarray]]:
-            _ = data
-            return [(np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int))]
-
-    monkeypatch.setattr(regression, "TimeSeriesSplitter", _FakeSplitter)
-    splits = regression._iter_cv_splits(cfg, frame, x)
-    assert splits
-    assert captured == {
-        "n_splits": cfg.split.n_splits,
-        "test_size": 2,
-        "gap": 1,
-        "embargo": 2,
-        "mode": "blocked",
-        "train_size": 3,
-    }

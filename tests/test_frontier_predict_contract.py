@@ -1,25 +1,10 @@
 import numpy as np
-import pandas as pd
 
 from veldra.api import Artifact, fit, predict
 
 
-def _frontier_frame(rows: int = 120, seed: int = 500) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    x1 = rng.uniform(-2.5, 2.5, size=rows)
-    x2 = rng.normal(size=rows)
-    y = (
-        2.0
-        + 1.2 * x1
-        - 0.5 * x2
-        + rng.normal(scale=0.3, size=rows)
-        + rng.exponential(scale=0.2, size=rows)
-    )
-    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
-
-
-def test_frontier_predict_contract(tmp_path) -> None:
-    frame = _frontier_frame()
+def test_frontier_predict_contract(tmp_path, frontier_frame) -> None:
+    frame = frontier_frame(rows=120, seed=500)
     data_path = tmp_path / "train.csv"
     frame.to_csv(data_path, index=False)
 

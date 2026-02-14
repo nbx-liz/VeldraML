@@ -55,7 +55,7 @@ def test_binary_calibrator_is_fit_on_oof_predictions(monkeypatch) -> None:
         (np.array([0, 1], dtype=int), np.array([2, 3], dtype=int)),
         (np.array([2, 3], dtype=int), np.array([0, 1], dtype=int)),
     ]
-    monkeypatch.setattr(binary, "_iter_cv_splits", lambda cfg, data, x, y: fixed_splits)
+    monkeypatch.setattr(binary, "iter_cv_splits", lambda cfg, data, x, y=None: fixed_splits)
 
     fold_values = iter([0.2, 0.8, 0.5])
     monkeypatch.setattr(

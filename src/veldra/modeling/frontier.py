@@ -9,11 +9,10 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import GroupKFold, KFold
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
-from veldra.split import TimeSeriesSplitter
+from veldra.split import iter_cv_splits
 
 
 @dataclass(slots=True)
@@ -44,51 +43,6 @@ def _build_feature_frame(config: RunConfig, data: pd.DataFrame) -> tuple[pd.Data
 
     x = data.loc[:, feature_cols].copy()
     return x, y
-
-
-def _iter_cv_splits(
-    config: RunConfig,
-    data: pd.DataFrame,
-    x: pd.DataFrame,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    split_cfg = config.split
-    if split_cfg.type == "kfold":
-        splitter = KFold(
-            n_splits=split_cfg.n_splits,
-            shuffle=True,
-            random_state=split_cfg.seed,
-        )
-        return list(splitter.split(x))
-
-    if split_cfg.type == "group":
-        if not split_cfg.group_col:
-            raise VeldraValidationError("split.group_col is required for group split.")
-        if split_cfg.group_col not in data.columns:
-            raise VeldraValidationError(
-                f"Group column '{split_cfg.group_col}' was not found in input data."
-            )
-        splitter = GroupKFold(n_splits=split_cfg.n_splits)
-        return list(splitter.split(x, groups=data[split_cfg.group_col]))
-
-    if split_cfg.type == "timeseries":
-        if not split_cfg.time_col:
-            raise VeldraValidationError("split.time_col is required for timeseries split.")
-        ordered = data.sort_values(split_cfg.time_col).reset_index(drop=True)
-        x_ordered = ordered.loc[:, x.columns]
-        splitter = TimeSeriesSplitter(
-            n_splits=split_cfg.n_splits,
-            test_size=split_cfg.test_size,
-            gap=split_cfg.gap,
-            embargo=split_cfg.embargo,
-            mode=split_cfg.timeseries_mode,
-            train_size=split_cfg.train_size,
-        )
-        return list(splitter.split(len(x_ordered)))
-
-    if split_cfg.type == "stratified":
-        raise VeldraValidationError("split.type='stratified' is not supported for frontier task.")
-
-    raise VeldraValidationError(f"Unsupported split type '{split_cfg.type}' for frontier task.")
 
 
 def _train_single_booster(
@@ -170,7 +124,9 @@ def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTra
         data = data.sort_values(config.split.time_col).reset_index(drop=True)
 
     x, y = _build_feature_frame(config, data)
-    splits = _iter_cv_splits(config, data, x)
+    if config.split.type == "stratified":
+        raise VeldraValidationError("split.type='stratified' is not supported for frontier task.")
+    splits = iter_cv_splits(config, data, x)
     alpha = float(config.frontier.alpha)
 
     oof_pred = np.full(len(x), np.nan, dtype=float)

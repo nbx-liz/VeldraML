@@ -3,24 +3,23 @@ from pathlib import Path
 from veldra.api import Artifact, fit
 
 
-def test_binary_fit_smoke_creates_artifact_with_calibration_files(tmp_path, binary_frame) -> None:
-    frame = binary_frame(rows=120, seed=11)
-    data_path = tmp_path / "binary_train.csv"
+def test_regression_fit_smoke_creates_artifact_and_metrics(tmp_path, regression_frame) -> None:
+    frame = regression_frame(rows=120, seed=11)
+    data_path = tmp_path / "regression_train.csv"
     frame.to_csv(data_path, index=False)
 
     run = fit(
         {
             "config_version": 1,
-            "task": {"type": "binary"},
+            "task": {"type": "regression"},
             "data": {"path": str(data_path), "target": "target"},
-            "split": {"type": "stratified", "n_splits": 3, "seed": 42},
-            "postprocess": {"calibration": "platt", "threshold": 0.5},
+            "split": {"type": "kfold", "n_splits": 3, "seed": 42},
             "export": {"artifact_dir": str(tmp_path / "artifacts")},
         }
     )
 
-    assert run.task_type == "binary"
-    assert {"auc", "logloss", "brier"} <= set(run.metrics.keys())
+    assert run.task_type == "regression"
+    assert {"rmse", "mae", "r2"} <= set(run.metrics.keys())
 
     artifact_path = Path(run.artifact_path)
     assert artifact_path.exists()
@@ -31,13 +30,9 @@ def test_binary_fit_smoke_creates_artifact_with_calibration_files(tmp_path, bina
         "model.lgb.txt",
         "metrics.json",
         "cv_results.parquet",
-        "calibrator.pkl",
-        "calibration_curve.csv",
-        "threshold.json",
     }
     assert expected_files <= {path.name for path in artifact_path.iterdir()}
-    assert "threshold_curve.csv" not in {path.name for path in artifact_path.iterdir()}
 
     artifact = Artifact.load(artifact_path)
     pred = artifact.predict(frame[["x1", "x2"]])
-    assert list(pred.columns) == ["p_cal", "p_raw", "label_pred"]
+    assert len(pred) == len(frame)

@@ -191,6 +191,77 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### Notes
 - `ruff check` はリポジトリ全体で既存違反が残っており、Phase25スコープ外として別途整理する。
 
+## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）
+
+### Context（2026-02-14 時点）
+- テストスイートは約145ファイル。
+- データ生成ロジック（`_binary_frame` など）が42ファイルに分散し、関連ヘルパー定義は56箇所ある。
+- タスク別の契約テストは regression だけ `fit_smoke / predict_contract / evaluate_metrics / artifact_roundtrip` が不足している。
+- `*_internal` テストの一部が private関数に直結し、リファクタリング耐性を下げている。
+
+### 目的
+- DRY原則に沿ってテストデータ生成を共通化する。
+- task間で同じ種類の契約テストを揃える。
+- private実装依存のテストを公開ユーティリティ/公開API検証へ移す。
+
+### Phase 1: データ生成ロジックの共通化（DRY）
+- `tests/conftest.py` に以下を追加する。
+- `binary_frame(rows, seed, coef1, coef2, noise)`
+- `multiclass_frame(rows_per_class, seed, scale)`
+- `regression_frame(rows, seed, coef1, coef2, noise)`
+- `frontier_frame(rows, seed)`
+- `panel_frame(n_units, seed)`
+- `config_payload(task_type, **overrides)`
+- `FakeBooster`
+- 42ファイルをWave方式で段階移行する。
+- Wave1: smoke/contract系 + internal系（優先）
+- Wave2: tune/simulate/export 系
+- Wave3: examples/補助テスト系
+- 再発防止として、対象Waveでローカル `def _*frame` を禁止する契約テストを追加する。
+
+### Phase 2: テスト対称性の確保（regression補完）
+- 新規作成:
+- `tests/test_regression_fit_smoke.py`
+- `tests/test_regression_predict_contract.py`
+- `tests/test_regression_evaluate_metrics.py`
+- `tests/test_regression_artifact_roundtrip.py`
+- 既存の binary/frontier 契約テストをテンプレートにし、以下を検証する。
+- fitでartifactと主要ファイルが生成されること
+- predict契約（出力shape、特徴量順序、欠損特徴量エラー）
+- evaluate契約（`rmse`, `mae`, `r2`）
+- save/load往復で予測整合と `feature_schema` 維持
+
+### Phase 3: internalテストの公式API化
+- 3.1 CV splitユーティリティの公開化。
+- 新規: `src/veldra/split/cv.py` に `iter_cv_splits(config, data, x, y=None)` を追加
+- `src/veldra/split/__init__.py` でexport
+- `binary/multiclass/regression/frontier` の private `_iter_cv_splits` を削除し公開関数利用へ置換
+- 新規: `tests/test_split_cv.py`
+- 3.2 因果診断メトリクスの公開化。
+- 新規: `src/veldra/causal/diagnostics.py`
+- 公開関数: `overlap_metric`, `max_standardized_mean_difference`
+- `src/veldra/causal/__init__.py` でexport
+- `dr.py` と `dr_did.py` の重複実装を当該公開関数へ置換
+- 新規: `tests/test_causal_diagnostics.py`
+- `tests/test_drdid_internal.py` の該当private依存テストを置換
+- 3.3 private維持方針。
+- 公開化しない: `_train_single_booster`, `_to_python_scalar`, `_normalize_proba`
+- 将来検討: `_default_search_space`
+
+### 検証コマンド
+- `uv run pytest tests -x --tb=short`
+- `uv run pytest tests/test_binary_fit_smoke.py tests/test_multiclass_fit_smoke.py -v`
+- `uv run pytest tests/test_regression_fit_smoke.py tests/test_regression_predict_contract.py tests/test_regression_evaluate_metrics.py tests/test_regression_artifact_roundtrip.py -v`
+- `uv run pytest tests/test_split_cv.py tests/test_causal_diagnostics.py -v`
+- `uv run pytest tests/test_binary_internal.py tests/test_regression_internal.py -v`
+- `uv run ruff check src/veldra/split src/veldra/causal tests`
+
+### 完了条件
+- regressionの契約テスト4種が追加され、task間の対称性ギャップが解消される。
+- 優先Waveの重複データ生成ロジックがconftestファクトリーへ移行される。
+- CV split/causal diagnostics が公開ユーティリティとしてテストされる。
+- Stable API（`veldra.api.*`）の互換性は維持される。
+
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム
 
 **目的:** 優先度ベースのジョブスケジューリングと並列worker実行により、スループットとユーザー制御を向上させる。
