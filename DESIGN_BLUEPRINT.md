@@ -262,6 +262,32 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - CV split/causal diagnostics が公開ユーティリティとしてテストされる。
 - Stable API（`veldra.api.*`）の互換性は維持される。
 
+## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）
+
+### 目的
+- ダークテーマ上の可読性を改善する。
+- データプレビューの操作性（縦スクロール時の列ヘッダー参照性）を改善する。
+- Configページ内の主要導線を視覚的に統一し、操作迷いを減らす。
+
+### 非スコープ
+- 機能追加（新しいコールバック、データ処理ロジック、永続化仕様の変更）。
+- 公開API/Artifact/RunConfig契約の変更。
+
+### 主要成果物
+- `text-muted-readable` クラス導入（`#cbd5e1`）による補助テキストのコントラスト改善。
+- データプレビュー表の `thead th` sticky固定（インラインstyle + CSS fallback）。
+- `ID Columns (Optional - for Group K-Fold)` の表示を削除（内部互換のため関連IDは非表示維持）。
+- Export preset (`cfg-export-dir-preset`) の初期選択を `artifacts` に固定。
+- ワークフロー進行ボタン色を `primary` に統一。
+- ステッパー活性状態に glow、完了済みコネクタに成功色を反映。
+- `Split Type=Time Series` 時に `Time Column` 必須であることを GUI 上で明示する警告表示を追加。
+- Data Settings から `Categorical Columns (Optional override)` を非表示化し、導線を簡素化。
+
+### 検証コマンド
+- `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v`
+- `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
+- `uv run pytest tests -x --tb=short`
+
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム
 
 **目的:** 優先度ベースのジョブスケジューリングと並列worker実行により、スループットとユーザー制御を向上させる。

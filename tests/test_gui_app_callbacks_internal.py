@@ -35,6 +35,8 @@ def test_callback_wiring_exists_for_core_outputs() -> None:
         "artifact-eval-result.children",
         "config-yaml.value",
         "config-migrate-normalized-yaml.value",
+        "cfg-container-timeseries.style",
+        "cfg-timeseries-time-warning.children",
     ]
     for out in required_outputs:
         assert _find_callbacks(app, out), f"Missing callback wiring for output: {out}"

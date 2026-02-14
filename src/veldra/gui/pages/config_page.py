@@ -14,7 +14,7 @@ def _render_builder_tab() -> html.Div:
                 [
                     html.Div(
                         "Quick Actions",
-                        className="small text-uppercase fw-bold text-muted",
+                        className="small text-uppercase fw-bold text-muted-readable",
                     ),
                     html.Div(
                         [
@@ -22,7 +22,7 @@ def _render_builder_tab() -> html.Div:
                                 "Run Now →",
                                 id="config-run-now-btn",
                                 href="/run",
-                                color="success",
+                                color="primary",
                                 size="sm",
                                 className="me-2",
                             ),
@@ -139,21 +139,19 @@ def _render_builder_tab() -> html.Div:
                                 ),
                             ]
                         ),
-                        html.Label("ID Columns (Optional - for Group K-Fold)", className="mt-2"),
                         html.Div(
                             dbc.Checklist(
                                 id="cfg-data-id-cols", options=[], value=[], inline=False
                             ),
                             id="cfg-container-id-cols",
-                            className="checklist-container mb-2",
-                            style={"display": "none"},  # Conditional visibility
+                            style={"display": "none"},
                         ),
-                        html.Label("Categorical Columns (Optional override)", className="mt-2"),
                         html.Div(
                             dbc.Checklist(
                                 id="cfg-data-cat-cols", options=[], value=[], inline=False
                             ),
-                            className="checklist-container mb-2",
+                            id="cfg-container-cat-cols",
+                            style={"display": "none"},
                         ),
                         html.Label(
                             "Exclude Columns (all other non-ID columns used automatically)",
@@ -243,7 +241,16 @@ def _render_builder_tab() -> html.Div:
                                                 html.Label("Time Column"),
                                                 dbc.Select(
                                                     id="cfg-split-time-col",
-                                                    placeholder="Select time column...",
+                                                    placeholder="Select required time column...",
+                                                ),
+                                                html.Div(
+                                                    "Required for Time Series validation.",
+                                                    className="small text-info mt-1",
+                                                ),
+                                                html.Div(
+                                                    id="cfg-timeseries-time-warning",
+                                                    className="small text-warning mt-1",
+                                                    style={"display": "none"},
                                                 ),
                                             ],
                                             width=6,
@@ -657,7 +664,7 @@ def _render_builder_tab() -> html.Div:
                                                         },
                                                         {"label": "Custom...", "value": "custom"},
                                                     ],
-                                                    placeholder="Presets...",
+                                                    value="artifacts",
                                                     style={"maxWidth": "150px"},
                                                 ),
                                                 dbc.Input(id="cfg-export-dir", value="artifacts"),
@@ -678,7 +685,7 @@ def _render_builder_tab() -> html.Div:
                     dbc.Button(
                         "Next: Run →",
                         id="config-to-run-btn",
-                        color="success",
+                        color="primary",
                         size="lg",
                         href="/run",
                         className="w-100 shadow mb-2",

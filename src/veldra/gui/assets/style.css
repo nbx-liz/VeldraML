@@ -170,6 +170,7 @@ body {
     border-color: var(--accent-primary);
     background-color: rgba(124, 58, 237, 0.1);
     color: var(--accent-primary);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.2);
 }
 
 .step-item.completed .step-circle {
@@ -548,4 +549,16 @@ label,
     min-width: 100%;
     table-layout: auto;
     display: table;
+}
+
+.data-preview-card thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: var(--bg-secondary);
+    box-shadow: 0 1px 0 var(--border-color);
+}
+
+.text-muted-readable {
+    color: #cbd5e1 !important;
 }
