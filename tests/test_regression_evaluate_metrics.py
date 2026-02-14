@@ -4,44 +4,34 @@ from veldra.api import Artifact, evaluate, fit
 from veldra.api.exceptions import VeldraValidationError
 
 
-def _fit_binary_artifact(tmp_path, binary_frame):
-    frame = binary_frame(rows=100, seed=12, coef1=1.4, coef2=-0.7, noise=0.3)
-    data_path = tmp_path / "train_binary.csv"
+def _fit_regression_artifact(tmp_path, regression_frame) -> tuple[Artifact, object]:
+    frame = regression_frame(rows=100, seed=12)
+    data_path = tmp_path / "train_regression.csv"
     frame.to_csv(data_path, index=False)
     run = fit(
         {
             "config_version": 1,
-            "task": {"type": "binary"},
+            "task": {"type": "regression"},
             "data": {"path": str(data_path), "target": "target"},
-            "split": {"type": "stratified", "n_splits": 3, "seed": 21},
-            "postprocess": {"calibration": "platt"},
+            "split": {"type": "kfold", "n_splits": 3, "seed": 21},
             "export": {"artifact_dir": str(tmp_path / "artifacts")},
         }
     )
     return Artifact.load(run.artifact_path), frame
 
 
-def test_binary_evaluate_returns_auc_logloss_brier(tmp_path, binary_frame) -> None:
-    artifact, frame = _fit_binary_artifact(tmp_path, binary_frame)
+def test_regression_evaluate_returns_rmse_mae_r2(tmp_path, regression_frame) -> None:
+    artifact, frame = _fit_regression_artifact(tmp_path, regression_frame)
     result = evaluate(artifact, frame)
 
-    assert result.task_type == "binary"
-    assert {
-        "auc",
-        "logloss",
-        "brier",
-        "accuracy",
-        "f1",
-        "precision",
-        "recall",
-        "threshold",
-    } <= set(result.metrics)
+    assert result.task_type == "regression"
+    assert {"rmse", "mae", "r2"} <= set(result.metrics)
     assert result.metadata["n_rows"] == len(frame)
     assert result.metadata["target"] == "target"
 
 
-def test_binary_evaluate_validation_errors(tmp_path, binary_frame) -> None:
-    artifact, frame = _fit_binary_artifact(tmp_path, binary_frame)
+def test_regression_evaluate_validation_errors(tmp_path, regression_frame) -> None:
+    artifact, frame = _fit_regression_artifact(tmp_path, regression_frame)
 
     with pytest.raises(VeldraValidationError):
         evaluate(artifact, frame.drop(columns=["target"]))
@@ -54,7 +44,7 @@ def test_binary_evaluate_validation_errors(tmp_path, binary_frame) -> None:
         evaluate(
             {
                 "config_version": 1,
-                "task": {"type": "binary"},
+                "task": {"type": "regression"},
                 "data": {"target": "target"},
             },
             frame,

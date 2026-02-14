@@ -1,20 +1,8 @@
-import numpy as np
-import pandas as pd
-
 from veldra.api import Artifact, evaluate, fit
 
 
-def _binary_frame(rows: int = 100, seed: int = 5) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    x1 = rng.normal(size=rows)
-    x2 = rng.normal(size=rows)
-    score = 0.8 * x1 - 1.5 * x2 + rng.normal(scale=0.35, size=rows)
-    y = (score > np.median(score)).astype(int)
-    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
-
-
-def test_binary_artifact_save_load_roundtrip(tmp_path) -> None:
-    frame = _binary_frame()
+def test_binary_artifact_save_load_roundtrip(tmp_path, binary_frame) -> None:
+    frame = binary_frame(rows=100, seed=5, coef1=0.8, coef2=-1.5, noise=0.35)
     data_path = tmp_path / "binary_train.csv"
     frame.to_csv(data_path, index=False)
 

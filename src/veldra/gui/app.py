@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +48,9 @@ from veldra.gui.types import RunInvocation
 _ARTIFACT_CLS: Any | None = None
 evaluate: Any | None = None
 load_tabular_data: Any | None = None
+
+_GUI_SYSTEM_TEMP_DIR_NAME = "veldra_system_temporary_uploads"
+_GUI_UPLOAD_TTL_SECONDS = int(os.getenv("VELDRA_GUI_UPLOAD_TTL_SECONDS", "86400"))
 
 
 def _get_artifact_cls() -> Any:
@@ -134,6 +139,28 @@ def _ensure_default_run_config(config_path: str) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(DEFAULT_GUI_RUN_CONFIG_YAML, encoding="utf-8")
     return str(path)
+
+
+def _get_gui_system_temp_dir() -> Path:
+    base = Path(tempfile.gettempdir())
+    tmp_dir = base / _GUI_SYSTEM_TEMP_DIR_NAME
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    return tmp_dir
+
+
+def _cleanup_gui_system_temp_files(max_age_seconds: int | None = None) -> None:
+    ttl = _GUI_UPLOAD_TTL_SECONDS if max_age_seconds is None else max_age_seconds
+    tmp_dir = _get_gui_system_temp_dir()
+    now = time.time()
+    for item in tmp_dir.iterdir():
+        if not item.is_file():
+            continue
+        try:
+            age = now - item.stat().st_mtime
+            if age > ttl:
+                item.unlink()
+        except Exception:
+            continue
 
 
 def _sidebar() -> html.Div:
@@ -691,10 +718,10 @@ def _cb_inspect_data(
             return _ret(None, f"Invalid file format: {exc}", {})
 
         # Save to a temporary location
-        filename = upload_filename or "uploaded_data.csv"
+        filename = Path(upload_filename or "uploaded_data.csv").name
         display_name = filename
-        final_path = os.path.join("temp_data", filename)
-        os.makedirs("temp_data", exist_ok=True)
+        _cleanup_gui_system_temp_files()
+        final_path = str(_get_gui_system_temp_dir() / filename)
 
         try:
             if "csv" in filename or "parquet" in filename:

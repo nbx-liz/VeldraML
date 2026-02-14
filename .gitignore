@@ -86,6 +86,7 @@ examples/data/sklearn_data/
 .veldra_gui/
 
 # Local temporary files
+veldra_system_temporary_uploads/
 tmp*.json
 uv-*.lock
 notebooks/.uv_cache/

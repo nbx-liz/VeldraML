@@ -1,20 +1,8 @@
-import numpy as np
-import pandas as pd
-
 from veldra.api import Artifact, fit, predict
 
 
-def _binary_frame(rows: int = 90, seed: int = 3) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    x1 = rng.normal(size=rows)
-    x2 = rng.normal(size=rows)
-    score = 1.1 * x1 - 0.9 * x2 + rng.normal(scale=0.3, size=rows)
-    y = (score > np.median(score)).astype(int)
-    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
-
-
-def test_binary_predict_returns_expected_columns_and_ranges(tmp_path) -> None:
-    frame = _binary_frame()
+def test_binary_predict_returns_expected_columns_and_ranges(tmp_path, binary_frame) -> None:
+    frame = binary_frame(rows=90, seed=3, coef1=1.1, coef2=-0.9, noise=0.3)
     data_path = tmp_path / "binary.csv"
     frame.to_csv(data_path, index=False)
 

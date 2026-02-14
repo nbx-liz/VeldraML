@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -6,22 +5,8 @@ from veldra.api import Artifact, evaluate, fit
 from veldra.api.exceptions import VeldraValidationError
 
 
-def _frontier_frame(rows: int = 110, seed: int = 61) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    x1 = rng.uniform(-1.8, 2.3, size=rows)
-    x2 = rng.normal(size=rows)
-    y = (
-        1.7
-        + 0.9 * x1
-        - 0.6 * x2
-        + rng.normal(scale=0.3, size=rows)
-        + rng.exponential(scale=0.25, size=rows)
-    )
-    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
-
-
-def test_frontier_evaluate_returns_expected_metrics(tmp_path) -> None:
-    frame = _frontier_frame()
+def test_frontier_evaluate_returns_expected_metrics(tmp_path, frontier_frame) -> None:
+    frame = frontier_frame(rows=110, seed=61)
     data_path = tmp_path / "frontier.csv"
     frame.to_csv(data_path, index=False)
 
@@ -41,8 +26,8 @@ def test_frontier_evaluate_returns_expected_metrics(tmp_path) -> None:
     assert result.metadata["frontier_alpha"] == pytest.approx(0.90)
 
 
-def test_frontier_evaluate_rejects_invalid_input(tmp_path) -> None:
-    frame = _frontier_frame()
+def test_frontier_evaluate_rejects_invalid_input(tmp_path, frontier_frame) -> None:
+    frame = frontier_frame(rows=110, seed=61)
     data_path = tmp_path / "frontier.csv"
     frame.to_csv(data_path, index=False)
     run = fit(

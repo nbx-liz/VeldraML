@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from veldra.api.exceptions import VeldraValidationError
-from veldra.causal import dr_did
+from veldra.causal import dr_did, max_standardized_mean_difference, overlap_metric
 from veldra.config.models import RunConfig
 
 
@@ -27,20 +27,14 @@ def _config() -> RunConfig:
     )
 
 
-def _panel_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "unit_id": [1, 1, 2, 2],
-            "time": [0, 1, 0, 1],
-            "post": [0, 1, 0, 1],
-            "treatment": [0, 0, 1, 1],
-            "x": [0.2, 0.2, 0.8, 0.8],
-            "outcome": [10.0, 11.0, 13.0, 15.0],
-        }
-    )
+def _panel_from_fixture(panel_frame) -> pd.DataFrame:
+    frame = panel_frame(n_units=2, seed=11)
+    frame = frame.rename(columns={"x": "x1"})
+    frame["outcome"] = frame["outcome"].astype(float)
+    return frame[["unit_id", "time", "post", "treatment", "x1", "outcome"]]
 
 
-def test_to_binary_and_overlap_metric_edges() -> None:
+def test_to_binary_validation() -> None:
     out = dr_did._to_binary(pd.Series([0, 1, 0, 1]), name="flag")
     assert out.dtype == int
 
@@ -50,22 +44,32 @@ def test_to_binary_and_overlap_metric_edges() -> None:
     with pytest.raises(VeldraValidationError, match="exactly two binary values"):
         dr_did._to_binary(pd.Series([0, 1, 2]), name="flag")
 
+
+def test_diagnostics_public_functions() -> None:
     e_hat = np.array([0.2, 0.4, 0.8], dtype=float)
     treat = np.array([1, 1, 1], dtype=int)
-    assert dr_did._overlap_metric(e_hat, treat) == 0.0
+    assert overlap_metric(e_hat, treat) == 0.0
+
+    cov = pd.DataFrame({"x1": [0.1, 0.2, 0.8, 0.9], "x2": [1.0, 1.1, 2.0, 2.1]})
+    treat2 = np.array([0, 0, 1, 1], dtype=int)
+    weights = np.array([1.0, 1.0, 1.2, 1.3], dtype=float)
+    assert max_standardized_mean_difference(cov, treat2) >= 0.0
+    assert max_standardized_mean_difference(cov, treat2, weights=weights) >= 0.0
+    assert max_standardized_mean_difference(pd.DataFrame(), treat2) == 0.0
 
 
-def test_base_validation_rejects_missing_and_non_numeric_outcome() -> None:
+def test_base_validation_rejects_missing_and_non_numeric_outcome(panel_frame) -> None:
     cfg = _config()
 
     with pytest.raises(VeldraValidationError, match="Input data is empty"):
         dr_did._base_validation(cfg, pd.DataFrame())
 
-    missing = _panel_frame().drop(columns=["post"])
+    panel = _panel_from_fixture(panel_frame)
+    missing = panel.drop(columns=["post"])
     with pytest.raises(VeldraValidationError, match="missing required columns"):
         dr_did._base_validation(cfg, missing)
 
-    bad_y = _panel_frame().copy()
+    bad_y = panel.copy()
     bad_y["outcome"] = ["a", "b", "c", "d"]
     with pytest.raises(VeldraValidationError, match="Outcome values must be numeric"):
         dr_did._base_validation(cfg, bad_y)
@@ -85,40 +89,27 @@ def test_dr_config_from_drdid_forces_regression_task() -> None:
     assert dr_cfg.task.type == "regression"
 
 
-def test_max_smd_handles_weighted_and_empty_covariates() -> None:
-    cov = pd.DataFrame({"x1": [0.1, 0.2, 0.8, 0.9], "x2": [1.0, 1.1, 2.0, 2.1]})
-    treat = np.array([0, 0, 1, 1], dtype=int)
-    weights = np.array([1.0, 1.0, 1.2, 1.3], dtype=float)
-    unweighted = dr_did._max_smd(cov, treat)
-    weighted = dr_did._max_smd(cov, treat, weights=weights)
-    assert unweighted >= 0.0
-    assert weighted >= 0.0
-    assert dr_did._max_smd(pd.DataFrame(), treat) == 0.0
-
-
-def test_panel_to_pseudo_frame_validation_paths(monkeypatch) -> None:
+def test_panel_to_pseudo_frame_validation_paths(monkeypatch, panel_frame) -> None:
     cfg = _config()
+    panel = _panel_from_fixture(panel_frame)
 
-    no_post = _panel_frame().loc[lambda d: d["post"] == 0].reset_index(drop=True)
+    no_post = panel.loc[lambda d: d["post"] == 0].reset_index(drop=True)
     with pytest.raises(VeldraValidationError, match="requires both pre and post"):
         dr_did._panel_to_pseudo_frame(cfg, no_post)
 
-    duplicate_pre = pd.concat(
-        [_panel_frame(), _panel_frame().iloc[[0]]],
-        ignore_index=True,
-    )
+    duplicate_pre = pd.concat([panel, panel.iloc[[0]]], ignore_index=True)
     with pytest.raises(VeldraValidationError, match="exactly one pre and one post"):
         dr_did._panel_to_pseudo_frame(cfg, duplicate_pre)
 
-    unstable_treat = _panel_frame().copy()
-    unstable_mask = (unstable_treat["unit_id"] == 2) & (unstable_treat["post"] == 1)
+    unstable_treat = panel.copy()
+    unstable_mask = (unstable_treat["unit_id"] == 0) & (unstable_treat["post"] == 1)
     unstable_treat.loc[unstable_mask, "treatment"] = 0
     with pytest.raises(VeldraValidationError, match="treatment to be stable"):
         dr_did._panel_to_pseudo_frame(cfg, unstable_treat)
 
-    cfg.data.drop_cols = ["x"]
+    cfg.data.drop_cols = ["x1"]
     with pytest.raises(VeldraValidationError, match="No feature columns remain"):
-        dr_did._panel_to_pseudo_frame(cfg, _panel_frame())
+        dr_did._panel_to_pseudo_frame(cfg, panel)
 
     cfg = _config()
     monkeypatch.setattr(dr_did.pd, "get_dummies", lambda *_args, **_kwargs: pd.DataFrame())
@@ -126,16 +117,16 @@ def test_panel_to_pseudo_frame_validation_paths(monkeypatch) -> None:
         VeldraValidationError,
         match="No usable feature columns remain after encoding",
     ):
-        dr_did._panel_to_pseudo_frame(cfg, _panel_frame())
+        dr_did._panel_to_pseudo_frame(cfg, panel)
 
 
-def test_repeated_cs_requires_pre_and_post() -> None:
+def test_repeated_cs_requires_pre_and_post(panel_frame) -> None:
     cfg = _config()
     assert cfg.causal is not None
     cfg.causal.design = "repeated_cross_section"
     cfg.causal.unit_id_col = None
 
-    frame = _panel_frame().copy()
+    frame = _panel_from_fixture(panel_frame)
     frame["post"] = 1
     with pytest.raises(VeldraValidationError, match="requires both pre and post rows"):
         dr_did._repeated_cs_to_pseudo_frame(cfg, frame)

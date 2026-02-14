@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from veldra.api.exceptions import VeldraValidationError
+from veldra.causal.diagnostics import max_standardized_mean_difference, overlap_metric
 from veldra.causal.dr import DREstimationOutput, run_dr_estimation
 from veldra.config.models import RunConfig
 
@@ -22,16 +23,6 @@ def _to_binary(series: pd.Series, *, name: str) -> pd.Series:
             f"{name} must contain exactly two binary values (0/1), got {uniques}."
         )
     return numeric.astype(int)
-
-
-def _overlap_metric(e_hat: np.ndarray, treatment: np.ndarray) -> float:
-    treated = e_hat[treatment == 1]
-    control = e_hat[treatment == 0]
-    if len(treated) == 0 or len(control) == 0:
-        return 0.0
-    treated_overlap = float(np.mean((treated > 0.1) & (treated < 0.9)))
-    control_overlap = float(np.mean((control > 0.1) & (control < 0.9)))
-    return min(treated_overlap, control_overlap)
 
 
 def _base_validation(config: RunConfig, frame: pd.DataFrame) -> tuple[str, str, str]:
@@ -89,53 +80,6 @@ def _dr_config_from_drdid(config: RunConfig) -> RunConfig:
     # DR-DiD pseudo outcomes are continuous by construction even for binary endpoints.
     dr_cfg.task.type = "regression"
     return dr_cfg
-
-
-def _weighted_mean_var(values: np.ndarray, weights: np.ndarray | None) -> tuple[float, float]:
-    if weights is None:
-        mean = float(np.mean(values))
-        var = float(np.var(values))
-        return mean, var
-    weight_sum = float(np.sum(weights))
-    if weight_sum <= 0.0:
-        return 0.0, 0.0
-    mean = float(np.average(values, weights=weights))
-    var = float(np.average((values - mean) ** 2, weights=weights))
-    return mean, var
-
-
-def _max_smd(
-    covariates: pd.DataFrame,
-    treatment: np.ndarray,
-    *,
-    weights: np.ndarray | None = None,
-) -> float:
-    if covariates.empty:
-        return 0.0
-
-    t_mask = treatment == 1
-    c_mask = treatment == 0
-    if not np.any(t_mask) or not np.any(c_mask):
-        return 0.0
-
-    smd_values: list[float] = []
-    for col in covariates.columns:
-        values = pd.to_numeric(covariates[col], errors="coerce").to_numpy(dtype=float)
-        if np.isnan(values).any():
-            continue
-        w_t = weights[t_mask] if weights is not None else None
-        w_c = weights[c_mask] if weights is not None else None
-        mean_t, var_t = _weighted_mean_var(values[t_mask], w_t)
-        mean_c, var_c = _weighted_mean_var(values[c_mask], w_c)
-        pooled_sd = float(np.sqrt(max((var_t + var_c) / 2.0, 0.0)))
-        if pooled_sd <= 1e-12:
-            smd_values.append(0.0)
-            continue
-        smd_values.append(abs(mean_t - mean_c) / pooled_sd)
-
-    if not smd_values:
-        return 0.0
-    return float(np.max(smd_values))
 
 
 def _panel_to_pseudo_frame(
@@ -289,7 +233,7 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
     overlap = float(
         dr_out.metrics.get(
             "overlap_metric",
-            _overlap_metric(
+            overlap_metric(
                 obs["e_hat"].to_numpy(dtype=float),
                 obs["treatment"].to_numpy(dtype=int),
             ),
@@ -297,7 +241,10 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
     )
     t_np = obs["treatment"].to_numpy(dtype=int)
     smd_max_unweighted = float(
-        dr_out.metrics.get("smd_max_unweighted", _max_smd(smd_covariates, t_np))
+        dr_out.metrics.get(
+            "smd_max_unweighted",
+            max_standardized_mean_difference(smd_covariates, t_np),
+        )
     )
     if "smd_max_weighted" in dr_out.metrics:
         smd_max_weighted = float(dr_out.metrics["smd_max_weighted"])
@@ -307,7 +254,9 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
             balance_weights = np.where(t_np == 1, 1.0 / e_np, 1.0 / (1.0 - e_np))
         else:
             balance_weights = np.where(t_np == 1, 1.0, e_np / (1.0 - e_np))
-        smd_max_weighted = _max_smd(smd_covariates, t_np, weights=balance_weights)
+        smd_max_weighted = max_standardized_mean_difference(
+            smd_covariates, t_np, weights=balance_weights
+        )
 
     metrics = dict(dr_out.metrics)
     metrics["overlap_metric"] = overlap

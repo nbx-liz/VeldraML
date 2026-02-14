@@ -1,25 +1,8 @@
-import numpy as np
-import pandas as pd
-
 from veldra.api import Artifact, evaluate, fit, predict
 
 
-def _frontier_frame(rows: int = 100, seed: int = 91) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    x1 = rng.uniform(-2.0, 2.0, size=rows)
-    x2 = rng.normal(size=rows)
-    y = (
-        2.5
-        + 1.1 * x1
-        - 0.7 * x2
-        + rng.normal(scale=0.35, size=rows)
-        + rng.exponential(scale=0.2, size=rows)
-    )
-    return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
-
-
-def test_frontier_artifact_roundtrip_predict_and_evaluate(tmp_path) -> None:
-    frame = _frontier_frame()
+def test_frontier_artifact_roundtrip_predict_and_evaluate(tmp_path, frontier_frame) -> None:
+    frame = frontier_frame(rows=100, seed=91)
     data_path = tmp_path / "frontier_train.csv"
     frame.to_csv(data_path, index=False)
 

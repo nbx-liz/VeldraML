@@ -6,6 +6,7 @@
 
 ## ルール
 - 1エントリ = 1作業単位（会話/セッション/PR）
+- 日付・時刻の基準は日本時間（JST, UTC+09:00）とする
 - 同一フェーズ（`phaseN` / `phaseN.M`）の `Session planning` と `Session/PR` は1エントリに統合する
 - 記載順は日付の古い順（昇順）。同日内はフェーズ番号昇順、その後に非フェーズを旧出現順で記載する
 - 仕様決定は `Decision` で明示し、`provisional`（暫定）または `confirmed`（確定）だけを使う
@@ -727,3 +728,50 @@
 
 **検証結果**
 - `uv run pytest -q tests/test_readme_runconfig_reference.py` を通過（当時記録）。
+
+### 2026-02-15（作業/PR: phase25.5-test-improvement-planning-and-bootstrap）
+**背景**
+- テストスイートで、データ生成重複・task間非対称・private依存テストが同時に残っていた。
+- Phase25.5の実装着手前に、設計と意思決定を文書で固定する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `Phase25.5` を、DRY/対称性/API化の3本柱で全置換。
+- Wave方式（Wave1-3）で42ファイルのデータファクトリー移行方針を明文化。
+- regression契約テスト4本の新設方針と、`split/cv.py`・`causal/diagnostics.py` の公開化方針を明記。
+- 検証コマンドと完了条件（Stable API非破壊を含む）を明記。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase25.5では `iter_cv_splits` と因果診断メトリクスを公開ユーティリティへ抽出する。
+  - 理由: private実装依存を減らし、重複ロジックの保守点を集約するため。
+  - 影響範囲: split / causal / tests / docs
+- Decision: provisional（暫定）
+  - 内容: テストデータ生成ロジックは `tests/conftest.py` の共通ファクトリーへWave移行する。
+  - 理由: 重複削減とseed再現性の統一を同時に満たすため。
+  - 影響範囲: tests全体
+
+**検証結果**
+- 文書更新時点のため、コード検証は未実施（実装フェーズで実施予定）。
+
+### 2026-02-15（作業/PR: gui-test-hardening-app-services-phase25.5）
+**背景**
+- GUIテストは本数は十分だが、callback_map依存と重複ケースにより保守性が低かった。
+- `app.py` / `services.py` の未カバー分岐を埋め、品質ゲートを明確化する必要があった。
+
+**変更内容**
+- `tests/test_gui_app_coverage.py` / `tests/test_gui_app_coverage_2.py` を廃止し、
+  `tests/test_gui_app_pure_callbacks.py` / `tests/test_gui_app_job_flow.py` /
+  `tests/test_gui_app_results_flow.py` に再編。
+- `tests/test_gui_app_callbacks_internal.py` を配線最小確認へ整理し、未実装 `pass` を解消。
+- `tests/test_gui_services_core.py` を追加し、lazy import, default path, エラー正規化,
+  `run_action` 必須入力分岐を拡充。
+- `README.md` に GUI coverage gate（`app.py` / `services.py` 90%目標）を追記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: callback_map依存テストは配線確認の最小範囲に限定し、ロジック検証は `_cb_*` 直接呼び出しを標準とする。
+  - 理由: Dash内部仕様変化による脆さを減らすため。
+  - 影響範囲: gui tests / 開発運用
+
+**検証結果**
+- GUIテスト群・カバレッジ確認を実施し、`app.py` / `services.py` のカバレッジ改善を確認。

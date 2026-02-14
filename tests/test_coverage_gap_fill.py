@@ -62,7 +62,7 @@ def test_dr_did_weight_calculation(monkeypatch):
     monkeypatch.setattr(
         dr_did, "_repeated_cs_to_pseudo_frame", lambda c, f: (pd.DataFrame(), pd.DataFrame())
     )
-    monkeypatch.setattr(dr_did, "_max_smd", lambda c, t, weights=None: 0.1)
+    monkeypatch.setattr(dr_did, "max_standardized_mean_difference", lambda c, t, weights=None: 0.1)
 
     # Use real Config to support model_copy
     config = RunConfig(

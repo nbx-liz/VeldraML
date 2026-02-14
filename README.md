@@ -846,6 +846,18 @@ uv run coverage run -m pytest -q
 uv run coverage report -m
 ```
 
+GUI coverage gate (app/services):
+
+```bash
+uv run coverage erase
+uv run coverage run -m pytest -q tests/test_gui_* tests/test_new_ux.py
+uv run coverage report -m src/veldra/gui/app.py src/veldra/gui/services.py
+```
+
+Target:
+- `src/veldra/gui/app.py` coverage >= 90%
+- `src/veldra/gui/services.py` coverage >= 90%
+
 ## Project Structure
 
 ```text
