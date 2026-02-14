@@ -442,6 +442,12 @@ GUI launch:
 uv run veldra-gui --host 127.0.0.1 --port 8050
 ```
 
+Linux/WSL quick start (launch server + open browser):
+
+```bash
+./scripts/start_gui.sh
+```
+
 Runtime environment options:
 
 ```bash
@@ -456,6 +462,7 @@ GUI run behavior:
 - queued jobs can be canceled immediately.
 - running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
 - `/config` includes migrate preview/diff and file migrate apply (overwrite is rejected).
+- default run config path is `configs/gui_run.yaml` (auto-created if missing).
 
 Windows quick start (launch server + open browser):
 
@@ -497,9 +504,22 @@ uv run ruff check .
 uv run pytest -q
 ```
 
+Core-only tests (exclude GUI):
+
+```bash
+uv run pytest -q -m "not gui"
+```
+
+GUI-only tests:
+
+```bash
+uv run pytest -q -m "gui"
+```
+
 Coverage:
 
 ```bash
+uv run coverage erase
 uv run coverage run -m pytest -q
 uv run coverage report -m
 ```
@@ -523,4 +543,3 @@ tests/          # unit tests
 
 - Root `README.md` is the single source of truth for project documentation.
 - Design decisions and phase logs are tracked in `DESIGN_BLUEPRINT.md` and `HISTORY.md`.
-

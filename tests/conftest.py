@@ -14,6 +14,23 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+GUI_TEST_FILES = {
+    "test_new_ux.py",
+}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "gui: GUI adapter related tests.")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    _ = config
+    for item in items:
+        path = Path(str(item.fspath)).name
+        if path.startswith("test_gui_") or path in GUI_TEST_FILES:
+            item.add_marker(pytest.mark.gui)
+
+
 @pytest.fixture
 def tmp_path() -> Path:
     """Workspace-local tmp_path to avoid permission issues in this environment."""
