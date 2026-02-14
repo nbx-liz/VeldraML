@@ -101,14 +101,11 @@ def migrate_run_config_file(
     normalized, source_version = _normalize_payload(raw)
 
     destination = (
-        Path(output_path)
-        if output_path is not None
-        else _default_output_path(source_path)
+        Path(output_path) if output_path is not None else _default_output_path(source_path)
     )
     if destination.exists():
         raise VeldraValidationError(
-            f"Refusing to overwrite existing file: {destination}. "
-            "Choose a different --output path."
+            f"Refusing to overwrite existing file: {destination}. Choose a different --output path."
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(

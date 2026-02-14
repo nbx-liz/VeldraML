@@ -175,18 +175,12 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     coverage_target = (
         float(parsed.frontier.alpha)
         if parsed.task.type == "frontier" and parsed.tuning.coverage_target is None
-        else (
-            float(parsed.tuning.coverage_target)
-            if parsed.task.type == "frontier"
-            else None
-        )
+        else (float(parsed.tuning.coverage_target) if parsed.task.type == "frontier" else None)
     )
     coverage_tolerance = (
         float(parsed.tuning.coverage_tolerance) if parsed.task.type == "frontier" else None
     )
-    penalty_weight = (
-        float(parsed.tuning.penalty_weight) if parsed.task.type == "frontier" else None
-    )
+    penalty_weight = float(parsed.tuning.penalty_weight) if parsed.task.type == "frontier" else None
     causal_method = parsed.causal.method if parsed.causal is not None else None
     causal_penalty_weight = (
         float(parsed.tuning.causal_penalty_weight) if parsed.causal is not None else None
@@ -415,9 +409,7 @@ def _evaluate_with_artifact(
 
     target_col = artifact.run_config.data.target
     if target_col not in data.columns:
-        raise VeldraValidationError(
-            f"evaluate input is missing target column '{target_col}'."
-        )
+        raise VeldraValidationError(f"evaluate input is missing target column '{target_col}'.")
 
     y_true = data[target_col]
     x_eval = data.drop(columns=[target_col])

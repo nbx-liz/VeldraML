@@ -115,11 +115,11 @@ def inspect_data(path: str) -> dict[str, Any]:
             raise VeldraValidationError(f"Data file does not exist: {data_path}")
         loader = _get_load_tabular_data()
         df = loader(str(data_path))
-        
+
         # Calculate column stats
         numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
         cat_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
-        
+
         stats = {
             "n_rows": len(df),
             "n_cols": len(df.columns),
@@ -132,7 +132,7 @@ def inspect_data(path: str) -> dict[str, Any]:
 
         # Preview data (handle non-serializable types if any)
         preview = df.head(10).astype(object).where(pd.notnull(df), None)
-        
+
         return {
             "success": True,
             "stats": stats,
@@ -234,7 +234,7 @@ def migrate_config_from_yaml(
             raise VeldraValidationError("Config YAML must deserialize to an object.")
         normalized, result = migrate_run_config_payload(payload, target_version=target_version)
         normalized_yaml = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True)
-        
+
         # Calculate diff
         input_lines = (yaml_text or "").splitlines()
         output_lines = normalized_yaml.splitlines()
@@ -293,7 +293,7 @@ def _result_to_payload(result: Any) -> dict[str, Any]:
                         "preview": val.head(20).to_dict(orient="records"),
                     }
                 else:
-                     payload[field] = val
+                    payload[field] = val
     elif isinstance(result, pd.DataFrame):
         payload = {
             "n_rows": int(len(result)),

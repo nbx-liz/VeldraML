@@ -332,9 +332,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         }
     else:
         threshold_value = (
-            float(config.postprocess.threshold)
-            if config.postprocess.threshold is not None
-            else 0.5
+            float(config.postprocess.threshold) if config.postprocess.threshold is not None else 0.5
         )
         threshold = {"policy": "fixed", "value": threshold_value}
 

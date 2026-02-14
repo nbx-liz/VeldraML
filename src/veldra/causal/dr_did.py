@@ -322,9 +322,7 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
             "smd_max_weighted": smd_max_weighted,
             "binary_outcome": bool(config.task.type == "binary"),
             "outcome_scale": (
-                "risk_difference_att"
-                if config.task.type == "binary"
-                else "continuous_att"
+                "risk_difference_att" if config.task.type == "binary" else "continuous_att"
             ),
             "metrics": metrics,
         }

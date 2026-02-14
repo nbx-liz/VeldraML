@@ -35,9 +35,7 @@ def normalize_scenarios(scenarios: Any) -> list[dict[str, Any]]:
             raise VeldraValidationError("scenario.name must be a non-empty string.")
         actions = item.get("actions")
         if not isinstance(actions, list) or not actions:
-            raise VeldraValidationError(
-                f"Scenario '{name}' must include a non-empty actions list."
-            )
+            raise VeldraValidationError(f"Scenario '{name}' must include a non-empty actions list.")
         normalized.append({"name": name, "actions": actions})
     return normalized
 

@@ -37,4 +37,3 @@ def test_lalonde_notebook_has_required_dr_sections() -> None:
     ]
     for snippet in required_snippets:
         assert snippet in source, f"Missing notebook section: {snippet}"
-

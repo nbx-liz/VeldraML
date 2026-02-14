@@ -76,4 +76,3 @@ def test_build_iris_frame_raises_when_mapping_produces_null(monkeypatch) -> None
     monkeypatch.setattr(prepare_demo_data_multiclass, "load_iris", lambda **_: _Fetched())
     with pytest.raises(ValueError, match="Target mapping produced null values"):
         prepare_demo_data_multiclass.build_iris_frame()
-

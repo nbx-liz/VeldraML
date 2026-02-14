@@ -10,8 +10,12 @@ def _frontier_frame(rows: int = 90, seed: int = 413) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     x1 = rng.uniform(-1.8, 1.8, size=rows)
     x2 = rng.normal(size=rows)
-    y = 1.1 + 1.7 * x1 - 0.5 * x2 + rng.normal(scale=0.18, size=rows) + rng.exponential(
-        scale=0.25, size=rows
+    y = (
+        1.1
+        + 1.7 * x1
+        - 0.5 * x2
+        + rng.normal(scale=0.18, size=rows)
+        + rng.exponential(scale=0.25, size=rows)
     )
     return pd.DataFrame({"x1": x1, "x2": x2, "target": y})
 

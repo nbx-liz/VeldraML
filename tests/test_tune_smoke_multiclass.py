@@ -39,4 +39,3 @@ def test_tune_smoke_multiclass(tmp_path) -> None:
     assert result.best_params
     assert result.metadata["metric_name"] == "macro_f1"
     assert result.metadata["direction"] == "maximize"
-

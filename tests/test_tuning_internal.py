@@ -83,9 +83,9 @@ def test_suggest_from_spec_variants_and_validation() -> None:
     trial = _Trial()
     assert tuning._suggest_from_spec(trial, "a", {"type": "int", "low": 1, "high": 3}) == 3
     assert tuning._suggest_from_spec(trial, "b", {"type": "float", "low": 0.1, "high": 1.0}) == 0.3
-    assert tuning._suggest_from_spec(
-        trial, "c", {"type": "categorical", "choices": ["x", "y"]}
-    ) == "x"
+    assert (
+        tuning._suggest_from_spec(trial, "c", {"type": "categorical", "choices": ["x", "y"]}) == "x"
+    )
     assert tuning._suggest_from_spec(trial, "d", [1, 2, 3]) == 1
     assert tuning._suggest_from_spec(trial, "e", 42) == 42
 

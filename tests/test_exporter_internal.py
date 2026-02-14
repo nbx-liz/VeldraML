@@ -34,9 +34,7 @@ def _artifact(
     feature_schema: dict[str, Any] | None = None,
 ) -> Artifact:
     schema = (
-        {"feature_names": ["x1"], "target": "target"}
-        if feature_schema is None
-        else feature_schema
+        {"feature_names": ["x1"], "target": "target"} if feature_schema is None else feature_schema
     )
     return Artifact.from_config(
         run_config=_config(task_type),
@@ -309,8 +307,7 @@ def test_validate_python_export_marks_invalid_feature_names_when_runtime_exists(
     checks = {item["name"]: item for item in payload["checks"]}
     assert checks["runtime_predict"]["ok"] is False
     assert (
-        "feature_schema.feature_names is missing or invalid"
-        in checks["runtime_predict"]["detail"]
+        "feature_schema.feature_names is missing or invalid" in checks["runtime_predict"]["detail"]
     )
 
 

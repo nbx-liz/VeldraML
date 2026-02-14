@@ -36,4 +36,3 @@ def test_lalonde_notebook_uses_cached_data_for_runconfig() -> None:
     assert '"task": {"type": "regression"}' in source
     assert '"treatment_col": TREATMENT_COL' in source
     assert 'SUMMARY_PATH = OUT_DIR / "lalonde_analysis_summary.json"' in source
-

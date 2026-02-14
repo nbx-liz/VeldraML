@@ -46,9 +46,7 @@ def _build_feature_frame(
 
     unique = pd.unique(y)
     if len(unique) < 3:
-        raise VeldraValidationError(
-            "Multiclass task requires at least three target classes."
-        )
+        raise VeldraValidationError("Multiclass task requires at least three target classes.")
     target_classes = sorted((_to_python_scalar(v) for v in unique), key=lambda v: str(v))
     class_mapping = {label: idx for idx, label in enumerate(target_classes)}
     y_encoded = y.map(class_mapping)
@@ -114,9 +112,7 @@ def _iter_cv_splits(
         )
         return list(splitter.split(len(x_ordered)))
 
-    raise VeldraValidationError(
-        f"Unsupported split type '{split_cfg.type}' for multiclass task."
-    )
+    raise VeldraValidationError(f"Unsupported split type '{split_cfg.type}' for multiclass task.")
 
 
 def _train_single_booster(
@@ -170,9 +166,7 @@ def _normalize_proba(raw: np.ndarray, n_rows: int, num_class: int) -> np.ndarray
             )
         raw = raw.reshape(n_rows, num_class)
     if raw.ndim != 2 or raw.shape[1] != num_class:
-        raise VeldraValidationError(
-            "Multiclass prediction output has invalid dimensions."
-        )
+        raise VeldraValidationError("Multiclass prediction output has invalid dimensions.")
 
     proba = np.clip(raw.astype(float), 1e-7, 1 - 1e-7)
     row_sum = proba.sum(axis=1, keepdims=True)

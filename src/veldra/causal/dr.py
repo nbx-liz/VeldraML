@@ -371,9 +371,7 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
     else:
         score = _att_score(y_np, t_np, e_hat, m0_np)
         p1 = float(np.mean(t_np))
-        ipw = float(
-            np.mean((t_np * y_np - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) * y_np) / p1)
-        )
+        ipw = float(np.mean((t_np * y_np - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) * y_np) / p1))
         weights = t_np / p1 - (1.0 - t_np) * (e_hat / (1.0 - e_hat)) / p1
 
     estimate = float(np.mean(score))

@@ -37,4 +37,3 @@ def test_tune_smoke_binary(tmp_path) -> None:
     assert result.best_params
     assert result.metadata["metric_name"] == "auc"
     assert result.metadata["direction"] == "maximize"
-

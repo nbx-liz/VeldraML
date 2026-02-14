@@ -167,9 +167,7 @@ class Artifact:
                 )
             raw = raw.reshape(len(x), num_class)
         if raw.ndim != 2 or raw.shape[1] != num_class:
-            raise VeldraArtifactError(
-                "Multiclass prediction output has invalid dimensions."
-            )
+            raise VeldraArtifactError("Multiclass prediction output has invalid dimensions.")
 
         proba = np.clip(raw, 1e-7, 1 - 1e-7)
         row_sum = proba.sum(axis=1, keepdims=True)

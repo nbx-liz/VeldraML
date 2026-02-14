@@ -89,4 +89,3 @@ def test_frontier_penalty_objective_writes_component_columns(tmp_path) -> None:
         "penalty",
         "objective_value",
     } <= set(trials.columns)
-

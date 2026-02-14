@@ -86,8 +86,7 @@ class GuiJobStore:
                 """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
-                "ON jobs(status, created_at_utc)"
+                "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at_utc)"
             )
 
     def enqueue_job(self, invocation: RunInvocation) -> GuiJobRecord:

@@ -10,12 +10,7 @@ from veldra import main
 
 def _write_valid_config(path: Path) -> None:
     path.write_text(
-        "config_version: 1\n"
-        "task:\n"
-        "  type: regression\n"
-        "data:\n"
-        "  path: train.csv\n"
-        "  target: y\n",
+        "config_version: 1\ntask:\n  type: regression\ndata:\n  path: train.csv\n  target: y\n",
         encoding="utf-8",
     )
 

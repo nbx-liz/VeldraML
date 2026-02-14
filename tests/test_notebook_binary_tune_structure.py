@@ -43,6 +43,6 @@ def test_binary_tune_notebook_uses_internal_data_generation() -> None:
     nb = _load_notebook()
     source = _cells_source(nb)
 
-    assert "TRAIN_PATH = OUT_DIR / \"binary_train.parquet\"" in source
-    assert "TEST_PATH = OUT_DIR / \"binary_test.parquet\"" in source
+    assert 'TRAIN_PATH = OUT_DIR / "binary_train.parquet"' in source
+    assert 'TEST_PATH = OUT_DIR / "binary_test.parquet"' in source
     assert "to_parquet(" in source

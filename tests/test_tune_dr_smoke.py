@@ -55,4 +55,3 @@ def test_tune_supports_dr_objective(tmp_path) -> None:
         "objective_value",
         "objective_stage",
     } <= set(trials.columns)
-

@@ -40,6 +40,6 @@ def test_simulate_notebook_uses_internal_data_generation() -> None:
     nb = _load_notebook()
     source = _cells_source(nb)
 
-    assert "TRAIN_PATH = OUT_DIR / \"simulate_train.parquet\"" in source
+    assert 'TRAIN_PATH = OUT_DIR / "simulate_train.parquet"' in source
     assert "to_parquet(" in source
-    assert "\"task\": {\"type\": \"regression\"}" in source
+    assert '"task": {"type": "regression"}' in source

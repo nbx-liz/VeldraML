@@ -3212,3 +3212,46 @@
 
 **Risks / Notes**
 - この実行環境では `uv run` が `uv-build` 解決時に外部ネットワーク到達不可で失敗するため、検証は `.venv/bin/python -m pytest` で実施。
+
+### 2026-02-14 (Session/PR: ruff-repo-wide-cleanup)
+**Context**
+- リポジトリ全体で `uv run ruff check .` が多数失敗しており、品質ゲート通過を阻害していた。
+
+**Plan**
+- `ruff --fix` と `ruff format` を先に適用し、機械修正可能な差分を一括で解消する。
+- 残件の `E501` / `E722` / `E402` / `F401` / `F821` を手動で最小差分修正する。
+- marker 分離済みの pytest 運用に合わせて `gui` / `not gui` を分割実行する。
+
+**Changes**
+- 実装変更:
+  - `src/veldra/gui/app.py`
+    - import 並びを整理し、`toast` import を module top へ移動（`E402` 解消）。
+    - 長い文字列・f-string を分割して `E501` を解消。
+    - `except:` を `except Exception:` に変更して `E722` を解消。
+    - status badge の色判定を事前変数化し、可読性と行長を改善。
+  - `src/veldra/gui/pages/run_page.py`
+    - 長い literal / className 文字列を分割し `E501` を解消。
+  - `tests/debug_imports.py`
+    - 未使用 import を避けるため `importlib.import_module` ベースに変更。
+  - `tests/test_gui_app_callbacks_internal.py`
+    - 長大コメントを簡潔化して `E501` を解消。
+  - `tests/test_gui_app_coverage.py`
+    - `typing.Any` を追加し `F821` を解消。
+- 一括整形:
+  - `uv run ruff check . --fix`
+  - `uv run ruff check . --fix --unsafe-fixes`
+  - `uv run ruff format .`
+
+**Decisions**
+- Decision: confirmed
+  - 内容:
+    - `pyproject.toml` の Ruff ルールは緩和せず、コード修正のみで全体通過させる。
+  - 理由:
+    - Stable API/Artifact 互換を維持しながら、静的品質ゲートを再び信頼可能にするため。
+  - 影響範囲:
+    - GUI adapter / tests / 開発品質
+
+**Results**
+- `uv run ruff check .`: **passed**
+- `uv run pytest -q -m "not gui"`: **335 passed, 73 deselected**
+- `uv run pytest -q -m "gui"`: **73 passed, 335 deselected**
