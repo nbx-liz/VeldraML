@@ -191,7 +191,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### Notes
 - `ruff check` はリポジトリ全体で既存違反が残っており、Phase25スコープ外として別途整理する。
 
-## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）
+## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）(完了)
 
 ### Context（2026-02-14 時点）
 - テストスイートは約145ファイル。
@@ -262,7 +262,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - CV split/causal diagnostics が公開ユーティリティとしてテストされる。
 - Stable API（`veldra.api.*`）の互換性は維持される。
 
-## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）
+## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）(完了)
 
 ### 目的
 - ダークテーマ上の可読性を改善する。
@@ -287,6 +287,101 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v`
 - `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
 - `uv run pytest tests -x --tb=short`
+
+## 12.7 Phase25.7: LightGBMの機能強化
+### 目的
+- 目的変数の自動判定機能
+- バリデーションデータの適切な設定
+- ImbalanceデータにWeightを適用する機能
+- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping および Early Stopping用バリデーションデータ分割）
+- 学習曲線の可視化機能（学習中の評価指標の推移をリアルタイムで可視化）
+
+### 完了条件
+- 目的変数の自動判定機能が実装され、ユーザーが明示的に指定しなくても適切な目的関数が選択されること。必要に応じてユーザーが設定変更もできること。
+- バリデーションデータの適切な設定が行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
+ - データが時系列の場合は、時系列分割が適用されること。
+ - 目的変数がカテゴリカル(Binary or Multi-class)であれば、層化分割が適用されること。
+ - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が適用されること。
+- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが行われること。
+ - Binary分類タスクで、クラス不均衡が検出された場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
+  - ユーザーが明示的にクラス重みを指定できるオプションも提供されること。
+ - Multi-class分類タスクで、クラス不均衡が検出された場合に、LightGBMの `class_weight` パラメーターが自動的に設定されること。
+  - ユーザーが明示的にクラス重みを指定できるオプションも提供されること。
+- 学習曲線の早期停止機能が実装され、モデルの性能が向上すること。ユーザーが早期停止の条件を設定できること。
+- 学習曲線の可視化機能が実装され、ユーザーが学習中の評価指標の推移をリアルタイムで確認できること。
+
+## 12.8 Phase25.8: LightGBMのパラメーター追加
+### 目的
+- top-k precisionの追加(`top_k` パラメーター)により、Binaryのモデル性能評価の多様化を実現する。
+- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、モデルの解釈性と性能を向上させる。
+- num_leavesの自動調整機能の追加（`auto_num_leaves` パラメーター）により、木ベースのパラメーター調整を可能にする。
+  - `num_leaves_ratio` パラメーターも追加し、auto_num_leavesが有効な場合の葉数をデータサイズに応じて柔軟に調整できるようにする。
+- min_data_in_leaf_ratioの追加（`min_data_in_leaf_ratio` パラメーター）により、過学習の防止とモデルの一般化性能の向上を図る。
+- min_data_in_bin_ratioの追加（`min_data_in_bin_ratio` パラメーター）により、データの分割における過剰な細分化を防止し、モデルの安定性を向上させる。
+- 以下のパラメーターをArtifactで使えるようにする
+ - `top_k`
+ - `feature_weights`
+ - `auto_num_leaves`
+ - `min_data_in_leaf_ratio`
+ - `min_data_in_bin_ratio`
+ - `feature_fraction`
+ - `bagging_fraction`
+ - `lambda_l1`
+ - `lambda_l2`
+ - `path_smooth`
+ - `cat_l2`
+ - `cat_smooth`
+ - 'bagging_freq'
+ - 'max_depth'
+ - 'max_bin'
+ - 'max_drop'
+ - 'min_gain_to_split'
+
+### 参考
+#### auto_num_leaves & num_leaves_ratioの実装例
+    if params.get('num_leaves', 31) == 'auto':
+        if params.get('max_depth', -1) == -1:
+            _params['num_leaves'] = np.int(131072)
+        else:
+            _params['num_leaves'] = np.int(np.clip(2 ** params.get('max_depth'), 8, 131072))
+            if 'num_leaves_ratio' in _params:
+                _params['num_leaves'] = np.int(np.clip(np.ceil(_params['num_leaves'] * params['num_leaves_ratio']), 8, 131072))
+    else:
+        _params['num_leaves'] = np.int(params.get('num_leaves', 31))
+
+### 完了条件
+- 上記のパラメーターが実装され、ユーザーが適切に設定できること。
+- 追加されたパラメーターがモデルの性能評価や解釈性の向上に寄与すること。
+
+## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
+### 目的
+- 目的変数の自動判定機能のテスト
+- バリデーションデータの適切な設定のテスト
+- ImbalanceデータにWeightを適用する機能のテスト
+- 学習曲線の早期停止機能のテスト
+- 学習曲線の可視化機能のテスト
+### テストケース
+1. 目的変数の自動判定機能のテスト
+ - Binary分類タスクで、目的変数が2クラスの場合に `binary` 目的関数が選択されることを確認するテストケース。
+ - Multi-class分類タスクで、目的変数が3クラス以上の場合に `multiclass` 目的関数が選択されることを確認するテストケース。
+ - Regressionタスクで、目的変数が連続値の場合に `regression` 目的関数が選択されることを確認するテストケース。
+2. バリデーションデータの適切な設定のテスト
+ - 時系列データで、`Split Type=Time Series` が選択された場合に、時系列分割が適用されることを確認するテストケース。
+ - カテゴリカルデータで、層化分割が適用されることを確認するテストケース。
+ - DR/DR-DiD の傾向スコアモデルとOutcomeモデルで、Group K-Fold 分割が適用されることを確認するテストケース。
+3. ImbalanceデータにWeightを適用する機能のテスト
+ - Binary分類タスクで、クラス不均衡が検出された場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されることを確認するテストケース。
+ - Binary分類タスクで、ユーザーが明示的にクラス重みを指定できるオプションが提供されていることを確認するテストケース。
+ - Multi-class分類タスクで、クラス不均衡が検出された場合に、LightGBMの `class_weight` パラメーターが自動的に設定されることを確認するテストケース。
+ - Multi-class分類タスクで、ユーザーが明示的にクラス重みを指定できるオプションが提供されていることを確認するテストケース。
+4. 学習曲線の早期停止機能のテスト
+ - 早期停止の条件が設定された場合に、モデルの性能が向上することを確認するテストケース。
+ - ユーザーが早期停止の条件を設定できることを確認するテストケース。
+5. 学習曲線の可視化機能のテスト
+ - 学習中の評価指標の推移がリアルタイムで可視化されることを確認するテストケース。
+ - 学習曲線の可視化が正確な評価指標の値を反映していることを確認するテストケース。
+### 検証コマンド 
+- `uv run pytest tests/test_lightgbm_enhancements.py -v`
 
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム
 
