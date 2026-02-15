@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-12
+最終更新: 2026-02-16
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -289,26 +289,302 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - `uv run pytest tests -x --tb=short`
 
 ## 12.7 Phase25.7: LightGBMの機能強化
+
 ### 目的
 - 目的変数の自動判定機能
-- バリデーションデータの適切な設定
-- ImbalanceデータにWeightを適用する機能
-- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping および Early Stopping用バリデーションデータ分割）
-- 学習曲線の可視化機能（学習中の評価指標の推移をリアルタイムで可視化）
+- バリデーションデータの適切な自動設定
+- ImbalanceデータにWeightを自動適用する機能
+- `num_boost_round` の設定可能化（現在300にハードコード）
+- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping）
+- 学習曲線データの記録・Artifact保存（可視化はPhase30で対応）
+- GUI対応（新パラメーター、ラベル修正）
+- Config migration（`lgb_params.n_estimators` → `train.num_boost_round`）
+
+### 現状分析
+
+| 機能 | 現状 | 対応 |
+|------|------|------|
+| `num_boost_round` | 300にハードコード。GUIの `n_estimators` は `lgb_params` に格納されるが `lgb.train()` では無視される | `TrainConfig` に昇格 |
+| 目的関数 | タスクごとにハードコード（`binary`, `regression` 等）。自動判定は既存で機能している | ユーザー上書きは `lgb_params.objective` 経由で既に可能。GUIドロップダウン追加 |
+| クラス不均衡 | 未実装 | `is_unbalance` / sample weight の自動・手動設定 |
+| バリデーション分割 | CVフォールドから適切に生成されている。ただしタスクに応じた分割タイプの自動選択は未実装 | タスク/設定に応じた分割タイプの自動適用を実装 |
+| 早期停止 | CVフォールドではOOFデータをES監視に使用（OOFの独立性にリーク）。最終モデルは `x_valid=x, y_valid=y` でES実質無効 | CVフォールド・最終モデルの両方で、train部分からES用バリデーションを自動分割。OOFは純粋にOOF予測専用 |
+| 学習曲線 | イテレーションごとのメトリクス保存なし | `record_evaluation` callback + Artifact保存。可視化はPhase30で対応 |
+
+---
+
+### Step 1: `TrainConfig` スキーマ拡張
+
+**対象**: `src/veldra/config/models.py`
+
+```python
+class TrainConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lgb_params: dict[str, Any] = Field(default_factory=dict)
+    early_stopping_rounds: int | None = 100
+    early_stopping_validation_fraction: float = 0.1  # NEW: 最終モデルの early stopping 用バリデーション比率
+    num_boost_round: int = 300                    # NEW
+    seed: int = 42
+    auto_class_weight: bool = True                # NEW: opt-out
+    class_weight: dict[str, float] | None = None  # NEW: ユーザー手動指定
+```
+
+**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
+- `auto_class_weight=True` は `binary` / `multiclass` のみ許可（`regression`/`frontier` で True なら ValueError）
+- `class_weight` は `binary` / `multiclass` のみ許可
+- `auto_class_weight=True` と `class_weight` の同時指定は禁止（手動指定が優先される旨のエラー）
+- `num_boost_round >= 1` を検証
+- `0.0 < early_stopping_validation_fraction < 1.0` を検証
+
+---
+
+### Step 2: `num_boost_round` の設定可能化 + 最終モデル Early Stopping 用バリデーション分割
+
+**対象**: 全 `_train_single_booster` 関数（4ファイル）+ 全 `train_*_with_cv` 関数（4ファイル）
+
+#### 2a: `num_boost_round` の設定可能化
+
+```python
+# Before（全タスク共通）
+num_boost_round=300
+
+# After
+num_boost_round=config.train.num_boost_round
+```
+
+#### 2b: Early Stopping 用バリデーション分割（CVフォールド + 最終モデル共通）
+
+**問題**:
+- CVフォールド: 現在OOFデータ（valid部分）を early stopping の監視対象として使用している。これではOOFが完全にOOFでなくなる（early stopping の判断にリークする）。
+- 最終モデル: `x_valid=x, y_valid=y`（訓練データ＝バリデーションデータ）のため early stopping が実質無効。
+
+**設計方針**:
+- CVフォールド・最終モデルの両方で、**学習に使うデータ（train部分）からさらに early stopping 用バリデーションデータを自動分割**する
+- OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、**純粋にOOF予測専用**として扱う
+- 分割比率: `train.early_stopping_validation_fraction`（既定 `0.1`、train部分の10%をearly stopping用バリデーションに使用）
+- `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習する
+
+**タスクに応じた分割タイプの自動適用**:
+- `task.type=binary/multiclass` → `sklearn.model_selection.StratifiedShuffleSplit` で層化分割
+- `task.type=regression/frontier` → `sklearn.model_selection.ShuffleSplit` でランダム分割
+- `split.type=timeseries` → 時系列順で末尾 N% をバリデーションに使用（シャッフルしない）
+
+**CVフォールドの変更**:
+```python
+# Before
+for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
+    booster = _train_single_booster(
+        x_train=x.iloc[train_idx], y_train=y.iloc[train_idx],
+        x_valid=x.iloc[valid_idx], y_valid=y.iloc[valid_idx],  # OOFデータをES監視に使用（リーク）
+        config=config,
+    )
+
+# After
+for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
+    x_fold_train, y_fold_train = x.iloc[train_idx], y.iloc[train_idx]
+    # train部分からES用バリデーションを分割（OOFは純粋にOOFのまま）
+    x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
+        x_fold_train, y_fold_train, config
+    )
+    booster = _train_single_booster(
+        x_train=x_es_train, y_train=y_es_train,
+        x_valid=x_es_valid, y_valid=y_es_valid,  # ES専用バリデーション
+        config=config,
+    )
+    # OOFデータはES非依存で予測のみに使用
+    pred = booster.predict(x.iloc[valid_idx], ...)
+```
+
+**最終モデルの変更**:
+```python
+# Before
+final_model = _train_single_booster(
+    x_train=x, y_train=y,
+    x_valid=x, y_valid=y,  # 訓練データ＝バリデーションデータ（ES無効）
+    config=config,
+)
+
+# After
+x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
+    x, y, config
+)
+final_model = _train_single_booster(
+    x_train=x_es_train, y_train=y_es_train,
+    x_valid=x_es_valid, y_valid=y_es_valid,
+    config=config,
+)
+```
+
+**`_split_for_early_stopping` 関数**（`src/veldra/modeling/utils.py` に新設）:
+```python
+def _split_for_early_stopping(
+    x: pd.DataFrame,
+    y: pd.Series,
+    config: RunConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """学習データから early stopping 用バリデーションデータを分割する。
+
+    - early_stopping_rounds=None の場合は分割せず (x, x, y, y) を返す（従来互換）。
+    - タスクに応じた分割タイプを自動適用する。
+    - CVフォールド内でも最終モデル学習時でも共通で使用する。
+    """
+```
+
+**`TrainConfig` 追加フィールド**:
+```python
+early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーション比率
+```
+
+**対象ファイル**:
+- `src/veldra/modeling/utils.py`（新設: `_split_for_early_stopping`）
+- `src/veldra/modeling/binary.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/multiclass.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/regression.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/frontier.py`（CVループ + 最終モデル）
+
+---
+
+### Step 3: クラス不均衡の自動検出・重み適用
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`
+
+**Binary**（`_train_single_booster` 内）:
+- `config.train.class_weight` が指定されている場合:
+  - `class_weight` から `scale_pos_weight`（= neg_count / pos_count 相当）を算出し `params` に設定
+- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
+  - `params["is_unbalance"] = True` を自動的に設定
+
+**Multiclass**（`_train_single_booster` 内）:
+- `config.train.class_weight` が指定されている場合:
+  - `class_weight` dict からサンプルごとの重みを算出し `lgb.Dataset(weight=...)` に渡す
+- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
+  - `sklearn.utils.class_weight.compute_sample_weight("balanced", y_train)` でサンプル重みを自動算出し `lgb.Dataset(weight=...)` に渡す
+
+---
+
+### Step 4: バリデーション分割の自動適用
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`, 因果推論経路
+
+**実装方針**（分割タイプをタスク/設定に応じて自動的に適用する）:
+- `task.type=binary/multiclass` かつ `split.type=kfold` → 内部で `stratified` 分割を自動適用する
+  - ユーザーが明示的に `split.type` を設定している場合はそれを尊重する
+- `causal` 設定時 → 傾向スコアモデルとOutcomeモデルの学習で `group` KFold 分割を自動適用する
+- `split.type=timeseries` → 既存実装で時系列分割が適用される（変更なし）
+
+---
+
+### Step 5: 学習曲線データの記録・Artifact保存
+
+**対象**: 全 `_train_single_booster` + 各 `TrainingOutput` + Artifact保存
+
+**実装方針**:
+- `_train_single_booster` の戻り値を `tuple[lgb.Booster, dict]` に変更し、`lgb.record_evaluation()` の結果を返す
+- 各 `TrainingOutput` dataclass に `training_history: list[dict]` フィールドを追加
+- Artifact保存時に `training_history.json` として永続化
+
+**Artifactスキーマ**:
+```json
+{
+  "folds": [
+    {
+      "fold": 1,
+      "num_iterations": 150,
+      "best_iteration": 120,
+      "eval_history": {"binary_logloss": [0.69, 0.55, 0.42, ...]}
+    }
+  ]
+}
+```
+
+**注**: 学習曲線の可視化（GUI/チャート）はPhase30で対応する。本Stepではデータ保存のみ。
+
+---
+
+### Step 6: GUI対応
+
+**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
+
+**変更点**:
+1. `N Estimators` ラベルを `Num Boost Round` に変更し、意味を正確に反映する
+2. `Auto Class Weight` トグルスイッチ追加（`binary`/`multiclass` 選択時のみ表示、既定 ON）
+3. `Class Weight` 手動入力フィールド追加（`Auto Class Weight=OFF` 時のみ活性化）
+4. Config builder で `num_boost_round` を `train.num_boost_round` に正しくマッピング（現在の `lgb_params.n_estimators` のミスマッピングを修正）
+
+---
+
+### Step 7: Config Migration
+
+**対象**: `src/veldra/config/migration.py`
+
+- `train.lgb_params.n_estimators` が存在する場合 → 値を `train.num_boost_round` に移行
+- `n_estimators` キーを `lgb_params` から削除
+- migration utility に変換ルールを追加
+
+---
+
+### Step 8: テスト計画
+
+| テスト | 内容 | ファイル |
+|--------|------|----------|
+| スキーマ検証 | `num_boost_round`, `auto_class_weight`, `class_weight`, `early_stopping_validation_fraction` のバリデーション | `tests/test_config_train_fields.py` |
+| Binary不均衡自動 | `auto_class_weight=True` で `is_unbalance` が自動的に設定される | `tests/test_binary_class_weight.py` |
+| Binary手動重み | `class_weight` 指定で `scale_pos_weight` が適用される | 同上 |
+| Multiclass不均衡自動 | `auto_class_weight=True` で balanced sample weight が自動的に適用される | `tests/test_multiclass_class_weight.py` |
+| Multiclass手動重み | `class_weight` 指定で指定重みがサンプルに適用される | 同上 |
+| num_boost_round | 設定値が実際の学習に反映される | `tests/test_num_boost_round.py` |
+| 分割自動適用 | binary/multiclass で stratified が自動適用される | `tests/test_auto_split_selection.py` |
+| 分割自動適用(causal) | causal 設定時に group KFold が自動適用される | 同上 |
+| ES用バリデーション分割(CV) | CVフォールドでtrain部分からES用バリデーションが分割され、OOFがES監視に使用されない | `tests/test_early_stopping_validation.py` |
+| ES用バリデーション分割(最終モデル) | 最終モデル学習時にも全データからES用バリデーションが分割される | 同上 |
+| ES用バリデーション分割(timeseries) | 時系列データで末尾N%がバリデーションに使用される | 同上 |
+| ES用バリデーション分割(stratified) | binary/multiclass で層化分割がバリデーション生成に使用される | 同上 |
+| ES無効時 | `early_stopping_rounds=None` の場合は分割せず全データで学習される | 同上 |
+| 学習曲線 | `training_history` がArtifactに保存される | `tests/test_training_history.py` |
+| 早期停止 | `best_iteration` が `training_history` に記録される | 同上 |
+| GUI | Config builder が新フィールドを正しく生成する | `tests/test_gui_app_callbacks_config.py` |
+| Migration | `lgb_params.n_estimators` → `num_boost_round` 変換 | `tests/test_config_migration.py` |
+
+### 検証コマンド
+- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
+- `uv run pytest tests/test_training_history.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
+- `uv run pytest tests -x --tb=short`
+
+### 実装順序（依存関係順）
+1. Step 1: `TrainConfig` スキーマ拡張 + バリデーション
+2. Step 2: `num_boost_round` 設定可能化 + 最終モデル Early Stopping 用バリデーション分割（全4ファイル + utils.py 新設）
+3. Step 3: クラス不均衡の自動検出・重み適用（binary + multiclass）
+4. Step 4: バリデーション分割の自動適用
+5. Step 5: 学習曲線データの記録・Artifact保存
+6. Step 6: GUI対応
+7. Step 7: Config Migration
+8. Step 8: テスト
 
 ### 完了条件
 - 目的変数の自動判定機能が実装され、ユーザーが明示的に指定しなくても適切な目的関数が選択されること。必要に応じてユーザーが設定変更もできること。
-- バリデーションデータの適切な設定が行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
- - データが時系列の場合は、時系列分割が適用されること。
- - 目的変数がカテゴリカル(Binary or Multi-class)であれば、層化分割が適用されること。
- - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が適用されること。
-- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが行われること。
- - Binary分類タスクで、クラス不均衡が検出された場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
-  - ユーザーが明示的にクラス重みを指定できるオプションも提供されること。
- - Multi-class分類タスクで、クラス不均衡が検出された場合に、LightGBMの `class_weight` パラメーターが自動的に設定されること。
-  - ユーザーが明示的にクラス重みを指定できるオプションも提供されること。
-- 学習曲線の早期停止機能が実装され、モデルの性能が向上すること。ユーザーが早期停止の条件を設定できること。
-- 学習曲線の可視化機能が実装され、ユーザーが学習中の評価指標の推移をリアルタイムで確認できること。
+- バリデーションデータの適切な設定が自動的に行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
+  - データが時系列の場合は、時系列分割が自動的に適用されること。
+  - 目的変数がカテゴリカル（Binary or Multi-class）であれば、層化分割が自動的に適用されること。
+  - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が自動的に適用されること。
+- CVフォールド・最終モデルの両方で、学習データ（train部分）からタスクに応じた分割タイプで early stopping 用バリデーションデータが自動分割されること。OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、純粋にOOF予測専用として扱われること。
+  - binary/multiclass → 層化分割（StratifiedShuffleSplit）で自動分割されること。
+  - regression/frontier → ランダム分割（ShuffleSplit）で自動分割されること。
+  - timeseries → 時系列順で末尾 N% がバリデーションに使用されること。
+  - `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習すること。
+  - 分割比率は `early_stopping_validation_fraction`（既定 0.1）で制御可能であること。
+- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが自動的に行われること。
+  - Binary分類タスクで、`auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
+    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
+  - Multi-class分類タスクで、`auto_class_weight=True`（既定）の場合に、balanced sample weight が自動的に算出・適用されること。
+    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
+- `num_boost_round` が `TrainConfig` から制御可能で、全タスク（regression/binary/multiclass/frontier）で反映されること。
+- 学習曲線の早期停止機能が実装され、ユーザーが `early_stopping_rounds` と `num_boost_round` を設定できること。
+- 学習曲線データ（foldごとのイテレーション別メトリクス + best_iteration）が `training_history.json` としてArtifactに保存されること。学習曲線の可視化はPhase30で対応する。
+- GUI で `Num Boost Round`、`Auto Class Weight`、`Class Weight` が設定可能であること。
+- `lgb_params.n_estimators` → `train.num_boost_round` の Config migration が動作すること。
+- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
 ## 12.8 Phase25.8: LightGBMのパラメーター追加
 ### 目的
@@ -356,32 +632,65 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
 ### 目的
 - 目的変数の自動判定機能のテスト
-- バリデーションデータの適切な設定のテスト
-- ImbalanceデータにWeightを適用する機能のテスト
+- バリデーション分割の自動適用のテスト
+- 最終モデル Early Stopping 用バリデーション分割のテスト
+- ImbalanceデータにWeightを自動適用する機能のテスト
+- `num_boost_round` 設定可能化のテスト
 - 学習曲線の早期停止機能のテスト
-- 学習曲線の可視化機能のテスト
+- 学習曲線データのArtifact保存のテスト
+- GUI新パラメーターのテスト
+- Config migrationのテスト
+
 ### テストケース
 1. 目的変数の自動判定機能のテスト
- - Binary分類タスクで、目的変数が2クラスの場合に `binary` 目的関数が選択されることを確認するテストケース。
- - Multi-class分類タスクで、目的変数が3クラス以上の場合に `multiclass` 目的関数が選択されることを確認するテストケース。
- - Regressionタスクで、目的変数が連続値の場合に `regression` 目的関数が選択されることを確認するテストケース。
-2. バリデーションデータの適切な設定のテスト
- - 時系列データで、`Split Type=Time Series` が選択された場合に、時系列分割が適用されることを確認するテストケース。
- - カテゴリカルデータで、層化分割が適用されることを確認するテストケース。
- - DR/DR-DiD の傾向スコアモデルとOutcomeモデルで、Group K-Fold 分割が適用されることを確認するテストケース。
-3. ImbalanceデータにWeightを適用する機能のテスト
- - Binary分類タスクで、クラス不均衡が検出された場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されることを確認するテストケース。
- - Binary分類タスクで、ユーザーが明示的にクラス重みを指定できるオプションが提供されていることを確認するテストケース。
- - Multi-class分類タスクで、クラス不均衡が検出された場合に、LightGBMの `class_weight` パラメーターが自動的に設定されることを確認するテストケース。
- - Multi-class分類タスクで、ユーザーが明示的にクラス重みを指定できるオプションが提供されていることを確認するテストケース。
-4. 学習曲線の早期停止機能のテスト
- - 早期停止の条件が設定された場合に、モデルの性能が向上することを確認するテストケース。
- - ユーザーが早期停止の条件を設定できることを確認するテストケース。
-5. 学習曲線の可視化機能のテスト
- - 学習中の評価指標の推移がリアルタイムで可視化されることを確認するテストケース。
- - 学習曲線の可視化が正確な評価指標の値を反映していることを確認するテストケース。
-### 検証コマンド 
-- `uv run pytest tests/test_lightgbm_enhancements.py -v`
+   - Binary分類タスクで、目的変数が2クラスの場合に `binary` 目的関数が自動選択されることを確認するテストケース。
+   - Multi-class分類タスクで、目的変数が3クラス以上の場合に `multiclass` 目的関数が自動選択されることを確認するテストケース。
+   - Regressionタスクで、目的変数が連続値の場合に `regression` 目的関数が自動選択されることを確認するテストケース。
+   - ユーザーが `lgb_params.objective` で代替目的関数を指定した場合にそれが優先されることを確認するテストケース。
+2. バリデーション分割の自動適用のテスト（CVフォールド）
+   - 時系列データで `split.type=timeseries` の場合に、時系列分割が自動的に適用されることを確認するテストケース。
+   - Binary/Multiclass タスクで `split.type=kfold` の場合に、内部で層化分割（stratified）が自動的に適用されることを確認するテストケース。
+   - DR/DR-DiD の傾向スコアモデルとOutcomeモデルで、Group K-Fold 分割が自動的に適用されることを確認するテストケース。
+3. Early Stopping 用バリデーション分割のテスト（CVフォールド + 最終モデル共通）
+   - CVフォールドで、train部分から early stopping 用バリデーションデータが自動分割され、OOF（valid部分）が early stopping に使用されないことを確認するテストケース。
+   - Binary/Multiclass タスクで、層化分割（StratifiedShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
+   - Regression/Frontier タスクで、ランダム分割（ShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
+   - 時系列データで、時系列順で末尾 N% がバリデーションに使用されることを確認するテストケース。
+   - 最終モデル学習時にも同様に全データからバリデーションが分割されることを確認するテストケース。
+   - `early_stopping_rounds=None`（early stopping 無効）の場合に分割が行われず、全データで学習されることを確認するテストケース。
+   - `early_stopping_validation_fraction` の値が分割比率に正しく反映されることを確認するテストケース。
+   - `early_stopping_validation_fraction` の範囲外（0以下、1以上）でバリデーションエラーとなることを確認するテストケース。
+4. ImbalanceデータにWeightを自動適用する機能のテスト
+   - Binary分類タスクで `auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されることを確認するテストケース。
+   - Binary分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に `scale_pos_weight` が適用されることを確認するテストケース。
+   - Multi-class分類タスクで `auto_class_weight=True`（既定）の場合に balanced sample weight が自動的に算出・適用されることを確認するテストケース。
+   - Multi-class分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に指定重みが適用されることを確認するテストケース。
+   - `auto_class_weight=True` と `class_weight` の同時指定でバリデーションエラーとなることを確認するテストケース。
+5. `num_boost_round` 設定可能化のテスト
+   - `num_boost_round` を指定した値が全タスク（regression/binary/multiclass/frontier）で `lgb.train()` に反映されることを確認するテストケース。
+   - `num_boost_round` 未指定時に既定値300で動作すること（後方互換）を確認するテストケース。
+   - `num_boost_round < 1` でバリデーションエラーとなることを確認するテストケース。
+6. 学習曲線の早期停止機能のテスト
+   - `early_stopping_rounds` が設定された場合に早期停止が動作し、`best_iteration < num_boost_round` となることを確認するテストケース。
+   - ユーザーが `early_stopping_rounds` と `num_boost_round` を自由に設定できることを確認するテストケース。
+7. 学習曲線データのArtifact保存のテスト
+   - `training_history.json` がArtifactに保存され、foldごとのイテレーション別メトリクスが含まれることを確認するテストケース。
+   - `best_iteration` が `training_history` の各foldに正しく記録されることを確認するテストケース。
+   - Artifactの `training_history.json` がロード可能で、保存時の値と一致することを確認するテストケース。
+8. GUI新パラメーターのテスト
+   - Config builder が `num_boost_round` を `train.num_boost_round` に正しくマッピングすることを確認するテストケース。
+   - `Auto Class Weight` トグルが `binary`/`multiclass` 選択時のみ表示されることを確認するテストケース。
+   - `Class Weight` 手動入力が `Auto Class Weight=OFF` 時のみ活性化されることを確認するテストケース。
+9. Config migrationのテスト
+   - `train.lgb_params.n_estimators` が `train.num_boost_round` に自動変換されることを確認するテストケース。
+   - 変換後に `lgb_params` から `n_estimators` が削除されていることを確認するテストケース。
+
+### 検証コマンド
+- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
+- `uv run pytest tests/test_training_history.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
+- `uv run pytest tests -x --tb=short`
 
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム
 
