@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,31 @@ def _ensure_target_version_supported(target_version: int) -> None:
         )
 
 
-def _normalize_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def _normalize_legacy_train_fields(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    normalized = deepcopy(payload)
+    warnings: list[str] = []
+
+    train = normalized.get("train")
+    if not isinstance(train, dict):
+        return normalized, warnings
+    lgb_params = train.get("lgb_params")
+    if not isinstance(lgb_params, dict) or "n_estimators" not in lgb_params:
+        return normalized, warnings
+
+    legacy_value = lgb_params.pop("n_estimators")
+    if "num_boost_round" not in train:
+        train["num_boost_round"] = legacy_value
+        warnings.append(
+            "migrated train.lgb_params.n_estimators to train.num_boost_round"
+        )
+    else:
+        warnings.append(
+            "dropped train.lgb_params.n_estimators because train.num_boost_round is already set"
+        )
+    return normalized, warnings
+
+
+def _normalize_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int, list[str]]:
     source_version_raw = payload.get("config_version")
     if not isinstance(source_version_raw, int):
         raise VeldraValidationError("config_version must be an integer.")
@@ -41,13 +66,15 @@ def _normalize_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
             "This phase supports only config_version=1."
         )
 
+    pre_normalized, warnings = _normalize_legacy_train_fields(payload)
+
     try:
-        config = RunConfig.model_validate(payload)
+        config = RunConfig.model_validate(pre_normalized)
     except ValidationError as exc:
         raise VeldraValidationError(f"Invalid RunConfig: {exc}") from exc
 
     normalized = config.model_dump(mode="json", exclude_none=True)
-    return normalized, source_version_raw
+    return normalized, source_version_raw, warnings
 
 
 def migrate_run_config_payload(
@@ -60,7 +87,7 @@ def migrate_run_config_payload(
     if not isinstance(payload, dict):
         raise VeldraValidationError("RunConfig payload must be a mapping object.")
 
-    normalized, source_version = _normalize_payload(payload)
+    normalized, source_version, warnings = _normalize_payload(payload)
     changed = normalized != payload
     result = MigrationResult(
         input_path=None,
@@ -68,7 +95,7 @@ def migrate_run_config_payload(
         source_version=source_version,
         target_version=target_version,
         changed=changed,
-        warnings=[],
+        warnings=warnings,
     )
     return normalized, result
 
@@ -98,7 +125,7 @@ def migrate_run_config_file(
     if not isinstance(raw, dict):
         raise VeldraValidationError("RunConfig YAML must deserialize to a mapping object.")
 
-    normalized, source_version = _normalize_payload(raw)
+    normalized, source_version, warnings = _normalize_payload(raw)
 
     destination = (
         Path(output_path) if output_path is not None else _default_output_path(source_path)
@@ -119,5 +146,5 @@ def migrate_run_config_file(
         source_version=source_version,
         target_version=target_version,
         changed=(normalized != raw),
-        warnings=[],
+        warnings=warnings,
     )

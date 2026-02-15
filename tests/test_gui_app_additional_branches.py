@@ -278,6 +278,8 @@ def test_build_config_yaml_branches() -> None:
     assert "causal_method" in text
     assert "timeseries_mode" in text
     assert "feature_fraction" in text
+    assert "num_boost_round" in text
+    assert "n_estimators" not in text
 
 
 def test_run_launch_state_and_polling_extra(monkeypatch) -> None:

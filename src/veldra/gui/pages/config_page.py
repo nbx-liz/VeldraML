@@ -352,7 +352,7 @@ def _render_builder_tab() -> html.Div:
                                 ),
                                 dbc.Col(
                                     [
-                                        html.Label("N Estimators"),
+                                        html.Label("Num Boost Round"),
                                         dbc.Input(
                                             id="cfg-train-n-estimators", type="number", value=100
                                         ),
@@ -361,6 +361,49 @@ def _render_builder_tab() -> html.Div:
                                 ),
                             ],
                             className="mb-4",
+                        ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        html.Div(
+                                            [
+                                                html.Label(
+                                                    "Auto Class Weight",
+                                                    className="me-2 fw-bold",
+                                                ),
+                                                dbc.Switch(
+                                                    id="cfg-train-auto-class-weight",
+                                                    value=True,
+                                                    label="Enable automatic class balancing",
+                                                ),
+                                            ],
+                                            className="d-flex align-items-center",
+                                        )
+                                    ],
+                                    id="cfg-container-class-weight-auto",
+                                    width=6,
+                                    style={"display": "none"},
+                                ),
+                                dbc.Col(
+                                    [
+                                        html.Label("Class Weight (JSON)"),
+                                        dbc.Input(
+                                            id="cfg-train-class-weight",
+                                            type="text",
+                                            placeholder='{"0": 1.0, "1": 2.0}',
+                                        ),
+                                        html.Div(
+                                            "Used when Auto Class Weight is OFF.",
+                                            className="small text-muted-readable mt-1",
+                                        ),
+                                    ],
+                                    id="cfg-container-class-weight-manual",
+                                    width=6,
+                                    style={"display": "none"},
+                                ),
+                            ],
+                            className="mb-3",
                         ),
                         dbc.Accordion(
                             [

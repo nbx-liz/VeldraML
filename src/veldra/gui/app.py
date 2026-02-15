@@ -112,10 +112,10 @@ split:
   seed: 42
 
 train:
+  num_boost_round: 120
   lgb_params:
     learning_rate: 0.1
     num_leaves: 31
-    n_estimators: 120
     max_depth: -1
     min_child_samples: 20
     subsample: 1.0
@@ -508,6 +508,8 @@ def create_app() -> dash.Dash:
         Input("cfg-tune-depth-max", "value"),
         Input("cfg-tune-ff-min", "value"),
         Input("cfg-tune-ff-max", "value"),
+        Input("cfg-train-auto-class-weight", "value"),
+        Input("cfg-train-class-weight", "value"),
         prevent_initial_call=True,
     )(_cb_build_config_yaml)
 
@@ -534,6 +536,13 @@ def create_app() -> dash.Dash:
         Input("cfg-split-type", "value"),
         Input("cfg-split-time-col", "value"),
     )(_cb_timeseries_time_warning)
+
+    app.callback(
+        Output("cfg-container-class-weight-auto", "style"),
+        Output("cfg-container-class-weight-manual", "style"),
+        Input("cfg-task-type", "value"),
+        Input("cfg-train-auto-class-weight", "value"),
+    )(_cb_update_class_weight_visibility)
 
     # --- Run Page Auto-Action ---
     app.callback(
@@ -1050,6 +1059,8 @@ def _cb_build_config_yaml(
     tune_depth_max,
     tune_ff_min,
     tune_ff_max,
+    t_auto_class_weight=None,
+    t_class_weight=None,
 ) -> str:
     cfg = {
         "config_version": 1,
@@ -1064,10 +1075,10 @@ def _cb_build_config_yaml(
             "seed": s_seed,
         },
         "train": {
+            "num_boost_round": t_est,
             "lgb_params": {
                 "learning_rate": t_lr,
                 "num_leaves": t_leaves,
-                "n_estimators": t_est,
                 "max_depth": t_depth,
                 "min_child_samples": t_child,
                 "subsample": t_sub,
@@ -1128,7 +1139,31 @@ def _cb_build_config_yaml(
         if space:
             cfg["tuning"]["search_space"] = space
 
+    if task_type in {"binary", "multiclass"}:
+        auto_class_weight = True if t_auto_class_weight is None else bool(t_auto_class_weight)
+        cfg["train"]["auto_class_weight"] = auto_class_weight
+        if not auto_class_weight and isinstance(t_class_weight, str) and t_class_weight.strip():
+            try:
+                parsed_weights = yaml.safe_load(t_class_weight)
+                if isinstance(parsed_weights, dict):
+                    cfg["train"]["class_weight"] = {
+                        str(k): float(v) for k, v in parsed_weights.items()
+                    }
+            except Exception:
+                # Keep GUI YAML generation resilient; validation runs separately.
+                pass
+
     return yaml.dump(cfg, sort_keys=False)
+
+
+def _cb_update_class_weight_visibility(
+    task_type: str | None,
+    auto_class_weight_enabled: bool | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if task_type not in {"binary", "multiclass"}:
+        return {"display": "none"}, {"display": "none"}
+    show_manual = not bool(auto_class_weight_enabled)
+    return {"display": "block"}, {"display": "block" if show_manual else "none"}
 
 
 def _cb_update_run_launch_state(

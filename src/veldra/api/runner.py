@@ -136,6 +136,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         calibration_curve=getattr(training_output, "calibration_curve", None),
         threshold=getattr(training_output, "threshold", None),
         threshold_curve=getattr(training_output, "threshold_curve", None),
+        training_history=getattr(training_output, "training_history", None),
     )
     artifact.save(artifact_path)
     log_event(

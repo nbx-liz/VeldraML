@@ -885,3 +885,31 @@
 **検証結果**
 - `uv run pytest tests/test_gui_app_additional_branches.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_internal.py -v` を通過。
 - `uv run pytest tests -x --tb=short` を通過。
+
+### 2026-02-16（作業/PR: phase25.7-lightgbm-enhancements-step1-8）
+**背景**
+- Phase25.7 設計を実装へ反映し、LightGBM学習契約（split/ES/weight/history）を RunConfig 駆動で統合する必要があった。
+- 既存 Stable API と Artifact 後方互換を維持したまま、GUI と config migrate まで含めて完了させる必要があった。
+
+**変更内容**
+- `TrainConfig` に `num_boost_round` / `early_stopping_validation_fraction` / `auto_class_weight` / `class_weight` を追加し、関連バリデーションを実装。
+- 全 task 学習器で `num_boost_round` を反映し、CV/最終モデルともに train 部分から ES 用 validation を分割する実装へ変更（OOF valid を ES 監視から分離）。
+- binary/multiclass の class weight（auto/manual）を実装し、`split.type=kfold` の binary/multiclass は内部的に stratified を自動適用。
+- causal DR cross-fit 分割を拡張し、`split.group_col` または panel の `unit_id_col` が利用可能な場合は GroupKFold、不可時は KFold へフォールバック。
+- Artifact に `training_history`（`training_history.json`）を追加し、save/load の後方互換（旧 artifact は欠損許容）を維持。
+- GUI builder を更新して `Num Boost Round` / class weight 入力を追加し、`train.num_boost_round` 出力へ切替。`config migrate` に `train.lgb_params.n_estimators -> train.num_boost_round` 変換を追加。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: causal cross-fit の group 分割は「利用可能なら GroupKFold、利用不可なら KFold」のフォールバック方針で実装する。
+  - 理由: 設定必須化による互換破壊を避けつつ、group情報があるケースでは漏洩リスクを下げるため。
+  - 影響範囲: causal/dr cross-fit / split 方針
+- Decision: confirmed（確定）
+  - 内容: Phase25.7 は Step1-8 を完遂し、学習履歴保存・GUI・migration までを同一フェーズで閉じる。
+  - 理由: 設定/学習/配布導線を同時に整合させることで運用上の齟齬を防ぐため。
+  - 影響範囲: config/models, modeling, artifact, gui, migrate, tests, docs
+
+**検証結果**
+- `uv run ruff check`（今回変更ファイル対象）を通過。
+- 追加/更新テスト群（config train fields, class weight, auto split, ES split, training history, migrate, GUI, DR internal）を通過。
+- `uv run pytest tests -x --tb=short` で **468 passed, 0 failed** を確認。

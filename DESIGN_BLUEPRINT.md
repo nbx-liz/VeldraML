@@ -288,7 +288,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
 - `uv run pytest tests -x --tb=short`
 
-## 12.7 Phase25.7: LightGBMの機能強化
+## 12.7 Phase25.7: LightGBMの機能強化（完了）
 
 ### 目的
 - 目的変数の自動判定機能
@@ -469,7 +469,7 @@ early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーショ�
 **実装方針**（分割タイプをタスク/設定に応じて自動的に適用する）:
 - `task.type=binary/multiclass` かつ `split.type=kfold` → 内部で `stratified` 分割を自動適用する
   - ユーザーが明示的に `split.type` を設定している場合はそれを尊重する
-- `causal` 設定時 → 傾向スコアモデルとOutcomeモデルの学習で `group` KFold 分割を自動適用する
+- `causal` 設定時 → `split.group_col` または `causal.unit_id_col`（panel）利用可能時に `GroupKFold` を適用し、利用不可時は `KFold` にフォールバックする
 - `split.type=timeseries` → 既存実装で時系列分割が適用される（変更なし）
 
 ---
@@ -515,7 +515,7 @@ early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーショ�
 
 ### Step 7: Config Migration
 
-**対象**: `src/veldra/config/migration.py`
+**対象**: `src/veldra/config/migrate.py`
 
 - `train.lgb_params.n_estimators` が存在する場合 → 値を `train.num_boost_round` に移行
 - `n_estimators` キーを `lgb_params` から削除

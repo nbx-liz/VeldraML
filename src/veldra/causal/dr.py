@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold, KFold
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.causal.diagnostics import max_standardized_mean_difference, overlap_metric
@@ -246,8 +246,37 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
 
     if config.causal.cross_fit:
         n_splits = min(max(2, config.split.n_splits), n_rows)
-        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=config.split.seed)
-        for train_idx, valid_idx in splitter.split(x):
+        groups: pd.Series | None = None
+        group_col = config.split.group_col
+        if group_col and group_col in frame.columns:
+            groups = frame[group_col]
+        elif (
+            config.causal.unit_id_col
+            and config.causal.unit_id_col in frame.columns
+            and config.causal.design == "panel"
+        ):
+            groups = frame[config.causal.unit_id_col]
+
+        if groups is not None:
+            n_groups = int(pd.Series(groups).nunique())
+            if n_groups >= 2:
+                n_group_splits = min(n_splits, n_groups)
+                if n_group_splits >= 2:
+                    splitter = GroupKFold(n_splits=n_group_splits)
+                    split_iter = splitter.split(x, groups=groups)
+                else:
+                    splitter = KFold(
+                        n_splits=n_splits, shuffle=True, random_state=config.split.seed
+                    )
+                    split_iter = splitter.split(x)
+            else:
+                splitter = KFold(n_splits=n_splits, shuffle=True, random_state=config.split.seed)
+                split_iter = splitter.split(x)
+        else:
+            splitter = KFold(n_splits=n_splits, shuffle=True, random_state=config.split.seed)
+            split_iter = splitter.split(x)
+
+        for train_idx, valid_idx in split_iter:
             x_train = x.iloc[train_idx]
             x_valid = x.iloc[valid_idx]
             t_train = t.iloc[train_idx]

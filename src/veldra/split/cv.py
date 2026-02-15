@@ -30,6 +30,13 @@ def iter_cv_splits(
         return list(splitter.split(x, y))
 
     if split_cfg.type == "kfold":
+        if config.task.type in {"binary", "multiclass"} and y is not None:
+            splitter = StratifiedKFold(
+                n_splits=split_cfg.n_splits,
+                shuffle=True,
+                random_state=split_cfg.seed,
+            )
+            return list(splitter.split(x, y))
         splitter = KFold(
             n_splits=split_cfg.n_splits,
             shuffle=True,

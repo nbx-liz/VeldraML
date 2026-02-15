@@ -73,6 +73,10 @@ class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lgb_params: dict[str, Any] = Field(default_factory=dict)
     early_stopping_rounds: int | None = 100
+    early_stopping_validation_fraction: float = 0.1
+    num_boost_round: int = 300
+    auto_class_weight: bool = True
+    class_weight: dict[str, float] | None = None
     seed: int = 42
 
 
@@ -233,6 +237,40 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     "frontier settings can only be customized when task.type='frontier'"
                 )
+
+        train_fields_set = self.train.model_fields_set
+        class_weight_explicit = "class_weight" in train_fields_set
+
+        if self.train.num_boost_round < 1:
+            raise ValueError("train.num_boost_round must be >= 1")
+        if not (0.0 < self.train.early_stopping_validation_fraction < 1.0):
+            raise ValueError(
+                "train.early_stopping_validation_fraction must satisfy 0 < value < 1"
+            )
+        if self.train.early_stopping_rounds is not None and self.train.early_stopping_rounds < 1:
+            raise ValueError("train.early_stopping_rounds must be >= 1 or None")
+
+        if self.train.class_weight is not None:
+            if self.task.type not in {"binary", "multiclass"}:
+                raise ValueError(
+                    "train.class_weight can only be set when "
+                    "task.type='binary' or 'multiclass'"
+                )
+            for label, weight in self.train.class_weight.items():
+                if weight <= 0:
+                    raise ValueError(
+                        f"train.class_weight[{label!r}] must be > 0, got {weight}"
+                    )
+
+        if (
+            self.train.class_weight is not None
+            and self.train.auto_class_weight
+            and class_weight_explicit
+        ):
+            raise ValueError(
+                "train.auto_class_weight and train.class_weight cannot be enabled together. "
+                "Disable auto_class_weight when specifying class_weight."
+            )
 
         if self.task.type != "binary":
             if (
