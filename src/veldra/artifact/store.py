@@ -27,6 +27,7 @@ def save_artifact(
     calibration_curve: pd.DataFrame | None = None,
     threshold: dict[str, Any] | None = None,
     threshold_curve: pd.DataFrame | None = None,
+    training_history: dict[str, Any] | None = None,
 ) -> None:
     artifact_dir = Path(path)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -59,6 +60,11 @@ def save_artifact(
         )
     if threshold_curve is not None:
         threshold_curve.to_csv(artifact_dir / "threshold_curve.csv", index=False)
+    if training_history is not None:
+        (artifact_dir / "training_history.json").write_text(
+            json.dumps(training_history, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
 
 def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any], dict[str, Any]]:
@@ -89,6 +95,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         "calibration_curve": None,
         "threshold": None,
         "threshold_curve": None,
+        "training_history": None,
     }
     model_path = artifact_dir / "model.lgb.txt"
     metrics_path = artifact_dir / "metrics.json"
@@ -97,6 +104,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
     calibration_curve_path = artifact_dir / "calibration_curve.csv"
     threshold_path = artifact_dir / "threshold.json"
     threshold_curve_path = artifact_dir / "threshold_curve.csv"
+    training_history_path = artifact_dir / "training_history.json"
     if model_path.exists():
         extras["model_text"] = model_path.read_text(encoding="utf-8")
     if metrics_path.exists():
@@ -111,5 +119,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         extras["threshold"] = json.loads(threshold_path.read_text(encoding="utf-8"))
     if threshold_curve_path.exists():
         extras["threshold_curve"] = pd.read_csv(threshold_curve_path)
+    if training_history_path.exists():
+        extras["training_history"] = json.loads(training_history_path.read_text(encoding="utf-8"))
 
     return run_config, manifest, feature_schema, extras

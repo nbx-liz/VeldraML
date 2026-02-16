@@ -26,3 +26,12 @@ def test_migrate_payload_changed_false_after_second_pass() -> None:
     normalized_twice, result = migrate_run_config_payload(normalized_once)
     assert normalized_twice == normalized_once
     assert result.changed is False
+
+
+def test_migrate_payload_moves_legacy_n_estimators() -> None:
+    payload = _minimal_payload()
+    payload["train"] = {"lgb_params": {"n_estimators": 123, "learning_rate": 0.05}}
+    normalized, result = migrate_run_config_payload(payload)
+    assert normalized["train"]["num_boost_round"] == 123
+    assert "n_estimators" not in normalized["train"]["lgb_params"]
+    assert result.warnings

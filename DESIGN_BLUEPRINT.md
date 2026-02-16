@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-12
+最終更新: 2026-02-16
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -191,7 +191,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### Notes
 - `ruff check` はリポジトリ全体で既存違反が残っており、Phase25スコープ外として別途整理する。
 
-## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）
+## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）(完了)
 
 ### Context（2026-02-14 時点）
 - テストスイートは約145ファイル。
@@ -262,7 +262,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - CV split/causal diagnostics が公開ユーティリティとしてテストされる。
 - Stable API（`veldra.api.*`）の互換性は維持される。
 
-## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）
+## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）(完了)
 
 ### 目的
 - ダークテーマ上の可読性を改善する。
@@ -286,6 +286,697 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### 検証コマンド
 - `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v`
 - `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
+- `uv run pytest tests -x --tb=short`
+
+## 12.7 Phase25.7: LightGBMの機能強化（完了・検証済み）
+
+### 目的
+- 目的変数の自動判定機能
+- バリデーションデータの適切な自動設定
+- ImbalanceデータにWeightを自動適用する機能
+- `num_boost_round` の設定可能化（現在300にハードコード）
+- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping）
+- 学習曲線データの記録・Artifact保存（可視化はPhase30で対応）
+- GUI対応（新パラメーター、ラベル修正）
+- Config migration（`lgb_params.n_estimators` → `train.num_boost_round`）
+
+### 現状分析
+
+| 機能 | 現状 | 対応 |
+|------|------|------|
+| `num_boost_round` | 300にハードコード。GUIの `n_estimators` は `lgb_params` に格納されるが `lgb.train()` では無視される | `TrainConfig` に昇格 |
+| 目的関数 | タスクごとにハードコード（`binary`, `regression` 等）。自動判定は既存で機能している | ユーザー上書きは `lgb_params.objective` 経由で既に可能。GUIドロップダウン追加 |
+| クラス不均衡 | 未実装 | `is_unbalance` / sample weight の自動・手動設定 |
+| バリデーション分割 | CVフォールドから適切に生成されている。ただしタスクに応じた分割タイプの自動選択は未実装 | タスク/設定に応じた分割タイプの自動適用を実装 |
+| 早期停止 | CVフォールドではOOFデータをES監視に使用（OOFの独立性にリーク）。最終モデルは `x_valid=x, y_valid=y` でES実質無効 | CVフォールド・最終モデルの両方で、train部分からES用バリデーションを自動分割。OOFは純粋にOOF予測専用 |
+| 学習曲線 | イテレーションごとのメトリクス保存なし | `record_evaluation` callback + Artifact保存。可視化はPhase30で対応 |
+
+---
+
+### Step 1: `TrainConfig` スキーマ拡張
+
+**対象**: `src/veldra/config/models.py`
+
+```python
+class TrainConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lgb_params: dict[str, Any] = Field(default_factory=dict)
+    early_stopping_rounds: int | None = 100
+    early_stopping_validation_fraction: float = 0.1  # NEW: 最終モデルの early stopping 用バリデーション比率
+    num_boost_round: int = 300                    # NEW
+    seed: int = 42
+    auto_class_weight: bool = True                # NEW: opt-out
+    class_weight: dict[str, float] | None = None  # NEW: ユーザー手動指定
+```
+
+**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
+- `auto_class_weight=True` は `binary` / `multiclass` のみ許可（`regression`/`frontier` で True なら ValueError）
+- `class_weight` は `binary` / `multiclass` のみ許可
+- `auto_class_weight=True` と `class_weight` の同時指定は禁止（手動指定が優先される旨のエラー）
+- `num_boost_round >= 1` を検証
+- `0.0 < early_stopping_validation_fraction < 1.0` を検証
+
+---
+
+### Step 2: `num_boost_round` の設定可能化 + 最終モデル Early Stopping 用バリデーション分割
+
+**対象**: 全 `_train_single_booster` 関数（4ファイル）+ 全 `train_*_with_cv` 関数（4ファイル）
+
+#### 2a: `num_boost_round` の設定可能化
+
+```python
+# Before（全タスク共通）
+num_boost_round=300
+
+# After
+num_boost_round=config.train.num_boost_round
+```
+
+#### 2b: Early Stopping 用バリデーション分割（CVフォールド + 最終モデル共通）
+
+**問題**:
+- CVフォールド: 現在OOFデータ（valid部分）を early stopping の監視対象として使用している。これではOOFが完全にOOFでなくなる（early stopping の判断にリークする）。
+- 最終モデル: `x_valid=x, y_valid=y`（訓練データ＝バリデーションデータ）のため early stopping が実質無効。
+
+**設計方針**:
+- CVフォールド・最終モデルの両方で、**学習に使うデータ（train部分）からさらに early stopping 用バリデーションデータを自動分割**する
+- OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、**純粋にOOF予測専用**として扱う
+- 分割比率: `train.early_stopping_validation_fraction`（既定 `0.1`、train部分の10%をearly stopping用バリデーションに使用）
+- `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習する
+
+**タスクに応じた分割タイプの自動適用**:
+- `task.type=binary/multiclass` → `sklearn.model_selection.StratifiedShuffleSplit` で層化分割
+- `task.type=regression/frontier` → `sklearn.model_selection.ShuffleSplit` でランダム分割
+- `split.type=timeseries` → 時系列順で末尾 N% をバリデーションに使用（シャッフルしない）
+
+**CVフォールドの変更**:
+```python
+# Before
+for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
+    booster = _train_single_booster(
+        x_train=x.iloc[train_idx], y_train=y.iloc[train_idx],
+        x_valid=x.iloc[valid_idx], y_valid=y.iloc[valid_idx],  # OOFデータをES監視に使用（リーク）
+        config=config,
+    )
+
+# After
+for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
+    x_fold_train, y_fold_train = x.iloc[train_idx], y.iloc[train_idx]
+    # train部分からES用バリデーションを分割（OOFは純粋にOOFのまま）
+    x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
+        x_fold_train, y_fold_train, config
+    )
+    booster = _train_single_booster(
+        x_train=x_es_train, y_train=y_es_train,
+        x_valid=x_es_valid, y_valid=y_es_valid,  # ES専用バリデーション
+        config=config,
+    )
+    # OOFデータはES非依存で予測のみに使用
+    pred = booster.predict(x.iloc[valid_idx], ...)
+```
+
+**最終モデルの変更**:
+```python
+# Before
+final_model = _train_single_booster(
+    x_train=x, y_train=y,
+    x_valid=x, y_valid=y,  # 訓練データ＝バリデーションデータ（ES無効）
+    config=config,
+)
+
+# After
+x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
+    x, y, config
+)
+final_model = _train_single_booster(
+    x_train=x_es_train, y_train=y_es_train,
+    x_valid=x_es_valid, y_valid=y_es_valid,
+    config=config,
+)
+```
+
+**`_split_for_early_stopping` 関数**（`src/veldra/modeling/utils.py` に新設）:
+```python
+def _split_for_early_stopping(
+    x: pd.DataFrame,
+    y: pd.Series,
+    config: RunConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """学習データから early stopping 用バリデーションデータを分割する。
+
+    - early_stopping_rounds=None の場合は分割せず (x, x, y, y) を返す（従来互換）。
+    - タスクに応じた分割タイプを自動適用する。
+    - CVフォールド内でも最終モデル学習時でも共通で使用する。
+    """
+```
+
+**`TrainConfig` 追加フィールド**:
+```python
+early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーション比率
+```
+
+**対象ファイル**:
+- `src/veldra/modeling/utils.py`（新設: `_split_for_early_stopping`）
+- `src/veldra/modeling/binary.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/multiclass.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/regression.py`（CVループ + 最終モデル）
+- `src/veldra/modeling/frontier.py`（CVループ + 最終モデル）
+
+---
+
+### Step 3: クラス不均衡の自動検出・重み適用
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`
+
+**Binary**（`_train_single_booster` 内）:
+- `config.train.class_weight` が指定されている場合:
+  - `class_weight` から `scale_pos_weight`（= neg_count / pos_count 相当）を算出し `params` に設定
+- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
+  - `params["is_unbalance"] = True` を自動的に設定
+
+**Multiclass**（`_train_single_booster` 内）:
+- `config.train.class_weight` が指定されている場合:
+  - `class_weight` dict からサンプルごとの重みを算出し `lgb.Dataset(weight=...)` に渡す
+- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
+  - `sklearn.utils.class_weight.compute_sample_weight("balanced", y_train)` でサンプル重みを自動算出し `lgb.Dataset(weight=...)` に渡す
+
+---
+
+### Step 4: バリデーション分割の自動適用
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`, 因果推論経路
+
+**実装方針**（分割タイプをタスク/設定に応じて自動的に適用する）:
+- `task.type=binary/multiclass` かつ `split.type=kfold` → 内部で `stratified` 分割を自動適用する
+  - ユーザーが明示的に `split.type` を設定している場合はそれを尊重する
+- `causal` 設定時 → `split.group_col` または `causal.unit_id_col`（panel）利用可能時に `GroupKFold` を適用し、利用不可時は `KFold` にフォールバックする
+- `split.type=timeseries` → 既存実装で時系列分割が適用される（変更なし）
+
+---
+
+### Step 5: 学習曲線データの記録・Artifact保存
+
+**対象**: 全 `_train_single_booster` + 各 `TrainingOutput` + Artifact保存
+
+**実装方針**:
+- `_train_single_booster` の戻り値を `tuple[lgb.Booster, dict]` に変更し、`lgb.record_evaluation()` の結果を返す
+- 各 `TrainingOutput` dataclass に `training_history: list[dict]` フィールドを追加
+- Artifact保存時に `training_history.json` として永続化
+
+**Artifactスキーマ**:
+```json
+{
+  "folds": [
+    {
+      "fold": 1,
+      "num_iterations": 150,
+      "best_iteration": 120,
+      "eval_history": {"binary_logloss": [0.69, 0.55, 0.42, ...]}
+    }
+  ]
+}
+```
+
+**注**: 学習曲線の可視化（GUI/チャート）はPhase30で対応する。本Stepではデータ保存のみ。
+
+---
+
+### Step 6: GUI対応
+
+**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
+
+**変更点**:
+1. `N Estimators` ラベルを `Num Boost Round` に変更し、意味を正確に反映する
+2. `Auto Class Weight` トグルスイッチ追加（`binary`/`multiclass` 選択時のみ表示、既定 ON）
+3. `Class Weight` 手動入力フィールド追加（`Auto Class Weight=OFF` 時のみ活性化）
+4. Config builder で `num_boost_round` を `train.num_boost_round` に正しくマッピング（現在の `lgb_params.n_estimators` のミスマッピングを修正）
+
+---
+
+### Step 7: Config Migration
+
+**対象**: `src/veldra/config/migrate.py`
+
+- `train.lgb_params.n_estimators` が存在する場合 → 値を `train.num_boost_round` に移行
+- `n_estimators` キーを `lgb_params` から削除
+- migration utility に変換ルールを追加
+
+---
+
+### Step 8: テスト計画
+
+| テスト | 内容 | ファイル |
+|--------|------|----------|
+| スキーマ検証 | `num_boost_round`, `auto_class_weight`, `class_weight`, `early_stopping_validation_fraction` のバリデーション | `tests/test_config_train_fields.py` |
+| Binary不均衡自動 | `auto_class_weight=True` で `is_unbalance` が自動的に設定される | `tests/test_binary_class_weight.py` |
+| Binary手動重み | `class_weight` 指定で `scale_pos_weight` が適用される | 同上 |
+| Multiclass不均衡自動 | `auto_class_weight=True` で balanced sample weight が自動的に適用される | `tests/test_multiclass_class_weight.py` |
+| Multiclass手動重み | `class_weight` 指定で指定重みがサンプルに適用される | 同上 |
+| num_boost_round | 設定値が実際の学習に反映される | `tests/test_num_boost_round.py` |
+| 分割自動適用 | binary/multiclass で stratified が自動適用される | `tests/test_auto_split_selection.py` |
+| 分割自動適用(causal) | causal 設定時に group KFold が自動適用される | 同上 |
+| ES用バリデーション分割(CV) | CVフォールドでtrain部分からES用バリデーションが分割され、OOFがES監視に使用されない | `tests/test_early_stopping_validation.py` |
+| ES用バリデーション分割(最終モデル) | 最終モデル学習時にも全データからES用バリデーションが分割される | 同上 |
+| ES用バリデーション分割(timeseries) | 時系列データで末尾N%がバリデーションに使用される | 同上 |
+| ES用バリデーション分割(stratified) | binary/multiclass で層化分割がバリデーション生成に使用される | 同上 |
+| ES無効時 | `early_stopping_rounds=None` の場合は分割せず全データで学習される | 同上 |
+| 学習曲線 | `training_history` がArtifactに保存される | `tests/test_training_history.py` |
+| 早期停止 | `best_iteration` が `training_history` に記録される | 同上 |
+| GUI | Config builder が新フィールドを正しく生成する | `tests/test_gui_app_callbacks_config.py` |
+| Migration | `lgb_params.n_estimators` → `num_boost_round` 変換 | `tests/test_config_migration.py` |
+
+### 検証コマンド
+- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
+- `uv run pytest tests/test_training_history.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
+- `uv run pytest tests -x --tb=short`
+
+### 実装順序（依存関係順）
+1. Step 1: `TrainConfig` スキーマ拡張 + バリデーション
+2. Step 2: `num_boost_round` 設定可能化 + 最終モデル Early Stopping 用バリデーション分割（全4ファイル + utils.py 新設）
+3. Step 3: クラス不均衡の自動検出・重み適用（binary + multiclass）
+4. Step 4: バリデーション分割の自動適用
+5. Step 5: 学習曲線データの記録・Artifact保存
+6. Step 6: GUI対応
+7. Step 7: Config Migration
+8. Step 8: テスト
+
+### 完了条件
+- 目的変数の自動判定機能が実装され、ユーザーが明示的に指定しなくても適切な目的関数が選択されること。必要に応じてユーザーが設定変更もできること。
+- バリデーションデータの適切な設定が自動的に行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
+  - データが時系列の場合は、時系列分割が自動的に適用されること。
+  - 目的変数がカテゴリカル（Binary or Multi-class）であれば、層化分割が自動的に適用されること。
+  - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が自動的に適用されること。
+- CVフォールド・最終モデルの両方で、学習データ（train部分）からタスクに応じた分割タイプで early stopping 用バリデーションデータが自動分割されること。OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、純粋にOOF予測専用として扱われること。
+  - binary/multiclass → 層化分割（StratifiedShuffleSplit）で自動分割されること。
+  - regression/frontier → ランダム分割（ShuffleSplit）で自動分割されること。
+  - timeseries → 時系列順で末尾 N% がバリデーションに使用されること。
+  - `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習すること。
+  - 分割比率は `early_stopping_validation_fraction`（既定 0.1）で制御可能であること。
+- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが自動的に行われること。
+  - Binary分類タスクで、`auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
+    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
+  - Multi-class分類タスクで、`auto_class_weight=True`（既定）の場合に、balanced sample weight が自動的に算出・適用されること。
+    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
+- `num_boost_round` が `TrainConfig` から制御可能で、全タスク（regression/binary/multiclass/frontier）で反映されること。
+- 学習曲線の早期停止機能が実装され、ユーザーが `early_stopping_rounds` と `num_boost_round` を設定できること。
+- 学習曲線データ（foldごとのイテレーション別メトリクス + best_iteration）が `training_history.json` としてArtifactに保存されること。学習曲線の可視化はPhase30で対応する。
+- GUI で `Num Boost Round`、`Auto Class Weight`、`Class Weight` が設定可能であること。
+- `lgb_params.n_estimators` → `train.num_boost_round` の Config migration が動作すること。
+- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+
+### 検証結果（2026-02-16）
+- 全8ステップ（スキーマ拡張 / num_boost_round / ES分割 / クラス不均衡 / 分割自動適用 / 学習曲線 / GUI / Migration）が実装完了。
+- Phase25.7 関連テスト: **31 passed, 0 failed**
+- Stable API 互換性: 維持確認済み
+
+## 12.8 Phase25.8: LightGBMのパラメーター追加
+
+### 目的
+- Top-K Precision の追加（`top_k` パラメーター）により、Binary モデル性能評価の多様化を実現する。
+- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、特定特徴量への分割集中を制御する。
+- `num_leaves` の自動調整機能（`auto_num_leaves` + `num_leaves_ratio`）により、木構造のデータ適応を自動化する。
+- 比率ベースのリーフ制約（`min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）により、過学習防止とモデル安定性を向上する。
+- 既存の `lgb_params` 経由パラメーターを GUI で直接設定可能にする。
+
+### 現状分析
+
+| パラメーター | 現状 | 対応 |
+|-------------|------|------|
+| `top_k` | 未実装。Binary 評価・学習に precision@k がない | `TrainConfig` に追加。LightGBM カスタム metric（`feval`）として学習ループに組込み、ES 監視・tune objective・evaluate 返却で利用可能にする |
+| `feature_weights` | 未実装 | `TrainConfig` に追加し、`lgb.Dataset(feature_name=..., weight=...)` とは別に `lgb.Dataset` の `feature_name` パラメータに続けて適用 |
+| `auto_num_leaves` | 未実装。GUI で `num_leaves` を手動入力するのみ | `TrainConfig` にフラグ追加。`max_depth` から動的に `num_leaves` を算出 |
+| `num_leaves_ratio` | 未実装 | `auto_num_leaves=True` 時の補正係数として `TrainConfig` に追加 |
+| `min_data_in_leaf_ratio` | 未実装。`min_child_samples` は絶対値で `lgb_params` 経由 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_leaf` を動的算出 |
+| `min_data_in_bin_ratio` | 未実装。`min_data_in_bin` は `lgb_params` 経由で設定可能 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_bin` を動的算出 |
+| `path_smooth` / `cat_l2` / `cat_smooth` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
+| `bagging_freq` / `max_bin` / `max_drop` / `min_gain_to_split` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
+
+---
+
+### Step 1: `TrainConfig` スキーマ拡張
+
+**対象**: `src/veldra/config/models.py`
+
+```python
+class TrainConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lgb_params: dict[str, Any] = Field(default_factory=dict)
+    early_stopping_rounds: int | None = 100
+    early_stopping_validation_fraction: float = 0.1
+    num_boost_round: int = 300
+    auto_class_weight: bool = True
+    class_weight: dict[str, float] | None = None
+    seed: int = 42
+    # --- Phase25.8 追加 ---
+    auto_num_leaves: bool = False               # NEW: max_depth から num_leaves を自動算出
+    num_leaves_ratio: float = 1.0               # NEW: auto_num_leaves 時の補正係数
+    min_data_in_leaf_ratio: float | None = None  # NEW: 行数に対する比率 (例: 0.01 → 1%)
+    min_data_in_bin_ratio: float | None = None   # NEW: 行数に対する比率 (例: 0.001)
+    feature_weights: dict[str, float] | None = None  # NEW: 特徴量名→重み
+    top_k: int | None = None                    # NEW: precision@k の k（binary のみ）
+```
+
+**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
+- `auto_num_leaves=True` の場合 `num_leaves_ratio` は `0.0 < ratio <= 1.0` を検証
+- `auto_num_leaves=True` かつ `lgb_params` に `num_leaves` が明示指定されている場合は ValueError（競合）
+- `min_data_in_leaf_ratio` は `0.0 < ratio < 1.0` を検証
+- `min_data_in_bin_ratio` は `0.0 < ratio < 1.0` を検証
+- `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定は禁止
+- `min_data_in_bin_ratio` と `lgb_params.min_data_in_bin` の同時指定は禁止
+- `top_k` は `binary` タスクのみ許可、`top_k >= 1` を検証
+- `feature_weights` の値は全て `> 0` を検証
+
+---
+
+### Step 2: `auto_num_leaves` の動的算出ロジック
+
+**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
+
+```python
+def resolve_auto_num_leaves(config: RunConfig) -> int | None:
+    """auto_num_leaves=True の場合に num_leaves を動的に算出する。
+
+    - max_depth が指定されていない場合(-1): num_leaves = 131072（LightGBM上限）
+    - max_depth が指定されている場合: num_leaves = clip(2^max_depth, 8, 131072)
+    - num_leaves_ratio で補正: num_leaves = clip(ceil(num_leaves * ratio), 8, 131072)
+    - auto_num_leaves=False の場合は None を返す（既存の lgb_params.num_leaves が使われる）
+    """
+```
+
+**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
+```python
+# auto_num_leaves の解決
+resolved_leaves = resolve_auto_num_leaves(config)
+if resolved_leaves is not None:
+    params["num_leaves"] = resolved_leaves
+```
+
+---
+
+### Step 3: 比率ベースのリーフ・ビン制約
+
+**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
+
+```python
+def resolve_ratio_params(config: RunConfig, n_rows: int) -> dict[str, int]:
+    """比率ベースのパラメーターを絶対値に変換する。
+
+    - min_data_in_leaf_ratio: n_rows * ratio → min_data_in_leaf（最小 1）
+    - min_data_in_bin_ratio: n_rows * ratio → min_data_in_bin（最小 1）
+    """
+```
+
+**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
+```python
+ratio_params = resolve_ratio_params(config, len(x_train))
+params.update(ratio_params)
+```
+
+---
+
+### Step 4: `feature_weights` の適用
+
+**対象**: 全4ファイルの `_train_single_booster` 内
+
+**実装方針**:
+- `config.train.feature_weights` が指定されている場合、特徴量名のリストに対応する重みリストを構築
+- `lgb.Dataset` コンストラクタの `feature_name` と合わせて `lgb.train()` の `feature_weights` パラメータを使用
+- 指定されていない特徴量のデフォルト重みは `1.0`
+
+```python
+# feature_weights の適用
+if config.train.feature_weights:
+    fw = [config.train.feature_weights.get(col, 1.0) for col in x_train.columns]
+else:
+    fw = None
+# ...
+booster = lgb.train(
+    params=params,
+    train_set=train_set,
+    # ...,
+    feature_name=list(x_train.columns) if fw else "auto",
+)
+# feature_weights は lgb.Dataset ではなく lgb.train() の引数ではないため、
+# params["feature_fraction_bynode"] 等との組合せで実現するか、
+# lgb.Dataset(init_score=...) ではなく params dict に直接設定:
+# params["feature_weights"] = fw  ← LightGBM は内部で feature_weights を受け付ける（要確認）
+```
+
+**注**: LightGBM の `feature_weights` は `lgb.Dataset` の `set_feature_names` 後に
+`dataset.set_feature_names()` とは異なり `params` に直接渡す形式ではない。
+実際には `lgb.train()` の `feature_name` パラメータと合わせて
+`Dataset(feature_name=..., free_raw_data=False)` 構築後に
+`train_set.feature_name` を参照し weight リストを構築する方式を取る。
+→ LightGBM 4.x の `feature_pre_filter` と `feature_weights` サポートを確認の上、最適な方法を採用する。
+
+---
+
+### Step 5: Top-K Precision のカスタム metric 実装
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/tuning.py`, `src/veldra/config/models.py`
+
+#### 5a: LightGBM カスタム評価関数（`feval`）
+
+**新規関数**（`src/veldra/modeling/binary.py`）:
+```python
+def _make_precision_at_k_feval(k: int):
+    """LightGBM の feval 互換の precision@k 評価関数を返す。
+
+    - feval シグネチャ: (y_pred, dataset) -> (name, value, is_higher_better)
+    - y_pred を降順ソートし、上位 k 件を抽出
+    - 抽出された k 件中の正例数 / k が precision@k
+    - k > len(y_true) の場合は全件を使用
+    - is_higher_better=True（precision は高いほど良い）
+    """
+    def _precision_at_k(y_pred, dataset):
+        y_true = dataset.get_label()
+        order = np.argsort(-y_pred)
+        top = order[:min(k, len(y_true))]
+        value = float(y_true[top].sum() / len(top))
+        return f"precision_at_{k}", value, True
+    return _precision_at_k
+```
+
+**適用箇所**（`_train_single_booster` 内）:
+- `config.train.top_k` が指定されている場合、`_make_precision_at_k_feval(k)` を生成
+- `lgb.train()` の `feval` 引数に渡す
+- これにより early stopping が `precision_at_{k}` を監視メトリクスとして利用可能になる
+
+```python
+feval_funcs = []
+if config.train.top_k is not None:
+    feval_funcs.append(_make_precision_at_k_feval(config.train.top_k))
+
+return lgb.train(
+    params=params,
+    train_set=train_set,
+    valid_sets=[valid_set],
+    num_boost_round=config.train.num_boost_round,
+    callbacks=callbacks,
+    feval=feval_funcs if feval_funcs else None,
+)
+```
+
+#### 5b: Tuning objective への統合
+
+**対象**: `src/veldra/config/models.py`
+
+`_TUNE_ALLOWED_OBJECTIVES["binary"]` に `precision_at_k` を追加:
+```python
+"binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall", "precision_at_k"},
+```
+
+**対象**: `src/veldra/modeling/tuning.py`
+
+Tune trial 内で `precision_at_k` が objective に指定された場合:
+- `config.train.top_k` の値を使用して OOF 予測に対する precision@k を算出
+- `top_k` 未指定時はエラー
+
+#### 5c: evaluate API での返却
+
+**対象**: `src/veldra/modeling/binary.py`
+
+`_binary_metrics` / `_binary_label_metrics` の呼び出し後に:
+- `config.train.top_k` が指定されていれば `precision_at_{k}` をメトリクス dict に追加
+- これにより `evaluate` API の返却値にも含まれる
+
+**メトリクスキー**: `precision_at_{k}`（例: `precision_at_100`）
+
+**学習曲線**: `record_evaluation` callback により `training_history.json` にイテレーションごとの `precision_at_{k}` が自動記録される。
+
+---
+
+### Step 6: GUI Advanced Training Parameters の拡充
+
+**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
+
+**config_page.py の Advanced Training Parameters アコーディオン**に以下を追加:
+
+| GUI コンポーネント | ID | タイプ | デフォルト | 備考 |
+|-------------------|-----|--------|-----------|------|
+| Auto Num Leaves | `cfg-train-auto-num-leaves` | Switch | OFF | ON 時に Num Leaves 入力を無効化 |
+| Num Leaves Ratio | `cfg-train-num-leaves-ratio` | Slider (0.1–1.0) | 1.0 | `auto_num_leaves=ON` 時のみ活性 |
+| Min Data In Leaf Ratio | `cfg-train-min-leaf-ratio` | Input (number) | 空 | 設定時は `min_child_samples` より優先 |
+| Min Data In Bin Ratio | `cfg-train-min-bin-ratio` | Input (number) | 空 | |
+| Feature Weights | `cfg-train-feature-weights` | Textarea (JSON) | 空 | `{"col_name": 2.0, ...}` 形式 |
+| Path Smooth | `cfg-train-path-smooth` | Input (number) | 0 | |
+| Cat L2 | `cfg-train-cat-l2` | Input (number) | 10 | |
+| Cat Smooth | `cfg-train-cat-smooth` | Input (number) | 10 | |
+| Bagging Freq | `cfg-train-bagging-freq` | Input (number) | 0 | |
+| Max Bin | `cfg-train-max-bin` | Input (number) | 255 | |
+| Min Gain To Split | `cfg-train-min-gain` | Input (number) | 0 | |
+| Top K (Binary) | `cfg-train-top-k` | Input (number) | 空 | binary 選択時のみ表示。学習 feval + 評価 metric 両用 |
+
+**app.py の `_cb_build_config_yaml` への追加**:
+- 上記の各 Input を callback の引数に追加
+- `cfg["train"]` および `cfg["train"]["lgb_params"]` に値をマッピング
+- 空値（None / 空文字）はスキップし、YAML に含めない
+- `auto_num_leaves` / `num_leaves_ratio` / `min_data_in_leaf_ratio` / `min_data_in_bin_ratio` / `feature_weights` は `cfg["train"]` 直下に配置
+- `path_smooth` / `cat_l2` / `cat_smooth` / `bagging_freq` / `max_bin` / `min_gain_to_split` は `cfg["train"]["lgb_params"]` に配置
+
+---
+
+### Step 7: Tuning Search Space の拡充
+
+**対象**: `src/veldra/modeling/tuning.py`
+
+**standard プリセット**に以下を追加:
+```python
+"standard": {
+    # 既存 ...
+    "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
+    "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
+    "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},              # NEW
+    "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},         # NEW
+}
+```
+
+---
+
+### Step 8: Artifact パラメーター永続化の確認
+
+**現状**: `run_config.yaml` が Artifact に保存されるため、`TrainConfig` に追加された全フィールドと `lgb_params` 内のパラメーターは自動的に永続化される。
+
+**追加対応**:
+- `feature_weights` が大量の場合でも `run_config.yaml` に含まれるため、別ファイル化は不要（YAML のまま）
+- Artifact からの `predict` 実行時に `feature_weights` が保存された RunConfig から復元されることを確認
+
+---
+
+### Step 9: テスト計画
+
+| テスト | 内容 | ファイル |
+|--------|------|----------|
+| スキーマ検証 | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` のバリデーション | `tests/test_config_param_fields.py` |
+| auto_num_leaves | `auto_num_leaves=True` で `max_depth` から `num_leaves` が動的算出される | `tests/test_auto_num_leaves.py` |
+| auto_num_leaves + ratio | `num_leaves_ratio=0.5` で葉数が半減する | 同上 |
+| auto_num_leaves 競合 | `auto_num_leaves=True` かつ `lgb_params.num_leaves` 指定でエラー | 同上 |
+| min_data_in_leaf_ratio | 比率から絶対値が正しく算出される | `tests/test_ratio_params.py` |
+| min_data_in_bin_ratio | 比率から絶対値が正しく算出される | 同上 |
+| 比率パラメーター競合 | `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定でエラー | 同上 |
+| feature_weights | 指定した重みが学習に反映される（モデルが作成可能なこと） | `tests/test_feature_weights.py` |
+| feature_weights 不正値 | 重み <= 0 でバリデーションエラー | 同上 |
+| top_k feval | `top_k` 指定時に LightGBM カスタム metric として学習ループ内で `precision_at_{k}` が算出される | `tests/test_top_k_precision.py` |
+| top_k early stopping | `precision_at_{k}` で early stopping が正しく動作する | 同上 |
+| top_k evaluate | Binary 評価で `precision_at_{k}` がメトリクスに含まれる | 同上 |
+| top_k tune objective | `precision_at_k` を tune objective に指定して最適化が動作する | 同上 |
+| top_k 非 binary | `top_k` を regression で指定してバリデーションエラー | 同上 |
+| top_k 学習曲線 | `training_history.json` にイテレーションごとの `precision_at_{k}` が記録される | 同上 |
+| GUI | Config builder が新フィールドを正しく YAML に生成する | `tests/test_gui_app_callbacks_config.py`（既存に追加） |
+| Tuning search space | standard プリセットに `lambda_l1`, `lambda_l2` 等が含まれる | `tests/test_tuning_search_space.py` |
+| Artifact 復元 | 新パラメーター付き Artifact からの predict が成功する | `tests/test_artifact_param_roundtrip.py` |
+
+### 検証コマンド
+- `uv run pytest tests/test_config_param_fields.py tests/test_auto_num_leaves.py tests/test_ratio_params.py -v`
+- `uv run pytest tests/test_feature_weights.py tests/test_top_k_precision.py -v`
+- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py -v`
+- `uv run pytest tests -x --tb=short`
+
+### 実装順序（依存関係順）
+1. Step 1: `TrainConfig` / `PostprocessConfig` スキーマ拡張 + バリデーション
+2. Step 2: `auto_num_leaves` 動的算出ロジック（`utils.py` + 全4 modeling ファイル）
+3. Step 3: 比率ベースパラメーター算出ロジック（`utils.py` + 全4 modeling ファイル）
+4. Step 4: `feature_weights` の適用（全4 modeling ファイル）
+5. Step 5: Top-K Precision カスタム metric（`binary.py` + `tuning.py` + 評価経路）
+6. Step 6: GUI Advanced Training Parameters 拡充
+7. Step 7: Tuning Search Space 拡充
+8. Step 8: Artifact パラメーター永続化確認
+9. Step 9: テスト
+
+### 完了条件
+- `auto_num_leaves=True` の場合に `max_depth` から `num_leaves` が動的に算出され、`num_leaves_ratio` で補正可能であること。`auto_num_leaves=True` と `lgb_params.num_leaves` の同時指定でバリデーションエラーとなること。
+- `min_data_in_leaf_ratio` が指定された場合に学習データの行数に基づいて `min_data_in_leaf` が動的に算出されること。`min_data_in_bin_ratio` も同様に動作すること。比率パラメーターと対応する `lgb_params` の絶対値パラメーターの同時指定でバリデーションエラーとなること。
+- `feature_weights` が指定された場合に、特徴量ごとの重みが LightGBM の学習に反映されること。重み <= 0 の指定でバリデーションエラーとなること。
+- `top_k` が指定された場合に precision@k が LightGBM カスタム metric（`feval`）として学習ループに組み込まれ、early stopping の監視指標として動作すること。`precision_at_k` を tune の objective として指定可能であること。`evaluate` API でも `precision_at_{k}` がメトリクスに含まれること。`training_history.json` にイテレーションごとの値が記録されること。`top_k` は `binary` タスクのみ許可され、他タスクではバリデーションエラーとなること。
+- GUI の Advanced Training Parameters に `Auto Num Leaves` / `Num Leaves Ratio` / `Min Data In Leaf Ratio` / `Min Data In Bin Ratio` / `Feature Weights` / `Path Smooth` / `Cat L2` / `Cat Smooth` / `Bagging Freq` / `Max Bin` / `Min Gain To Split` / `Top K` の入力欄が追加され、Config YAML に正しく反映されること。
+- Tuning の standard プリセットに `lambda_l1` / `lambda_l2` / `path_smooth` / `min_gain_to_split` が追加されること。
+- 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
+- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+
+## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
+### 目的
+- 目的変数の自動判定機能のテスト
+- バリデーション分割の自動適用のテスト
+- 最終モデル Early Stopping 用バリデーション分割のテスト
+- ImbalanceデータにWeightを自動適用する機能のテスト
+- `num_boost_round` 設定可能化のテスト
+- 学習曲線の早期停止機能のテスト
+- 学習曲線データのArtifact保存のテスト
+- GUI新パラメーターのテスト
+- Config migrationのテスト
+
+### テストケース
+1. 目的変数の自動判定機能のテスト
+   - Binary分類タスクで、目的変数が2クラスの場合に `binary` 目的関数が自動選択されることを確認するテストケース。
+   - Multi-class分類タスクで、目的変数が3クラス以上の場合に `multiclass` 目的関数が自動選択されることを確認するテストケース。
+   - Regressionタスクで、目的変数が連続値の場合に `regression` 目的関数が自動選択されることを確認するテストケース。
+   - ユーザーが `lgb_params.objective` で代替目的関数を指定した場合にそれが優先されることを確認するテストケース。
+2. バリデーション分割の自動適用のテスト（CVフォールド）
+   - 時系列データで `split.type=timeseries` の場合に、時系列分割が自動的に適用されることを確認するテストケース。
+   - Binary/Multiclass タスクで `split.type=kfold` の場合に、内部で層化分割（stratified）が自動的に適用されることを確認するテストケース。
+   - DR/DR-DiD の傾向スコアモデルとOutcomeモデルで、Group K-Fold 分割が自動的に適用されることを確認するテストケース。
+3. Early Stopping 用バリデーション分割のテスト（CVフォールド + 最終モデル共通）
+   - CVフォールドで、train部分から early stopping 用バリデーションデータが自動分割され、OOF（valid部分）が early stopping に使用されないことを確認するテストケース。
+   - Binary/Multiclass タスクで、層化分割（StratifiedShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
+   - Regression/Frontier タスクで、ランダム分割（ShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
+   - 時系列データで、時系列順で末尾 N% がバリデーションに使用されることを確認するテストケース。
+   - 最終モデル学習時にも同様に全データからバリデーションが分割されることを確認するテストケース。
+   - `early_stopping_rounds=None`（early stopping 無効）の場合に分割が行われず、全データで学習されることを確認するテストケース。
+   - `early_stopping_validation_fraction` の値が分割比率に正しく反映されることを確認するテストケース。
+   - `early_stopping_validation_fraction` の範囲外（0以下、1以上）でバリデーションエラーとなることを確認するテストケース。
+4. ImbalanceデータにWeightを自動適用する機能のテスト
+   - Binary分類タスクで `auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されることを確認するテストケース。
+   - Binary分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に `scale_pos_weight` が適用されることを確認するテストケース。
+   - Multi-class分類タスクで `auto_class_weight=True`（既定）の場合に balanced sample weight が自動的に算出・適用されることを確認するテストケース。
+   - Multi-class分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に指定重みが適用されることを確認するテストケース。
+   - `auto_class_weight=True` と `class_weight` の同時指定でバリデーションエラーとなることを確認するテストケース。
+5. `num_boost_round` 設定可能化のテスト
+   - `num_boost_round` を指定した値が全タスク（regression/binary/multiclass/frontier）で `lgb.train()` に反映されることを確認するテストケース。
+   - `num_boost_round` 未指定時に既定値300で動作すること（後方互換）を確認するテストケース。
+   - `num_boost_round < 1` でバリデーションエラーとなることを確認するテストケース。
+6. 学習曲線の早期停止機能のテスト
+   - `early_stopping_rounds` が設定された場合に早期停止が動作し、`best_iteration < num_boost_round` となることを確認するテストケース。
+   - ユーザーが `early_stopping_rounds` と `num_boost_round` を自由に設定できることを確認するテストケース。
+7. 学習曲線データのArtifact保存のテスト
+   - `training_history.json` がArtifactに保存され、foldごとのイテレーション別メトリクスが含まれることを確認するテストケース。
+   - `best_iteration` が `training_history` の各foldに正しく記録されることを確認するテストケース。
+   - Artifactの `training_history.json` がロード可能で、保存時の値と一致することを確認するテストケース。
+8. GUI新パラメーターのテスト
+   - Config builder が `num_boost_round` を `train.num_boost_round` に正しくマッピングすることを確認するテストケース。
+   - `Auto Class Weight` トグルが `binary`/`multiclass` 選択時のみ表示されることを確認するテストケース。
+   - `Class Weight` 手動入力が `Auto Class Weight=OFF` 時のみ活性化されることを確認するテストケース。
+9. Config migrationのテスト
+   - `train.lgb_params.n_estimators` が `train.num_boost_round` に自動変換されることを確認するテストケース。
+   - 変換後に `lgb_params` から `n_estimators` が削除されていることを確認するテストケース。
+
+### 検証コマンド
+- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
+- `uv run pytest tests/test_training_history.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
 - `uv run pytest tests -x --tb=short`
 
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム

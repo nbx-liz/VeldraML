@@ -47,3 +47,26 @@ def test_migrate_file_rejects_malformed_yaml_and_non_mapping(tmp_path) -> None:
 def test_migrate_file_rejects_missing_input(tmp_path) -> None:
     with pytest.raises(VeldraValidationError, match="does not exist"):
         migrate_run_config_file(tmp_path / "missing.yaml")
+
+
+def test_migrate_file_moves_legacy_n_estimators(tmp_path) -> None:
+    src = tmp_path / "legacy.yaml"
+    src.write_text(
+        (
+            "config_version: 1\n"
+            "task:\n"
+            "  type: regression\n"
+            "data:\n"
+            "  path: train.csv\n"
+            "  target: y\n"
+            "train:\n"
+            "  lgb_params:\n"
+            "    n_estimators: 77\n"
+            "    learning_rate: 0.1\n"
+        ),
+        encoding="utf-8",
+    )
+    result = migrate_run_config_file(src)
+    migrated = Path(result.output_path).read_text(encoding="utf-8")
+    assert "num_boost_round: 77" in migrated
+    assert "n_estimators" not in migrated

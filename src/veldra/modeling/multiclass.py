@@ -9,9 +9,11 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, log_loss
+from sklearn.utils.class_weight import compute_sample_weight
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling.utils import split_for_early_stopping
 from veldra.split import iter_cv_splits
 
 
@@ -21,6 +23,18 @@ class MulticlassTrainingOutput:
     metrics: dict[str, Any]
     cv_results: pd.DataFrame
     feature_schema: dict[str, Any]
+    training_history: dict[str, Any]
+
+
+def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
+    current_iteration_fn = getattr(booster, "current_iteration", None)
+    current_iteration = (
+        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
+    )
+    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
+    if best_iteration <= 0:
+        best_iteration = current_iteration
+    return best_iteration, current_iteration
 
 
 def _to_python_scalar(value: Any) -> Any:
@@ -70,6 +84,7 @@ def _train_single_booster(
     y_valid: pd.Series,
     config: RunConfig,
     num_class: int,
+    evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
     params = {
         "objective": "multiclass",
@@ -81,9 +96,19 @@ def _train_single_booster(
     }
 
     categorical = [col for col in config.data.categorical if col in x_train.columns]
+    train_weight: np.ndarray | None = None
+    if config.train.class_weight is not None:
+        train_weight = np.asarray(
+            [float(config.train.class_weight.get(str(int(label)), 1.0)) for label in y_train],
+            dtype=float,
+        )
+    elif config.train.auto_class_weight:
+        train_weight = np.asarray(compute_sample_weight("balanced", y_train), dtype=float)
+
     train_set = lgb.Dataset(
         x_train,
         label=y_train,
+        weight=train_weight,
         categorical_feature=categorical,
         free_raw_data=False,
     )
@@ -96,12 +121,14 @@ def _train_single_booster(
     callbacks = []
     if config.train.early_stopping_rounds:
         callbacks.append(lgb.early_stopping(config.train.early_stopping_rounds, verbose=False))
+    if evaluation_history is not None:
+        callbacks.append(lgb.record_evaluation(evaluation_history))
 
     return lgb.train(
         params=params,
         train_set=train_set,
         valid_sets=[valid_set],
-        num_boost_round=300,
+        num_boost_round=config.train.num_boost_round,
         callbacks=callbacks,
     )
 
@@ -160,18 +187,26 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
 
     oof_proba = np.full((len(x), num_class), np.nan, dtype=float)
     fold_records: list[dict[str, float | int]] = []
+    history_folds: list[dict[str, Any]] = []
 
     for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
         if len(train_idx) == 0 or len(valid_idx) == 0:
             raise VeldraValidationError("Encountered an empty train/valid split.")
+        x_fold_train = x.iloc[train_idx]
+        y_fold_train = y.iloc[train_idx]
+        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
+            x_fold_train, y_fold_train, config
+        )
+        eval_history: dict[str, Any] = {}
 
         booster = _train_single_booster(
-            x_train=x.iloc[train_idx],
-            y_train=y.iloc[train_idx],
-            x_valid=x.iloc[valid_idx],
-            y_valid=y.iloc[valid_idx],
+            x_train=x_es_train,
+            y_train=y_es_train,
+            x_valid=x_es_valid,
+            y_valid=y_es_valid,
             config=config,
             num_class=num_class,
+            evaluation_history=eval_history,
         )
         pred_raw = np.asarray(
             booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration),
@@ -181,6 +216,17 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
         oof_proba[valid_idx, :] = pred_proba
 
         fold_metrics = _multiclass_metrics(y.iloc[valid_idx].to_numpy(), pred_proba)
+        best_iteration, num_iterations = _booster_iteration_stats(
+            booster, config.train.num_boost_round
+        )
+        history_folds.append(
+            {
+                "fold": fold_idx,
+                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
+                "num_iterations": num_iterations,
+                "eval_history": eval_history.get("valid_0", eval_history),
+            }
+        )
         fold_records.append(
             {
                 "fold": fold_idx,
@@ -200,14 +246,32 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
     mean_metrics = _multiclass_metrics(y.to_numpy(), oof_proba)
     cv_results = pd.DataFrame.from_records(fold_records)
 
+    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
+        x, y, config
+    )
+    final_eval_history: dict[str, Any] = {}
     final_model = _train_single_booster(
-        x_train=x,
-        y_train=y,
-        x_valid=x,
-        y_valid=y,
+        x_train=x_final_train,
+        y_train=y_final_train,
+        x_valid=x_final_valid,
+        y_valid=y_final_valid,
         config=config,
         num_class=num_class,
+        evaluation_history=final_eval_history,
     )
+    final_best_iteration, final_num_iterations = _booster_iteration_stats(
+        final_model, config.train.num_boost_round
+    )
+    training_history = {
+        "folds": history_folds,
+        "final_model": {
+            "best_iteration": (
+                final_best_iteration if final_best_iteration > 0 else final_num_iterations
+            ),
+            "num_iterations": final_num_iterations,
+            "eval_history": final_eval_history.get("valid_0", final_eval_history),
+        },
+    }
 
     metrics = {
         "folds": fold_records,
@@ -224,4 +288,5 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
         metrics=metrics,
         cv_results=cv_results,
         feature_schema=feature_schema,
+        training_history=training_history,
     )

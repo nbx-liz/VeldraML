@@ -22,6 +22,7 @@ from sklearn.metrics import (
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling.utils import split_for_early_stopping
 from veldra.split import iter_cv_splits
 
 
@@ -35,6 +36,18 @@ class BinaryTrainingOutput:
     calibration_curve: pd.DataFrame
     threshold: dict[str, Any]
     threshold_curve: pd.DataFrame | None = None
+    training_history: dict[str, Any] | None = None
+
+
+def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
+    current_iteration_fn = getattr(booster, "current_iteration", None)
+    current_iteration = (
+        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
+    )
+    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
+    if best_iteration <= 0:
+        best_iteration = current_iteration
+    return best_iteration, current_iteration
 
 
 def _to_python_scalar(value: Any) -> Any:
@@ -85,6 +98,7 @@ def _train_single_booster(
     x_valid: pd.DataFrame,
     y_valid: pd.Series,
     config: RunConfig,
+    evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
     params = {
         "objective": "binary",
@@ -93,6 +107,19 @@ def _train_single_booster(
         "seed": config.train.seed,
         **config.train.lgb_params,
     }
+    if config.train.class_weight is not None:
+        neg_weight = float(config.train.class_weight.get("0", 1.0))
+        pos_weight = float(config.train.class_weight.get("1", 1.0))
+        pos_count = int((y_train == 1).sum())
+        neg_count = int((y_train == 0).sum())
+        if pos_count > 0 and neg_count > 0 and "scale_pos_weight" not in params:
+            params["scale_pos_weight"] = (neg_count * pos_weight) / (pos_count * neg_weight)
+    elif (
+        config.train.auto_class_weight
+        and "is_unbalance" not in params
+        and "scale_pos_weight" not in params
+    ):
+        params["is_unbalance"] = True
 
     categorical = [col for col in config.data.categorical if col in x_train.columns]
     train_set = lgb.Dataset(
@@ -110,12 +137,14 @@ def _train_single_booster(
     callbacks = []
     if config.train.early_stopping_rounds:
         callbacks.append(lgb.early_stopping(config.train.early_stopping_rounds, verbose=False))
+    if evaluation_history is not None:
+        callbacks.append(lgb.record_evaluation(evaluation_history))
 
     return lgb.train(
         params=params,
         train_set=train_set,
         valid_sets=[valid_set],
-        num_boost_round=300,
+        num_boost_round=config.train.num_boost_round,
         callbacks=callbacks,
     )
 
@@ -196,16 +225,24 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
 
     oof_raw = np.full(len(x), np.nan, dtype=float)
     fold_records: list[dict[str, float | int]] = []
+    history_folds: list[dict[str, Any]] = []
 
     for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
         if len(train_idx) == 0 or len(valid_idx) == 0:
             raise VeldraValidationError("Encountered an empty train/valid split.")
+        x_fold_train = x.iloc[train_idx]
+        y_fold_train = y.iloc[train_idx]
+        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
+            x_fold_train, y_fold_train, config
+        )
+        eval_history: dict[str, Any] = {}
         booster = _train_single_booster(
-            x_train=x.iloc[train_idx],
-            y_train=y.iloc[train_idx],
-            x_valid=x.iloc[valid_idx],
-            y_valid=y.iloc[valid_idx],
+            x_train=x_es_train,
+            y_train=y_es_train,
+            x_valid=x_es_valid,
+            y_valid=y_es_valid,
             config=config,
+            evaluation_history=eval_history,
         )
         pred_raw = np.asarray(
             booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration),
@@ -215,6 +252,17 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         oof_raw[valid_idx] = pred_raw
 
         fold_metrics = _binary_metrics(y.iloc[valid_idx].to_numpy(), pred_raw)
+        best_iteration, num_iterations = _booster_iteration_stats(
+            booster, config.train.num_boost_round
+        )
+        history_folds.append(
+            {
+                "fold": fold_idx,
+                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
+                "num_iterations": num_iterations,
+                "eval_history": eval_history.get("valid_0", eval_history),
+            }
+        )
         fold_records.append(
             {
                 "fold": fold_idx,
@@ -257,13 +305,31 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         }
     )
 
-    final_model = _train_single_booster(
-        x_train=x,
-        y_train=y,
-        x_valid=x,
-        y_valid=y,
-        config=config,
+    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
+        x, y, config
     )
+    final_eval_history: dict[str, Any] = {}
+    final_model = _train_single_booster(
+        x_train=x_final_train,
+        y_train=y_final_train,
+        x_valid=x_final_valid,
+        y_valid=y_final_valid,
+        config=config,
+        evaluation_history=final_eval_history,
+    )
+    final_best_iteration, final_num_iterations = _booster_iteration_stats(
+        final_model, config.train.num_boost_round
+    )
+    training_history = {
+        "folds": history_folds,
+        "final_model": {
+            "best_iteration": (
+                final_best_iteration if final_best_iteration > 0 else final_num_iterations
+            ),
+            "num_iterations": final_num_iterations,
+            "eval_history": final_eval_history.get("valid_0", final_eval_history),
+        },
+    }
 
     metrics = {
         "folds": fold_records,
@@ -305,4 +371,5 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         calibration_curve=calibration_df,
         threshold=threshold,
         threshold_curve=threshold_curve,
+        training_history=training_history,
     )

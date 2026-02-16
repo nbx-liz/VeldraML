@@ -644,6 +644,10 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `train` | `TrainConfig` | no | `<factory>` | - | - | Model training settings. |
 | `train.lgb_params` | `dict[str, Any]` | no | `{}` | - | - | LightGBM parameter overrides. |
 | `train.early_stopping_rounds` | `int | None` | no | `100` | - | - | Early stopping rounds. |
+| `train.early_stopping_validation_fraction` | `float` | no | `0.1` | - | - | train.early_stopping_validation_fraction setting. |
+| `train.num_boost_round` | `int` | no | `300` | - | - | train.num_boost_round setting. |
+| `train.auto_class_weight` | `bool` | no | `true` | - | - | train.auto_class_weight setting. |
+| `train.class_weight` | `dict[str, float] | None` | no | `None` | - | - | train.class_weight setting. |
 | `train.seed` | `int` | no | `42` | - | - | Training seed. |
 | `tuning` | `TuningConfig` | no | `<factory>` | - | - | Hyperparameter tuning settings. |
 | `tuning.enabled` | `bool` | no | `false` | - | - | Enable/disable tuning path. |
