@@ -288,7 +288,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
 - `uv run pytest tests -x --tb=short`
 
-## 12.7 Phase25.7: LightGBMの機能強化（完了）
+## 12.7 Phase25.7: LightGBMの機能強化（完了・検証済み）
 
 ### 目的
 - 目的変数の自動判定機能
@@ -586,48 +586,335 @@ early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーショ�
 - `lgb_params.n_estimators` → `train.num_boost_round` の Config migration が動作すること。
 - 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
-## 12.8 Phase25.8: LightGBMのパラメーター追加
-### 目的
-- top-k precisionの追加(`top_k` パラメーター)により、Binaryのモデル性能評価の多様化を実現する。
-- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、モデルの解釈性と性能を向上させる。
-- num_leavesの自動調整機能の追加（`auto_num_leaves` パラメーター）により、木ベースのパラメーター調整を可能にする。
-  - `num_leaves_ratio` パラメーターも追加し、auto_num_leavesが有効な場合の葉数をデータサイズに応じて柔軟に調整できるようにする。
-- min_data_in_leaf_ratioの追加（`min_data_in_leaf_ratio` パラメーター）により、過学習の防止とモデルの一般化性能の向上を図る。
-- min_data_in_bin_ratioの追加（`min_data_in_bin_ratio` パラメーター）により、データの分割における過剰な細分化を防止し、モデルの安定性を向上させる。
-- 以下のパラメーターをArtifactで使えるようにする
- - `top_k`
- - `feature_weights`
- - `auto_num_leaves`
- - `min_data_in_leaf_ratio`
- - `min_data_in_bin_ratio`
- - `feature_fraction`
- - `bagging_fraction`
- - `lambda_l1`
- - `lambda_l2`
- - `path_smooth`
- - `cat_l2`
- - `cat_smooth`
- - 'bagging_freq'
- - 'max_depth'
- - 'max_bin'
- - 'max_drop'
- - 'min_gain_to_split'
+### 検証結果（2026-02-16）
+- 全8ステップ（スキーマ拡張 / num_boost_round / ES分割 / クラス不均衡 / 分割自動適用 / 学習曲線 / GUI / Migration）が実装完了。
+- Phase25.7 関連テスト: **31 passed, 0 failed**
+- Stable API 互換性: 維持確認済み
 
-### 参考
-#### auto_num_leaves & num_leaves_ratioの実装例
-    if params.get('num_leaves', 31) == 'auto':
-        if params.get('max_depth', -1) == -1:
-            _params['num_leaves'] = np.int(131072)
-        else:
-            _params['num_leaves'] = np.int(np.clip(2 ** params.get('max_depth'), 8, 131072))
-            if 'num_leaves_ratio' in _params:
-                _params['num_leaves'] = np.int(np.clip(np.ceil(_params['num_leaves'] * params['num_leaves_ratio']), 8, 131072))
-    else:
-        _params['num_leaves'] = np.int(params.get('num_leaves', 31))
+## 12.8 Phase25.8: LightGBMのパラメーター追加
+
+### 目的
+- Top-K Precision の追加（`top_k` パラメーター）により、Binary モデル性能評価の多様化を実現する。
+- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、特定特徴量への分割集中を制御する。
+- `num_leaves` の自動調整機能（`auto_num_leaves` + `num_leaves_ratio`）により、木構造のデータ適応を自動化する。
+- 比率ベースのリーフ制約（`min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）により、過学習防止とモデル安定性を向上する。
+- 既存の `lgb_params` 経由パラメーターを GUI で直接設定可能にする。
+
+### 現状分析
+
+| パラメーター | 現状 | 対応 |
+|-------------|------|------|
+| `top_k` | 未実装。Binary 評価・学習に precision@k がない | `TrainConfig` に追加。LightGBM カスタム metric（`feval`）として学習ループに組込み、ES 監視・tune objective・evaluate 返却で利用可能にする |
+| `feature_weights` | 未実装 | `TrainConfig` に追加し、`lgb.Dataset(feature_name=..., weight=...)` とは別に `lgb.Dataset` の `feature_name` パラメータに続けて適用 |
+| `auto_num_leaves` | 未実装。GUI で `num_leaves` を手動入力するのみ | `TrainConfig` にフラグ追加。`max_depth` から動的に `num_leaves` を算出 |
+| `num_leaves_ratio` | 未実装 | `auto_num_leaves=True` 時の補正係数として `TrainConfig` に追加 |
+| `min_data_in_leaf_ratio` | 未実装。`min_child_samples` は絶対値で `lgb_params` 経由 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_leaf` を動的算出 |
+| `min_data_in_bin_ratio` | 未実装。`min_data_in_bin` は `lgb_params` 経由で設定可能 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_bin` を動的算出 |
+| `path_smooth` / `cat_l2` / `cat_smooth` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
+| `bagging_freq` / `max_bin` / `max_drop` / `min_gain_to_split` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
+
+---
+
+### Step 1: `TrainConfig` スキーマ拡張
+
+**対象**: `src/veldra/config/models.py`
+
+```python
+class TrainConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lgb_params: dict[str, Any] = Field(default_factory=dict)
+    early_stopping_rounds: int | None = 100
+    early_stopping_validation_fraction: float = 0.1
+    num_boost_round: int = 300
+    auto_class_weight: bool = True
+    class_weight: dict[str, float] | None = None
+    seed: int = 42
+    # --- Phase25.8 追加 ---
+    auto_num_leaves: bool = False               # NEW: max_depth から num_leaves を自動算出
+    num_leaves_ratio: float = 1.0               # NEW: auto_num_leaves 時の補正係数
+    min_data_in_leaf_ratio: float | None = None  # NEW: 行数に対する比率 (例: 0.01 → 1%)
+    min_data_in_bin_ratio: float | None = None   # NEW: 行数に対する比率 (例: 0.001)
+    feature_weights: dict[str, float] | None = None  # NEW: 特徴量名→重み
+    top_k: int | None = None                    # NEW: precision@k の k（binary のみ）
+```
+
+**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
+- `auto_num_leaves=True` の場合 `num_leaves_ratio` は `0.0 < ratio <= 1.0` を検証
+- `auto_num_leaves=True` かつ `lgb_params` に `num_leaves` が明示指定されている場合は ValueError（競合）
+- `min_data_in_leaf_ratio` は `0.0 < ratio < 1.0` を検証
+- `min_data_in_bin_ratio` は `0.0 < ratio < 1.0` を検証
+- `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定は禁止
+- `min_data_in_bin_ratio` と `lgb_params.min_data_in_bin` の同時指定は禁止
+- `top_k` は `binary` タスクのみ許可、`top_k >= 1` を検証
+- `feature_weights` の値は全て `> 0` を検証
+
+---
+
+### Step 2: `auto_num_leaves` の動的算出ロジック
+
+**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
+
+```python
+def resolve_auto_num_leaves(config: RunConfig) -> int | None:
+    """auto_num_leaves=True の場合に num_leaves を動的に算出する。
+
+    - max_depth が指定されていない場合(-1): num_leaves = 131072（LightGBM上限）
+    - max_depth が指定されている場合: num_leaves = clip(2^max_depth, 8, 131072)
+    - num_leaves_ratio で補正: num_leaves = clip(ceil(num_leaves * ratio), 8, 131072)
+    - auto_num_leaves=False の場合は None を返す（既存の lgb_params.num_leaves が使われる）
+    """
+```
+
+**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
+```python
+# auto_num_leaves の解決
+resolved_leaves = resolve_auto_num_leaves(config)
+if resolved_leaves is not None:
+    params["num_leaves"] = resolved_leaves
+```
+
+---
+
+### Step 3: 比率ベースのリーフ・ビン制約
+
+**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
+
+```python
+def resolve_ratio_params(config: RunConfig, n_rows: int) -> dict[str, int]:
+    """比率ベースのパラメーターを絶対値に変換する。
+
+    - min_data_in_leaf_ratio: n_rows * ratio → min_data_in_leaf（最小 1）
+    - min_data_in_bin_ratio: n_rows * ratio → min_data_in_bin（最小 1）
+    """
+```
+
+**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
+```python
+ratio_params = resolve_ratio_params(config, len(x_train))
+params.update(ratio_params)
+```
+
+---
+
+### Step 4: `feature_weights` の適用
+
+**対象**: 全4ファイルの `_train_single_booster` 内
+
+**実装方針**:
+- `config.train.feature_weights` が指定されている場合、特徴量名のリストに対応する重みリストを構築
+- `lgb.Dataset` コンストラクタの `feature_name` と合わせて `lgb.train()` の `feature_weights` パラメータを使用
+- 指定されていない特徴量のデフォルト重みは `1.0`
+
+```python
+# feature_weights の適用
+if config.train.feature_weights:
+    fw = [config.train.feature_weights.get(col, 1.0) for col in x_train.columns]
+else:
+    fw = None
+# ...
+booster = lgb.train(
+    params=params,
+    train_set=train_set,
+    # ...,
+    feature_name=list(x_train.columns) if fw else "auto",
+)
+# feature_weights は lgb.Dataset ではなく lgb.train() の引数ではないため、
+# params["feature_fraction_bynode"] 等との組合せで実現するか、
+# lgb.Dataset(init_score=...) ではなく params dict に直接設定:
+# params["feature_weights"] = fw  ← LightGBM は内部で feature_weights を受け付ける（要確認）
+```
+
+**注**: LightGBM の `feature_weights` は `lgb.Dataset` の `set_feature_names` 後に
+`dataset.set_feature_names()` とは異なり `params` に直接渡す形式ではない。
+実際には `lgb.train()` の `feature_name` パラメータと合わせて
+`Dataset(feature_name=..., free_raw_data=False)` 構築後に
+`train_set.feature_name` を参照し weight リストを構築する方式を取る。
+→ LightGBM 4.x の `feature_pre_filter` と `feature_weights` サポートを確認の上、最適な方法を採用する。
+
+---
+
+### Step 5: Top-K Precision のカスタム metric 実装
+
+**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/tuning.py`, `src/veldra/config/models.py`
+
+#### 5a: LightGBM カスタム評価関数（`feval`）
+
+**新規関数**（`src/veldra/modeling/binary.py`）:
+```python
+def _make_precision_at_k_feval(k: int):
+    """LightGBM の feval 互換の precision@k 評価関数を返す。
+
+    - feval シグネチャ: (y_pred, dataset) -> (name, value, is_higher_better)
+    - y_pred を降順ソートし、上位 k 件を抽出
+    - 抽出された k 件中の正例数 / k が precision@k
+    - k > len(y_true) の場合は全件を使用
+    - is_higher_better=True（precision は高いほど良い）
+    """
+    def _precision_at_k(y_pred, dataset):
+        y_true = dataset.get_label()
+        order = np.argsort(-y_pred)
+        top = order[:min(k, len(y_true))]
+        value = float(y_true[top].sum() / len(top))
+        return f"precision_at_{k}", value, True
+    return _precision_at_k
+```
+
+**適用箇所**（`_train_single_booster` 内）:
+- `config.train.top_k` が指定されている場合、`_make_precision_at_k_feval(k)` を生成
+- `lgb.train()` の `feval` 引数に渡す
+- これにより early stopping が `precision_at_{k}` を監視メトリクスとして利用可能になる
+
+```python
+feval_funcs = []
+if config.train.top_k is not None:
+    feval_funcs.append(_make_precision_at_k_feval(config.train.top_k))
+
+return lgb.train(
+    params=params,
+    train_set=train_set,
+    valid_sets=[valid_set],
+    num_boost_round=config.train.num_boost_round,
+    callbacks=callbacks,
+    feval=feval_funcs if feval_funcs else None,
+)
+```
+
+#### 5b: Tuning objective への統合
+
+**対象**: `src/veldra/config/models.py`
+
+`_TUNE_ALLOWED_OBJECTIVES["binary"]` に `precision_at_k` を追加:
+```python
+"binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall", "precision_at_k"},
+```
+
+**対象**: `src/veldra/modeling/tuning.py`
+
+Tune trial 内で `precision_at_k` が objective に指定された場合:
+- `config.train.top_k` の値を使用して OOF 予測に対する precision@k を算出
+- `top_k` 未指定時はエラー
+
+#### 5c: evaluate API での返却
+
+**対象**: `src/veldra/modeling/binary.py`
+
+`_binary_metrics` / `_binary_label_metrics` の呼び出し後に:
+- `config.train.top_k` が指定されていれば `precision_at_{k}` をメトリクス dict に追加
+- これにより `evaluate` API の返却値にも含まれる
+
+**メトリクスキー**: `precision_at_{k}`（例: `precision_at_100`）
+
+**学習曲線**: `record_evaluation` callback により `training_history.json` にイテレーションごとの `precision_at_{k}` が自動記録される。
+
+---
+
+### Step 6: GUI Advanced Training Parameters の拡充
+
+**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
+
+**config_page.py の Advanced Training Parameters アコーディオン**に以下を追加:
+
+| GUI コンポーネント | ID | タイプ | デフォルト | 備考 |
+|-------------------|-----|--------|-----------|------|
+| Auto Num Leaves | `cfg-train-auto-num-leaves` | Switch | OFF | ON 時に Num Leaves 入力を無効化 |
+| Num Leaves Ratio | `cfg-train-num-leaves-ratio` | Slider (0.1–1.0) | 1.0 | `auto_num_leaves=ON` 時のみ活性 |
+| Min Data In Leaf Ratio | `cfg-train-min-leaf-ratio` | Input (number) | 空 | 設定時は `min_child_samples` より優先 |
+| Min Data In Bin Ratio | `cfg-train-min-bin-ratio` | Input (number) | 空 | |
+| Feature Weights | `cfg-train-feature-weights` | Textarea (JSON) | 空 | `{"col_name": 2.0, ...}` 形式 |
+| Path Smooth | `cfg-train-path-smooth` | Input (number) | 0 | |
+| Cat L2 | `cfg-train-cat-l2` | Input (number) | 10 | |
+| Cat Smooth | `cfg-train-cat-smooth` | Input (number) | 10 | |
+| Bagging Freq | `cfg-train-bagging-freq` | Input (number) | 0 | |
+| Max Bin | `cfg-train-max-bin` | Input (number) | 255 | |
+| Min Gain To Split | `cfg-train-min-gain` | Input (number) | 0 | |
+| Top K (Binary) | `cfg-train-top-k` | Input (number) | 空 | binary 選択時のみ表示。学習 feval + 評価 metric 両用 |
+
+**app.py の `_cb_build_config_yaml` への追加**:
+- 上記の各 Input を callback の引数に追加
+- `cfg["train"]` および `cfg["train"]["lgb_params"]` に値をマッピング
+- 空値（None / 空文字）はスキップし、YAML に含めない
+- `auto_num_leaves` / `num_leaves_ratio` / `min_data_in_leaf_ratio` / `min_data_in_bin_ratio` / `feature_weights` は `cfg["train"]` 直下に配置
+- `path_smooth` / `cat_l2` / `cat_smooth` / `bagging_freq` / `max_bin` / `min_gain_to_split` は `cfg["train"]["lgb_params"]` に配置
+
+---
+
+### Step 7: Tuning Search Space の拡充
+
+**対象**: `src/veldra/modeling/tuning.py`
+
+**standard プリセット**に以下を追加:
+```python
+"standard": {
+    # 既存 ...
+    "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
+    "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
+    "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},              # NEW
+    "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},         # NEW
+}
+```
+
+---
+
+### Step 8: Artifact パラメーター永続化の確認
+
+**現状**: `run_config.yaml` が Artifact に保存されるため、`TrainConfig` に追加された全フィールドと `lgb_params` 内のパラメーターは自動的に永続化される。
+
+**追加対応**:
+- `feature_weights` が大量の場合でも `run_config.yaml` に含まれるため、別ファイル化は不要（YAML のまま）
+- Artifact からの `predict` 実行時に `feature_weights` が保存された RunConfig から復元されることを確認
+
+---
+
+### Step 9: テスト計画
+
+| テスト | 内容 | ファイル |
+|--------|------|----------|
+| スキーマ検証 | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` のバリデーション | `tests/test_config_param_fields.py` |
+| auto_num_leaves | `auto_num_leaves=True` で `max_depth` から `num_leaves` が動的算出される | `tests/test_auto_num_leaves.py` |
+| auto_num_leaves + ratio | `num_leaves_ratio=0.5` で葉数が半減する | 同上 |
+| auto_num_leaves 競合 | `auto_num_leaves=True` かつ `lgb_params.num_leaves` 指定でエラー | 同上 |
+| min_data_in_leaf_ratio | 比率から絶対値が正しく算出される | `tests/test_ratio_params.py` |
+| min_data_in_bin_ratio | 比率から絶対値が正しく算出される | 同上 |
+| 比率パラメーター競合 | `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定でエラー | 同上 |
+| feature_weights | 指定した重みが学習に反映される（モデルが作成可能なこと） | `tests/test_feature_weights.py` |
+| feature_weights 不正値 | 重み <= 0 でバリデーションエラー | 同上 |
+| top_k feval | `top_k` 指定時に LightGBM カスタム metric として学習ループ内で `precision_at_{k}` が算出される | `tests/test_top_k_precision.py` |
+| top_k early stopping | `precision_at_{k}` で early stopping が正しく動作する | 同上 |
+| top_k evaluate | Binary 評価で `precision_at_{k}` がメトリクスに含まれる | 同上 |
+| top_k tune objective | `precision_at_k` を tune objective に指定して最適化が動作する | 同上 |
+| top_k 非 binary | `top_k` を regression で指定してバリデーションエラー | 同上 |
+| top_k 学習曲線 | `training_history.json` にイテレーションごとの `precision_at_{k}` が記録される | 同上 |
+| GUI | Config builder が新フィールドを正しく YAML に生成する | `tests/test_gui_app_callbacks_config.py`（既存に追加） |
+| Tuning search space | standard プリセットに `lambda_l1`, `lambda_l2` 等が含まれる | `tests/test_tuning_search_space.py` |
+| Artifact 復元 | 新パラメーター付き Artifact からの predict が成功する | `tests/test_artifact_param_roundtrip.py` |
+
+### 検証コマンド
+- `uv run pytest tests/test_config_param_fields.py tests/test_auto_num_leaves.py tests/test_ratio_params.py -v`
+- `uv run pytest tests/test_feature_weights.py tests/test_top_k_precision.py -v`
+- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py -v`
+- `uv run pytest tests/test_gui_app_callbacks_config.py -v`
+- `uv run pytest tests -x --tb=short`
+
+### 実装順序（依存関係順）
+1. Step 1: `TrainConfig` / `PostprocessConfig` スキーマ拡張 + バリデーション
+2. Step 2: `auto_num_leaves` 動的算出ロジック（`utils.py` + 全4 modeling ファイル）
+3. Step 3: 比率ベースパラメーター算出ロジック（`utils.py` + 全4 modeling ファイル）
+4. Step 4: `feature_weights` の適用（全4 modeling ファイル）
+5. Step 5: Top-K Precision カスタム metric（`binary.py` + `tuning.py` + 評価経路）
+6. Step 6: GUI Advanced Training Parameters 拡充
+7. Step 7: Tuning Search Space 拡充
+8. Step 8: Artifact パラメーター永続化確認
+9. Step 9: テスト
 
 ### 完了条件
-- 上記のパラメーターが実装され、ユーザーが適切に設定できること。
-- 追加されたパラメーターがモデルの性能評価や解釈性の向上に寄与すること。
+- `auto_num_leaves=True` の場合に `max_depth` から `num_leaves` が動的に算出され、`num_leaves_ratio` で補正可能であること。`auto_num_leaves=True` と `lgb_params.num_leaves` の同時指定でバリデーションエラーとなること。
+- `min_data_in_leaf_ratio` が指定された場合に学習データの行数に基づいて `min_data_in_leaf` が動的に算出されること。`min_data_in_bin_ratio` も同様に動作すること。比率パラメーターと対応する `lgb_params` の絶対値パラメーターの同時指定でバリデーションエラーとなること。
+- `feature_weights` が指定された場合に、特徴量ごとの重みが LightGBM の学習に反映されること。重み <= 0 の指定でバリデーションエラーとなること。
+- `top_k` が指定された場合に precision@k が LightGBM カスタム metric（`feval`）として学習ループに組み込まれ、early stopping の監視指標として動作すること。`precision_at_k` を tune の objective として指定可能であること。`evaluate` API でも `precision_at_{k}` がメトリクスに含まれること。`training_history.json` にイテレーションごとの値が記録されること。`top_k` は `binary` タスクのみ許可され、他タスクではバリデーションエラーとなること。
+- GUI の Advanced Training Parameters に `Auto Num Leaves` / `Num Leaves Ratio` / `Min Data In Leaf Ratio` / `Min Data In Bin Ratio` / `Feature Weights` / `Path Smooth` / `Cat L2` / `Cat Smooth` / `Bagging Freq` / `Max Bin` / `Min Gain To Split` / `Top K` の入力欄が追加され、Config YAML に正しく反映されること。
+- Tuning の standard プリセットに `lambda_l1` / `lambda_l2` / `path_smooth` / `min_gain_to_split` が追加されること。
+- 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
+- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
 ## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
 ### 目的
