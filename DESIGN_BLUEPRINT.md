@@ -916,68 +916,141 @@ Tune trial 内で `precision_at_k` が objective に指定された場合:
 - 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
 - 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
-## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
-### 目的
-- 目的変数の自動判定機能のテスト
-- バリデーション分割の自動適用のテスト
-- 最終モデル Early Stopping 用バリデーション分割のテスト
-- ImbalanceデータにWeightを自動適用する機能のテスト
-- `num_boost_round` 設定可能化のテスト
-- 学習曲線の早期停止機能のテスト
-- 学習曲線データのArtifact保存のテスト
-- GUI新パラメーターのテスト
-- Config migrationのテスト
+### Decision（provisional）
+- `train.top_k` が指定された場合、Early Stopping は `precision_at_{k}` を優先監視する（`metric=None + feval`）。
+- `train.feature_weights` は未知特徴量キーを許容しない。未知キーは学習前に `VeldraValidationError` とする。
 
-### テストケース
-1. 目的変数の自動判定機能のテスト
-   - Binary分類タスクで、目的変数が2クラスの場合に `binary` 目的関数が自動選択されることを確認するテストケース。
-   - Multi-class分類タスクで、目的変数が3クラス以上の場合に `multiclass` 目的関数が自動選択されることを確認するテストケース。
-   - Regressionタスクで、目的変数が連続値の場合に `regression` 目的関数が自動選択されることを確認するテストケース。
-   - ユーザーが `lgb_params.objective` で代替目的関数を指定した場合にそれが優先されることを確認するテストケース。
-2. バリデーション分割の自動適用のテスト（CVフォールド）
-   - 時系列データで `split.type=timeseries` の場合に、時系列分割が自動的に適用されることを確認するテストケース。
-   - Binary/Multiclass タスクで `split.type=kfold` の場合に、内部で層化分割（stratified）が自動的に適用されることを確認するテストケース。
-   - DR/DR-DiD の傾向スコアモデルとOutcomeモデルで、Group K-Fold 分割が自動的に適用されることを確認するテストケース。
-3. Early Stopping 用バリデーション分割のテスト（CVフォールド + 最終モデル共通）
-   - CVフォールドで、train部分から early stopping 用バリデーションデータが自動分割され、OOF（valid部分）が early stopping に使用されないことを確認するテストケース。
-   - Binary/Multiclass タスクで、層化分割（StratifiedShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
-   - Regression/Frontier タスクで、ランダム分割（ShuffleSplit）でバリデーションデータが自動生成されることを確認するテストケース。
-   - 時系列データで、時系列順で末尾 N% がバリデーションに使用されることを確認するテストケース。
-   - 最終モデル学習時にも同様に全データからバリデーションが分割されることを確認するテストケース。
-   - `early_stopping_rounds=None`（early stopping 無効）の場合に分割が行われず、全データで学習されることを確認するテストケース。
-   - `early_stopping_validation_fraction` の値が分割比率に正しく反映されることを確認するテストケース。
-   - `early_stopping_validation_fraction` の範囲外（0以下、1以上）でバリデーションエラーとなることを確認するテストケース。
-4. ImbalanceデータにWeightを自動適用する機能のテスト
-   - Binary分類タスクで `auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されることを確認するテストケース。
-   - Binary分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に `scale_pos_weight` が適用されることを確認するテストケース。
-   - Multi-class分類タスクで `auto_class_weight=True`（既定）の場合に balanced sample weight が自動的に算出・適用されることを確認するテストケース。
-   - Multi-class分類タスクで `auto_class_weight=False` かつ `class_weight` を手動指定した場合に指定重みが適用されることを確認するテストケース。
-   - `auto_class_weight=True` と `class_weight` の同時指定でバリデーションエラーとなることを確認するテストケース。
-5. `num_boost_round` 設定可能化のテスト
-   - `num_boost_round` を指定した値が全タスク（regression/binary/multiclass/frontier）で `lgb.train()` に反映されることを確認するテストケース。
-   - `num_boost_round` 未指定時に既定値300で動作すること（後方互換）を確認するテストケース。
-   - `num_boost_round < 1` でバリデーションエラーとなることを確認するテストケース。
-6. 学習曲線の早期停止機能のテスト
-   - `early_stopping_rounds` が設定された場合に早期停止が動作し、`best_iteration < num_boost_round` となることを確認するテストケース。
-   - ユーザーが `early_stopping_rounds` と `num_boost_round` を自由に設定できることを確認するテストケース。
-7. 学習曲線データのArtifact保存のテスト
-   - `training_history.json` がArtifactに保存され、foldごとのイテレーション別メトリクスが含まれることを確認するテストケース。
-   - `best_iteration` が `training_history` の各foldに正しく記録されることを確認するテストケース。
-   - Artifactの `training_history.json` がロード可能で、保存時の値と一致することを確認するテストケース。
-8. GUI新パラメーターのテスト
-   - Config builder が `num_boost_round` を `train.num_boost_round` に正しくマッピングすることを確認するテストケース。
-   - `Auto Class Weight` トグルが `binary`/`multiclass` 選択時のみ表示されることを確認するテストケース。
-   - `Class Weight` 手動入力が `Auto Class Weight=OFF` 時のみ活性化されることを確認するテストケース。
-9. Config migrationのテスト
-   - `train.lgb_params.n_estimators` が `train.num_boost_round` に自動変換されることを確認するテストケース。
-   - 変換後に `lgb_params` から `n_estimators` が削除されていることを確認するテストケース。
+### 実装結果（2026-02-16）
+- `TrainConfig` に `auto_num_leaves / num_leaves_ratio / min_data_in_leaf_ratio / min_data_in_bin_ratio / feature_weights / top_k` を追加し、cross-field validation を実装。
+- `modeling/utils.py` に `resolve_auto_num_leaves / resolve_ratio_params / resolve_feature_weights` を追加し、全4 task 学習器へ適用。
+- binary 学習に `precision_at_k` を実装し、`fit / tune / evaluate / training_history` で利用可能にした。
+- binary `metrics.mean` に `accuracy/f1/precision/recall` を含めるよう修正し、既存 tuning objective の実行不整合を解消。
+- GUI Builder に Phase25.8 パラメータ入力を追加し、`auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
+- `_cb_update_tune_objectives("binary")` に `brier` と `precision_at_k` を追加。
+- `scripts/generate_runconfig_reference.py` を更新し、README RunConfig Reference を再生成。
+
+### 検証結果（2026-02-16）
+- `uv run ruff check .` : passed
+- `uv run pytest -q tests/test_config_train_fields.py tests/test_lgb_param_resolution.py tests/test_top_k_precision.py` : **19 passed**
+- `uv run pytest -q tests/test_tuning_internal.py tests/test_tune_objective_selection.py tests/test_tune_validation.py tests/test_binary_evaluate_metrics.py` : **17 passed**
+- `uv run pytest -q tests/test_gui_app_callbacks_config.py tests/test_gui_pages_and_init.py tests/test_gui_new_layout.py tests/test_gui_app_additional_branches.py` : **28 passed**
+- `uv run pytest -q -m "not gui"` : **385 passed**
+- `uv run pytest -q -m "gui"` : **100 passed**
+
+## 12.9 Phase25.9: LightGBM機能強化の不足テスト補完
+
+### 目的
+Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テストでカバーされていないギャップを特定し、不足テストを追加する。
+
+### 既存テストカバレッジ分析（2026-02-16 時点）
+
+#### Phase25.7: カバー済み
+| テスト対象 | 既存テストファイル | 状態 |
+|---|---|---|
+| Config バリデーション | `test_config_train_fields.py` | 充足 |
+| Binary class weight | `test_binary_class_weight.py` | 充足 |
+| Multiclass class weight | `test_multiclass_class_weight.py` | 充足 |
+| num_boost_round 反映 | `test_num_boost_round.py` | 充足（全4タスク） |
+| 分割自動適用 | `test_auto_split_selection.py` | binary/regression のみ |
+| ES用バリデーション分割 | `test_early_stopping_validation.py` | 充足（無効時/timeseries/binary層化/CVでOOF非使用） |
+| 学習曲線Artifact保存 | `test_training_history.py` | 充足（save/load + legacy互換） |
+| Config migration | `test_config_migrate_file.py` / `test_config_migrate_payload.py` | 充足（`n_estimators` → `num_boost_round`） |
+
+#### Phase25.8: ギャップあり
+| テスト対象 | 既存テストファイル | 状態 |
+|---|---|---|
+| Config バリデーション（25.8分） | `test_config_train_fields.py` | 充足（auto_num_leaves/ratio/feature_weights/top_k） |
+| パラメーター解決ロジック | `test_lgb_param_resolution.py` | ユニットテストのみ（`resolve_*` 関数の入出力検証） |
+| top_k precision | `test_top_k_precision.py` | 充足（helper/feval/CV metrics/training_history） |
+| GUI Config builder（25.8分） | `test_gui_new_layout.py` | 充足（YAML出力に25.8パラメーター含む） |
+| **auto_num_leaves 学習適用** | — | **不在**: 学習ループで `params["num_leaves"]` に算出値が渡されるか未検証 |
+| **ratio_params 学習適用** | — | **不在**: 学習ループで `params["min_data_in_leaf"]` 等が渡されるか未検証 |
+| **feature_weights 学習適用** | — | **不在**: 学習ループで重みリストが渡されるか未検証 |
+| **Tuning search space 拡充** | — | **不在**: standard プリセットに `lambda_l1`/`lambda_l2`/`path_smooth`/`min_gain_to_split` が含まれるか未検証 |
+| **新パラメーター Artifact roundtrip** | — | **不在**: 新パラメーター付き Artifact → predict 成功の検証なし |
+| **num_boost_round 既定値後方互換** | — | **不在**: 未指定時に既定値300で動作するか未検証 |
+| **早期停止の best_iteration 動作** | — | **不在**: 実際の学習で `best_iteration < num_boost_round` となるか未検証 |
+| **Causal での GroupKFold 自動適用** | — | **不在**: `test_auto_split_selection.py` は binary/regression のみ |
+| **目的関数ユーザー上書き** | — | **不在**: `lgb_params.objective` 指定時の優先動作が未検証 |
+
+---
+
+### 取り組み項目
+
+#### 1. `auto_num_leaves` 学習ループ適用テスト
+- **ファイル**: `tests/test_auto_num_leaves.py`（新規）
+- `auto_num_leaves=True` + `lgb_params.max_depth=5` + `num_leaves_ratio=0.5` で `lgb.train()` に渡される `params["num_leaves"]` が算出値（16）であることを monkeypatch で検証する。
+- `auto_num_leaves=False`（既定）の場合に `params["num_leaves"]` がセットされないことを検証する。
+- 代表タスク（regression）で検証し、`resolve_auto_num_leaves` の呼び出しが全4タスクで共通であることは `test_lgb_param_resolution.py` のユニットテストで担保する。
+
+#### 2. `ratio_params` 学習ループ適用テスト
+- **ファイル**: `tests/test_ratio_params.py`（新規）
+- `min_data_in_leaf_ratio=0.05` 指定時に `params["min_data_in_leaf"]` がデータ行数に基づく算出値であることを monkeypatch で検証する。
+- `min_data_in_bin_ratio=0.01` 指定時に `params["min_data_in_bin"]` が算出値であることを検証する。
+- 代表タスク（regression）で検証する。
+
+#### 3. `feature_weights` 学習ループ適用テスト
+- **ファイル**: `tests/test_feature_weights.py`（新規）
+- `feature_weights={"x1": 2.0}` 指定時に `params["feature_pre_filter"]` が `False` になり、`params["feature_weights"]` に正しい重みリストが渡されることを monkeypatch で検証する。
+- `feature_weights` 未指定時に `params` に `feature_weights` キーが含まれないことを検証する。
+- 代表タスク（regression）で検証する。
+
+#### 4. Tuning search space 拡充テスト
+- **ファイル**: `tests/test_tuning_search_space.py`（新規）
+- `_default_search_space("regression", "standard")` の返却 dict に `lambda_l1`, `lambda_l2`, `path_smooth`, `min_gain_to_split` キーが含まれることを検証する。
+- 各キーの `type`, `low`, `high` が妥当な値であることを検証する。
+
+#### 5. 新パラメーター付き Artifact ラウンドトリップテスト
+- **ファイル**: `tests/test_artifact_param_roundtrip.py`（新規）
+- `auto_num_leaves=True`, `feature_weights`, `top_k` を設定した RunConfig で Artifact を `save` → `load` し、`run_config.yaml` 内にこれらのフィールドが保持されていることを検証する。
+- ロードした Artifact から `predict` が成功すること（predict 自体は RunConfig のパラメーターに依存しないが、config 復元の整合性として検証）を確認する。
+
+#### 6. `num_boost_round` 既定値後方互換テスト
+- **ファイル**: `tests/test_num_boost_round.py`（既存に追加）
+- `train.num_boost_round` 未指定時に既定値 300 で `lgb.train()` が呼ばれることを monkeypatch で検証する。
+
+#### 7. 早期停止 `best_iteration` 動作テスト
+- **ファイル**: `tests/test_early_stopping_validation.py`（既存に追加）
+- 小データで実際に fit を実行し、`early_stopping_rounds` 設定時に `training_history` の `best_iteration` が `num_boost_round` 以下であることを検証する。
+
+#### 8. Causal での GroupKFold 自動適用テスト
+- **ファイル**: `tests/test_auto_split_selection.py`（既存に追加）
+- `causal.method="dr"` + `split.group_col` 指定時に `GroupKFold` が自動的に使用されることを monkeypatch で検証する。
+- `group_col` 未指定時に `KFold` にフォールバックすることを検証する。
+
+#### 9. 目的関数ユーザー上書きテスト
+- **ファイル**: `tests/test_objective_override.py`（新規）
+- Binary タスクで `lgb_params.objective` を `cross_entropy` に指定した場合に、`lgb.train()` の `params["objective"]` がユーザー指定値になることを monkeypatch で検証する。
+- 未指定時にタスク既定値（例: `binary` → `binary`）が使用されることを検証する。
+
+---
+
+### テストファイル一覧
+
+| ファイル | 新規/既存 | テスト数（想定） |
+|---|---|---|
+| `tests/test_auto_num_leaves.py` | 新規 | 2 |
+| `tests/test_ratio_params.py` | 新規 | 2 |
+| `tests/test_feature_weights.py` | 新規 | 2 |
+| `tests/test_tuning_search_space.py` | 新規 | 1–2 |
+| `tests/test_artifact_param_roundtrip.py` | 新規 | 1–2 |
+| `tests/test_objective_override.py` | 新規 | 2 |
+| `tests/test_num_boost_round.py` | 既存追加 | +1 |
+| `tests/test_early_stopping_validation.py` | 既存追加 | +1 |
+| `tests/test_auto_split_selection.py` | 既存追加 | +2 |
 
 ### 検証コマンド
-- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
-- `uv run pytest tests/test_training_history.py -v`
-- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
+- `uv run pytest tests/test_auto_num_leaves.py tests/test_ratio_params.py tests/test_feature_weights.py -v`
+- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py tests/test_objective_override.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_auto_split_selection.py -v`
 - `uv run pytest tests -x --tb=short`
+
+### 完了条件
+- Phase25.8 の学習ループ適用テスト（auto_num_leaves / ratio_params / feature_weights）が追加され、`resolve_*` 関数のユニットテストだけでなく実際の学習器への適用が検証されること。
+- Tuning search space の standard プリセットに追加されたパラメーターの存在が検証されること。
+- 新パラメーター付き Artifact の save → load ラウンドトリップが成功すること。
+- `num_boost_round` 既定値後方互換、早期停止の `best_iteration` 動作、Causal GroupKFold 自動適用、目的関数ユーザー上書きのテストが追加されること。
+- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム
 

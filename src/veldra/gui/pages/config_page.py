@@ -405,6 +405,28 @@ def _render_builder_tab() -> html.Div:
                             ],
                             className="mb-3",
                         ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        html.Label("Top K (Binary)"),
+                                        dbc.Input(
+                                            id="cfg-train-top-k",
+                                            type="number",
+                                            placeholder="e.g. 100",
+                                        ),
+                                        html.Div(
+                                            "Precision@K metric for binary train/evaluate/tune.",
+                                            className="small text-muted-readable mt-1",
+                                        ),
+                                    ],
+                                    id="cfg-container-top-k",
+                                    width=6,
+                                    style={"display": "none"},
+                                ),
+                            ],
+                            className="mb-3",
+                        ),
                         dbc.Accordion(
                             [
                                 dbc.AccordionItem(
@@ -469,6 +491,33 @@ def _render_builder_tab() -> html.Div:
                                             [
                                                 dbc.Col(
                                                     [
+                                                        html.Label("Auto Num Leaves"),
+                                                        dbc.Switch(
+                                                            id="cfg-train-auto-num-leaves",
+                                                            value=False,
+                                                            label=(
+                                                                "Resolve num_leaves from max_depth"
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    width=4,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Num Leaves Ratio"),
+                                                        dbc.Input(
+                                                            id="cfg-train-num-leaves-ratio",
+                                                            type="number",
+                                                            value=1.0,
+                                                            min=0.1,
+                                                            max=1.0,
+                                                            step=0.1,
+                                                        ),
+                                                    ],
+                                                    width=4,
+                                                ),
+                                                dbc.Col(
+                                                    [
                                                         html.Label("Reg Alpha"),
                                                         dbc.Input(
                                                             id="cfg-train-reg-alpha",
@@ -488,6 +537,138 @@ def _render_builder_tab() -> html.Div:
                                                         ),
                                                     ],
                                                     width=6,
+                                                ),
+                                            ],
+                                            className="mt-3",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Min Data In Leaf Ratio"),
+                                                        dbc.Input(
+                                                            id="cfg-train-min-leaf-ratio",
+                                                            type="number",
+                                                            placeholder="e.g. 0.01",
+                                                        ),
+                                                    ],
+                                                    width=6,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Min Data In Bin Ratio"),
+                                                        dbc.Input(
+                                                            id="cfg-train-min-bin-ratio",
+                                                            type="number",
+                                                            placeholder="e.g. 0.001",
+                                                        ),
+                                                    ],
+                                                    width=6,
+                                                ),
+                                            ],
+                                            className="mt-3",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Path Smooth"),
+                                                        dbc.Input(
+                                                            id="cfg-train-path-smooth",
+                                                            type="number",
+                                                            value=0.0,
+                                                        ),
+                                                    ],
+                                                    width=4,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Cat L2"),
+                                                        dbc.Input(
+                                                            id="cfg-train-cat-l2",
+                                                            type="number",
+                                                            value=10.0,
+                                                        ),
+                                                    ],
+                                                    width=4,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Cat Smooth"),
+                                                        dbc.Input(
+                                                            id="cfg-train-cat-smooth",
+                                                            type="number",
+                                                            value=10.0,
+                                                        ),
+                                                    ],
+                                                    width=4,
+                                                ),
+                                            ],
+                                            className="mt-3",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Bagging Freq"),
+                                                        dbc.Input(
+                                                            id="cfg-train-bagging-freq",
+                                                            type="number",
+                                                            value=0,
+                                                        ),
+                                                    ],
+                                                    width=3,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Max Bin"),
+                                                        dbc.Input(
+                                                            id="cfg-train-max-bin",
+                                                            type="number",
+                                                            value=255,
+                                                        ),
+                                                    ],
+                                                    width=3,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Max Drop"),
+                                                        dbc.Input(
+                                                            id="cfg-train-max-drop",
+                                                            type="number",
+                                                            placeholder="optional",
+                                                        ),
+                                                    ],
+                                                    width=3,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Min Gain To Split"),
+                                                        dbc.Input(
+                                                            id="cfg-train-min-gain",
+                                                            type="number",
+                                                            value=0.0,
+                                                        ),
+                                                    ],
+                                                    width=3,
+                                                ),
+                                            ],
+                                            className="mt-3",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        html.Label("Feature Weights (JSON)"),
+                                                        dbc.Textarea(
+                                                            id="cfg-train-feature-weights",
+                                                            placeholder=(
+                                                                '{"col_a": 2.0, "col_b": 0.5}'
+                                                            ),
+                                                            style={"height": "96px"},
+                                                        ),
+                                                    ],
+                                                    width=12,
                                                 ),
                                             ],
                                             className="mt-3",

@@ -43,6 +43,7 @@ def test_objective_and_default_search_space_validation() -> None:
     assert tuning._objective_spec("frontier", None) == ("pinball", "minimize")
     assert tuning._objective_spec("regression", "r2") == ("r2", "maximize")
     assert tuning._objective_spec("binary", "logloss") == ("logloss", "minimize")
+    assert tuning._objective_spec("binary", "precision_at_k") == ("precision_at_k", "maximize")
     assert tuning._objective_spec("multiclass", "logloss") == ("logloss", "minimize")
     assert tuning._objective_spec("frontier", "pinball") == ("pinball", "minimize")
     assert tuning._objective_spec("frontier", "pinball_coverage_penalty") == (

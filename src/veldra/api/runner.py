@@ -512,6 +512,12 @@ def _evaluate_with_artifact(
             "recall": float(recall_score(y_binary, label_pred, zero_division=0)),
             "threshold": threshold_value,
         }
+        top_k = artifact.run_config.train.top_k
+        if top_k is not None:
+            n_top = min(int(top_k), len(y_binary))
+            if n_top > 0:
+                top_idx = np.argsort(-p_cal)[:n_top]
+                metrics[f"precision_at_{int(top_k)}"] = float(np.mean(y_binary[top_idx]))
     elif artifact.run_config.task.type == "multiclass":
         pred_frame = artifact.predict(x_eval)
         if not isinstance(pred_frame, pd.DataFrame):

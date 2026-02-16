@@ -22,7 +22,12 @@ from sklearn.metrics import (
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
-from veldra.modeling.utils import split_for_early_stopping
+from veldra.modeling.utils import (
+    resolve_auto_num_leaves,
+    resolve_feature_weights,
+    resolve_ratio_params,
+    split_for_early_stopping,
+)
 from veldra.split import iter_cv_splits
 
 
@@ -107,6 +112,16 @@ def _train_single_booster(
         "seed": config.train.seed,
         **config.train.lgb_params,
     }
+    if config.train.top_k is not None:
+        # Use custom precision@k metric as the monitored metric when configured.
+        params["metric"] = "None"
+    resolved_leaves = resolve_auto_num_leaves(config)
+    if resolved_leaves is not None:
+        params["num_leaves"] = resolved_leaves
+    params.update(resolve_ratio_params(config, len(x_train)))
+    feature_weights = resolve_feature_weights(config, list(x_train.columns))
+    if feature_weights is not None:
+        params["feature_weights"] = feature_weights
     if config.train.class_weight is not None:
         neg_weight = float(config.train.class_weight.get("0", 1.0))
         pos_weight = float(config.train.class_weight.get("1", 1.0))
@@ -139,6 +154,9 @@ def _train_single_booster(
         callbacks.append(lgb.early_stopping(config.train.early_stopping_rounds, verbose=False))
     if evaluation_history is not None:
         callbacks.append(lgb.record_evaluation(evaluation_history))
+    feval = None
+    if config.train.top_k is not None:
+        feval = _make_precision_at_k_feval(int(config.train.top_k))
 
     return lgb.train(
         params=params,
@@ -146,6 +164,7 @@ def _train_single_booster(
         valid_sets=[valid_set],
         num_boost_round=config.train.num_boost_round,
         callbacks=callbacks,
+        feval=feval,
     )
 
 
@@ -168,6 +187,27 @@ def _binary_label_metrics(
         "precision": float(precision_score(y_true, label_pred, zero_division=0)),
         "recall": float(recall_score(y_true, label_pred, zero_division=0)),
     }
+
+
+def _precision_at_k(y_true: np.ndarray, p_pred: np.ndarray, k: int) -> float:
+    if len(y_true) == 0:
+        return 0.0
+    n_top = min(int(k), len(y_true))
+    if n_top <= 0:
+        return 0.0
+    order = np.argsort(-p_pred)
+    top_idx = order[:n_top]
+    return float(np.mean(y_true[top_idx]))
+
+
+def _make_precision_at_k_feval(k: int):
+    def _precision_at_k_feval(y_pred: np.ndarray, dataset: lgb.Dataset) -> tuple[str, float, bool]:
+        y_true = np.asarray(dataset.get_label(), dtype=int)
+        y_score = np.asarray(y_pred, dtype=float)
+        value = _precision_at_k(y_true, y_score, k)
+        return f"precision_at_{k}", value, True
+
+    return _precision_at_k_feval
 
 
 def _find_best_threshold_f1(y_true: np.ndarray, p_pred: np.ndarray) -> tuple[float, pd.DataFrame]:
@@ -331,11 +371,6 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         },
     }
 
-    metrics = {
-        "folds": fold_records,
-        "mean": mean_cal,
-        "mean_raw": mean_raw,
-    }
     feature_schema = {
         "feature_names": x.columns.tolist(),
         "target": config.data.target,
@@ -360,7 +395,17 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         threshold = {"policy": "fixed", "value": threshold_value}
 
     mean_label = _binary_label_metrics(y_true, oof_cal, float(threshold["value"]))
-    mean_cal = {**mean_cal, **mean_label}
+    mean_all = {**mean_cal, **mean_label}
+    if config.train.top_k is not None:
+        top_k = int(config.train.top_k)
+        top_key = f"precision_at_{top_k}"
+        mean_all[top_key] = _precision_at_k(y_true, oof_cal, top_k)
+        mean_raw[top_key] = _precision_at_k(y_true, oof_raw, top_k)
+    metrics = {
+        "folds": fold_records,
+        "mean": mean_all,
+        "mean_raw": mean_raw,
+    }
 
     return BinaryTrainingOutput(
         model_text=final_model.model_to_string(),

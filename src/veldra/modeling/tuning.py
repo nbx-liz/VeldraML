@@ -61,6 +61,7 @@ def _objective_spec(
         "f1": "maximize",
         "precision": "maximize",
         "recall": "maximize",
+        "precision_at_k": "maximize",
         "macro_f1": "maximize",
         "dr_std_error": "minimize",
         "dr_overlap_penalty": "minimize",
@@ -99,6 +100,10 @@ def _default_search_space(task_type: str, preset: str) -> dict[str, Any]:
             "min_data_in_leaf": {"type": "int", "low": 10, "high": 120},
             "bagging_fraction": {"type": "float", "low": 0.6, "high": 1.0},
             "bagging_freq": {"type": "int", "low": 1, "high": 7},
+            "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},
+            "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},
+            "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},
+            "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},
         }
     raise VeldraValidationError(f"Unsupported tuning preset '{preset}' for task '{task_type}'.")
 
@@ -262,12 +267,23 @@ def _score_for_task_with_components(
     if config.task.type == "frontier" and metric_name in {"pinball", "pinball_coverage_penalty"}:
         return _frontier_objective_from_metrics(config, metric_name, mean_metrics)
 
-    if metric_name not in mean_metrics:
+    resolved_metric_name = metric_name
+    if metric_name == "precision_at_k":
+        if config.train.top_k is None:
+            raise VeldraValidationError(
+                "train.top_k is required when tuning objective is 'precision_at_k'."
+            )
+        resolved_metric_name = f"precision_at_{int(config.train.top_k)}"
+
+    if resolved_metric_name not in mean_metrics:
         raise VeldraValidationError(
-            f"Tuning metric '{metric_name}' is missing from training output."
+            f"Tuning metric '{resolved_metric_name}' is missing from training output."
         )
-    objective_value = float(mean_metrics[metric_name])
-    return objective_value, {"objective_value": objective_value}
+    objective_value = float(mean_metrics[resolved_metric_name])
+    return objective_value, {
+        "objective_value": objective_value,
+        "objective_metric_name": resolved_metric_name,
+    }
 
 
 def _score_for_task(config: RunConfig, data: pd.DataFrame, metric_name: str) -> float:

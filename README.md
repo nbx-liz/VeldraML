@@ -644,10 +644,16 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `train` | `TrainConfig` | no | `<factory>` | - | - | Model training settings. |
 | `train.lgb_params` | `dict[str, Any]` | no | `{}` | - | - | LightGBM parameter overrides. |
 | `train.early_stopping_rounds` | `int | None` | no | `100` | - | - | Early stopping rounds. |
-| `train.early_stopping_validation_fraction` | `float` | no | `0.1` | - | - | train.early_stopping_validation_fraction setting. |
-| `train.num_boost_round` | `int` | no | `300` | - | - | train.num_boost_round setting. |
-| `train.auto_class_weight` | `bool` | no | `true` | - | - | train.auto_class_weight setting. |
-| `train.class_weight` | `dict[str, float] | None` | no | `None` | - | - | train.class_weight setting. |
+| `train.early_stopping_validation_fraction` | `float` | no | `0.1` | - | - | Train-row fraction used for ES validation split. |
+| `train.num_boost_round` | `int` | no | `300` | - | - | Maximum boosting iterations. |
+| `train.auto_class_weight` | `bool` | no | `true` | - | task.type in {binary,multiclass} | Auto class balancing for binary/multiclass tasks. |
+| `train.class_weight` | `dict[str, float] | None` | no | `None` | - | task.type in {binary,multiclass} | Manual class weights by label. |
+| `train.auto_num_leaves` | `bool` | no | `false` | - | - | Auto-resolve num_leaves from max_depth. |
+| `train.num_leaves_ratio` | `float` | no | `1.0` | - | - | Ratio applied to auto-resolved num_leaves. |
+| `train.min_data_in_leaf_ratio` | `float | None` | no | `None` | - | - | Ratio-based min_data_in_leaf override. |
+| `train.min_data_in_bin_ratio` | `float | None` | no | `None` | - | - | Ratio-based min_data_in_bin override. |
+| `train.feature_weights` | `dict[str, float] | None` | no | `None` | - | - | Feature weights map keyed by feature name. |
+| `train.top_k` | `int | None` | no | `None` | - | task.type=binary | Precision@k setting for binary task. |
 | `train.seed` | `int` | no | `42` | - | - | Training seed. |
 | `tuning` | `TuningConfig` | no | `<factory>` | - | - | Hyperparameter tuning settings. |
 | `tuning.enabled` | `bool` | no | `false` | - | - | Enable/disable tuning path. |
@@ -697,7 +703,7 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | task.type | allowed objectives | default |
 | --- | --- | --- |
 | regression | `rmse`, `mae`, `r2` | `rmse` |
-| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall` | `auc` |
+| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, `precision_at_k` | `auc` |
 | multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |
 | frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |
 
@@ -728,6 +734,10 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | tuning(non-frontier) | `coverage_target` forbidden; tolerance/penalty keep defaults. |
 | tuning(causal) | `tuning.objective` must come from causal objective set for selected method. |
 | tuning(non-causal) | `tuning.objective` must come from task set; causal knobs keep defaults. |
+| auto_num_leaves | requires ratio in `(0,1]`; forbids `lgb_params.num_leaves`. |
+| ratio leaf/bin | ratio fields require `0<value<1`; matching absolute `lgb_params` are forbidden. |
+| feature_weights | all values must be `>0`; unknown feature names are rejected at training time. |
+| top_k | binary-only, `>=1`; required when `tuning.objective=precision_at_k`. |
 
 ### Minimal Templates
 

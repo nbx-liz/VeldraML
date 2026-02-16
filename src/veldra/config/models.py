@@ -17,7 +17,16 @@ CausalDesign = Literal["panel", "repeated_cross_section"]
 
 _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
     "regression": {"rmse", "mae", "r2"},
-    "binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall"},
+    "binary": {
+        "auc",
+        "logloss",
+        "brier",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "precision_at_k",
+    },
     "multiclass": {"accuracy", "macro_f1", "logloss"},
     "frontier": {"pinball", "pinball_coverage_penalty"},
 }
@@ -77,6 +86,12 @@ class TrainConfig(BaseModel):
     num_boost_round: int = 300
     auto_class_weight: bool = True
     class_weight: dict[str, float] | None = None
+    auto_num_leaves: bool = False
+    num_leaves_ratio: float = 1.0
+    min_data_in_leaf_ratio: float | None = None
+    min_data_in_bin_ratio: float | None = None
+    feature_weights: dict[str, float] | None = None
+    top_k: int | None = None
     seed: int = 42
 
 
@@ -249,6 +264,52 @@ class RunConfig(BaseModel):
             )
         if self.train.early_stopping_rounds is not None and self.train.early_stopping_rounds < 1:
             raise ValueError("train.early_stopping_rounds must be >= 1 or None")
+        if self.train.auto_num_leaves:
+            if not (0.0 < self.train.num_leaves_ratio <= 1.0):
+                raise ValueError("train.num_leaves_ratio must satisfy 0 < value <= 1")
+            if "num_leaves" in self.train.lgb_params:
+                raise ValueError(
+                    "train.auto_num_leaves cannot be combined with train.lgb_params.num_leaves"
+                )
+        if self.train.min_data_in_leaf_ratio is not None:
+            if not (0.0 < self.train.min_data_in_leaf_ratio < 1.0):
+                raise ValueError(
+                    "train.min_data_in_leaf_ratio must satisfy 0 < value < 1 when set"
+                )
+            if "min_data_in_leaf" in self.train.lgb_params:
+                raise ValueError(
+                    "train.min_data_in_leaf_ratio cannot be combined with "
+                    "train.lgb_params.min_data_in_leaf"
+                )
+        if self.train.min_data_in_bin_ratio is not None:
+            if not (0.0 < self.train.min_data_in_bin_ratio < 1.0):
+                raise ValueError(
+                    "train.min_data_in_bin_ratio must satisfy 0 < value < 1 when set"
+                )
+            if "min_data_in_bin" in self.train.lgb_params:
+                raise ValueError(
+                    "train.min_data_in_bin_ratio cannot be combined with "
+                    "train.lgb_params.min_data_in_bin"
+                )
+        if self.train.feature_weights is not None:
+            for name, weight in self.train.feature_weights.items():
+                if weight <= 0:
+                    raise ValueError(
+                        f"train.feature_weights[{name!r}] must be > 0, got {weight}"
+                    )
+        if self.train.top_k is not None:
+            if self.task.type != "binary":
+                raise ValueError("train.top_k can only be set when task.type='binary'")
+            if self.train.top_k < 1:
+                raise ValueError("train.top_k must be >= 1")
+        if (
+            self.task.type == "binary"
+            and self.tuning.objective == "precision_at_k"
+            and self.train.top_k is None
+        ):
+            raise ValueError(
+                "train.top_k is required when tuning.objective='precision_at_k'"
+            )
 
         if self.train.class_weight is not None:
             if self.task.type not in {"binary", "multiclass"}:

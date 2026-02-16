@@ -140,6 +140,82 @@ def test_build_config_yaml_causal_target_search_space():
     assert "max_depth" not in space  # None values
 
 
+def test_build_config_yaml_phase25_8_fields() -> None:
+    yaml_str = _cb_build_config_yaml(
+        "binary",
+        "data/path.csv",
+        "target_col",
+        [],
+        [],
+        [],
+        "stratified",
+        5,
+        42,
+        None,
+        None,
+        "expanding",
+        None,
+        0,
+        0,
+        0.1,
+        63,
+        120,
+        6,
+        20,
+        40,
+        1.0,
+        1.0,
+        0,
+        0,
+        False,
+        "standard",
+        30,
+        None,
+        "artifacts",
+        False,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        t_auto_class_weight=True,
+        t_class_weight=None,
+        t_auto_num_leaves=True,
+        t_num_leaves_ratio=0.8,
+        t_min_leaf_ratio=0.02,
+        t_min_bin_ratio=0.005,
+        t_feature_weights='{"x1": 2.0}',
+        t_path_smooth=0.3,
+        t_cat_l2=8.0,
+        t_cat_smooth=11.0,
+        t_bagging_freq=3,
+        t_max_bin=511,
+        t_max_drop=12,
+        t_min_gain=0.05,
+        t_top_k=25,
+    )
+    cfg = yaml.safe_load(yaml_str)
+
+    assert cfg["train"]["auto_num_leaves"] is True
+    assert cfg["train"]["num_leaves_ratio"] == 0.8
+    assert cfg["train"]["min_data_in_leaf_ratio"] == 0.02
+    assert cfg["train"]["min_data_in_bin_ratio"] == 0.005
+    assert cfg["train"]["feature_weights"] == {"x1": 2.0}
+    assert cfg["train"]["top_k"] == 25
+    assert "num_leaves" not in cfg["train"]["lgb_params"]
+    assert cfg["train"]["lgb_params"]["path_smooth"] == 0.3
+    assert cfg["train"]["lgb_params"]["cat_l2"] == 8.0
+    assert cfg["train"]["lgb_params"]["cat_smooth"] == 11.0
+    assert cfg["train"]["lgb_params"]["bagging_freq"] == 3
+    assert cfg["train"]["lgb_params"]["max_bin"] == 511
+    assert cfg["train"]["lgb_params"]["max_drop"] == 12
+    assert cfg["train"]["lgb_params"]["min_gain_to_split"] == 0.05
+
+
 # --- Test Run Auto-Action ---
 
 

@@ -118,3 +118,20 @@ def test_frontier_tune_rejects_non_pinball_objective(tmp_path) -> None:
                 "tuning": {"enabled": True, "n_trials": 1, "objective": "auc"},
             }
         )
+
+
+def test_binary_precision_at_k_objective_requires_top_k(tmp_path) -> None:
+    frame = _binary_frame()
+    path = tmp_path / "bin.csv"
+    frame.to_csv(path, index=False)
+
+    with pytest.raises(VeldraValidationError, match="Invalid RunConfig"):
+        tune(
+            {
+                "config_version": 1,
+                "task": {"type": "binary"},
+                "data": {"path": str(path), "target": "target"},
+                "split": {"type": "stratified", "n_splits": 2, "seed": 1},
+                "tuning": {"enabled": True, "n_trials": 1, "objective": "precision_at_k"},
+            }
+        )

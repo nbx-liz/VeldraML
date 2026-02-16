@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 from sklearn.model_selection import ShuffleSplit, StratifiedShuffleSplit
 
@@ -73,3 +75,49 @@ def split_for_early_stopping(
     )
     train_idx, valid_idx = next(splitter.split(x))
     return x.iloc[train_idx], x.iloc[valid_idx], y.iloc[train_idx], y.iloc[valid_idx]
+
+
+def resolve_auto_num_leaves(config: RunConfig) -> int | None:
+    """Resolve auto num_leaves from max_depth and ratio when enabled."""
+    if not config.train.auto_num_leaves:
+        return None
+
+    max_depth_raw = config.train.lgb_params.get("max_depth", -1)
+    max_depth = int(max_depth_raw) if max_depth_raw is not None else -1
+    if max_depth < 0:
+        base_leaves = 131072
+    else:
+        base_leaves = 2**max_depth
+
+    resolved = int(math.ceil(float(base_leaves) * float(config.train.num_leaves_ratio)))
+    return max(8, min(131072, resolved))
+
+
+def resolve_ratio_params(config: RunConfig, n_rows: int) -> dict[str, int]:
+    """Resolve ratio-based LightGBM params into row-count based absolute values."""
+    resolved: dict[str, int] = {}
+    if config.train.min_data_in_leaf_ratio is not None:
+        resolved["min_data_in_leaf"] = max(
+            1,
+            int(math.ceil(n_rows * float(config.train.min_data_in_leaf_ratio))),
+        )
+    if config.train.min_data_in_bin_ratio is not None:
+        resolved["min_data_in_bin"] = max(
+            1,
+            int(math.ceil(n_rows * float(config.train.min_data_in_bin_ratio))),
+        )
+    return resolved
+
+
+def resolve_feature_weights(config: RunConfig, feature_names: list[str]) -> list[float] | None:
+    """Resolve feature-weight dict into LightGBM feature-order list."""
+    weights_map = config.train.feature_weights
+    if not weights_map:
+        return None
+
+    unknown = sorted(set(weights_map.keys()) - set(feature_names))
+    if unknown:
+        raise VeldraValidationError(
+            f"train.feature_weights contains unknown features: {unknown}"
+        )
+    return [float(weights_map.get(name, 1.0)) for name in feature_names]
