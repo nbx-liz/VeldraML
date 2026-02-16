@@ -40,6 +40,16 @@ DESCRIPTION: dict[str, str] = {
     "train": "Model training settings.",
     "train.lgb_params": "LightGBM parameter overrides.",
     "train.early_stopping_rounds": "Early stopping rounds.",
+    "train.early_stopping_validation_fraction": "Train-row fraction used for ES validation split.",
+    "train.num_boost_round": "Maximum boosting iterations.",
+    "train.auto_class_weight": "Auto class balancing for binary/multiclass tasks.",
+    "train.class_weight": "Manual class weights by label.",
+    "train.auto_num_leaves": "Auto-resolve num_leaves from max_depth.",
+    "train.num_leaves_ratio": "Ratio applied to auto-resolved num_leaves.",
+    "train.min_data_in_leaf_ratio": "Ratio-based min_data_in_leaf override.",
+    "train.min_data_in_bin_ratio": "Ratio-based min_data_in_bin override.",
+    "train.feature_weights": "Feature weights map keyed by feature name.",
+    "train.top_k": "Precision@k setting for binary task.",
     "train.seed": "Training seed.",
     "tuning": "Hyperparameter tuning settings.",
     "tuning.enabled": "Enable/disable tuning path.",
@@ -95,6 +105,9 @@ SCOPE: dict[str, str] = {
     "postprocess.threshold_optimization": "task.type=binary",
     "postprocess.threshold_optimization.enabled": "task.type=binary",
     "postprocess.threshold_optimization.objective": "task.type=binary",
+    "train.class_weight": "task.type in {binary,multiclass}",
+    "train.auto_class_weight": "task.type in {binary,multiclass}",
+    "train.top_k": "task.type=binary",
     "tuning.coverage_target": "task.type=frontier",
     "tuning.coverage_tolerance": "task.type=frontier",
     "tuning.penalty_weight": "task.type=frontier",
@@ -222,7 +235,8 @@ def _objective_matrix() -> str:
         "| task.type | allowed objectives | default |\n"
         "| --- | --- | --- |\n"
         "| regression | `rmse`, `mae`, `r2` | `rmse` |\n"
-        "| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall` | `auc` |\n"
+        "| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, "
+        "`precision_at_k` | `auc` |\n"
         "| multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |\n"
         "| frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |\n"
     )
@@ -264,6 +278,10 @@ def _cross_constraints() -> str:
 | tuning(non-frontier) | `coverage_target` forbidden; tolerance/penalty keep defaults. |
 | tuning(causal) | `tuning.objective` must come from causal objective set for selected method. |
 | tuning(non-causal) | `tuning.objective` must come from task set; causal knobs keep defaults. |
+| auto_num_leaves | requires ratio in `(0,1]`; forbids `lgb_params.num_leaves`. |
+| ratio leaf/bin | ratio fields require `0<value<1`; matching absolute `lgb_params` are forbidden. |
+| feature_weights | all values must be `>0`; unknown feature names are rejected at training time. |
+| top_k | binary-only, `>=1`; required when `tuning.objective=precision_at_k`. |
 
 """
 

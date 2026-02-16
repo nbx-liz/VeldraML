@@ -913,3 +913,36 @@
 - `uv run ruff check`（今回変更ファイル対象）を通過。
 - 追加/更新テスト群（config train fields, class weight, auto split, ES split, training history, migrate, GUI, DR internal）を通過。
 - `uv run pytest tests -x --tb=short` で **468 passed, 0 failed** を確認。
+
+### 2026-02-16（作業/PR: phase25.8-lightgbm-params-topk-feature-weights）
+**背景**
+- Phase25.8 の設計案を実装へ落とし込み、LightGBMパラメータ拡張を RunConfig 駆動で統合する必要があった。
+- binary tuning objective の一部（accuracy/f1/precision/recall）が学習出力 `metrics.mean` と不整合で失敗する既知ギャップを同時に解消する必要があった。
+
+**変更内容**
+- `src/veldra/config/models.py` に `auto_num_leaves / num_leaves_ratio / min_data_in_leaf_ratio / min_data_in_bin_ratio / feature_weights / top_k` を追加し、競合・範囲・task制約・`precision_at_k` objective 連動バリデーションを実装。
+- `src/veldra/modeling/utils.py` に `resolve_auto_num_leaves / resolve_ratio_params / resolve_feature_weights` を追加し、`regression/binary/multiclass/frontier` の全学習器へ適用。
+- `src/veldra/modeling/binary.py` に `precision_at_k`（feval）を追加し、`top_k` 指定時の ES を custom metric 優先化。`metrics.mean` に threshold系指標と `precision_at_{k}` を追加。
+- `src/veldra/modeling/tuning.py` で `precision_at_k` objective を `precision_at_{top_k}` へ解決するロジックを追加。standard search space を `lambda_l1/lambda_l2/path_smooth/min_gain_to_split` まで拡張。
+- `src/veldra/api/runner.py` の binary evaluate に `precision_at_{k}` 返却を追加（`top_k` 設定時のみ）。
+- `src/veldra/gui/pages/config_page.py` / `src/veldra/gui/app.py` を拡張し、Phase25.8 GUI項目・YAMLマッピング・Top K 表示制御・binary tune objective 候補更新を実装。
+- `scripts/generate_runconfig_reference.py` と `README.md` の RunConfig Reference を更新。
+- テスト追加/更新:
+  - 新規: `tests/test_lgb_param_resolution.py`, `tests/test_top_k_precision.py`
+  - 更新: `tests/test_config_train_fields.py`, `tests/test_tuning_internal.py`, `tests/test_tune_objective_selection.py`, `tests/test_tune_validation.py`, `tests/test_binary_evaluate_metrics.py`, GUI関連テスト
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: `train.top_k` 指定時は ES 監視を `precision_at_{k}` 優先で実行する（`metric=None` + `feval`）。
+  - 理由: top-k最適化の運用意図と学習停止基準を一致させるため。
+  - 影響範囲: binary training / tuning / training history
+- Decision: provisional（暫定）
+  - 内容: `train.feature_weights` の未知特徴量キーは無視せずエラーにする。
+  - 理由: 設定typoの静かな混入を防ぎ、再現性を維持するため。
+  - 影響範囲: modeling utils / 全task学習器 / config運用
+
+**検証結果**
+- `uv run ruff check .` を通過。
+- 追加/更新テスト群（config/lgb resolver/top_k/tuning/evaluate/gui）を通過。
+- `uv run pytest -q -m "not gui"`: **385 passed**
+- `uv run pytest -q -m "gui"`: **100 passed**

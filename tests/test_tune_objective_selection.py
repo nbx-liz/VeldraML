@@ -84,6 +84,19 @@ def test_tune_supports_task_constrained_objective_selection(tmp_path) -> None:
     )
     assert binary.metadata["metric_name"] == "logloss"
 
+    binary_topk = tune(
+        {
+            "config_version": 1,
+            "task": {"type": "binary"},
+            "data": {"path": str(bin_path), "target": "target"},
+            "split": {"type": "stratified", "n_splits": 2, "seed": 1},
+            "train": {"top_k": 5},
+            "tuning": {"enabled": True, "n_trials": 1, "objective": "precision_at_k"},
+            "export": {"artifact_dir": str(tmp_path / "artifacts")},
+        }
+    )
+    assert binary_topk.metadata["metric_name"] == "precision_at_k"
+
     multiclass = tune(
         {
             "config_version": 1,

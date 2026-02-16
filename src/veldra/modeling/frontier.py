@@ -12,7 +12,12 @@ from sklearn.metrics import mean_absolute_error
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
-from veldra.modeling.utils import split_for_early_stopping
+from veldra.modeling.utils import (
+    resolve_auto_num_leaves,
+    resolve_feature_weights,
+    resolve_ratio_params,
+    split_for_early_stopping,
+)
 from veldra.split import iter_cv_splits
 
 
@@ -74,6 +79,13 @@ def _train_single_booster(
         "seed": config.train.seed,
         **config.train.lgb_params,
     }
+    resolved_leaves = resolve_auto_num_leaves(config)
+    if resolved_leaves is not None:
+        params["num_leaves"] = resolved_leaves
+    params.update(resolve_ratio_params(config, len(x_train)))
+    feature_weights = resolve_feature_weights(config, list(x_train.columns))
+    if feature_weights is not None:
+        params["feature_weights"] = feature_weights
 
     categorical = [col for col in config.data.categorical if col in x_train.columns]
     train_set = lgb.Dataset(

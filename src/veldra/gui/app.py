@@ -510,6 +510,19 @@ def create_app() -> dash.Dash:
         Input("cfg-tune-ff-max", "value"),
         Input("cfg-train-auto-class-weight", "value"),
         Input("cfg-train-class-weight", "value"),
+        Input("cfg-train-auto-num-leaves", "value"),
+        Input("cfg-train-num-leaves-ratio", "value"),
+        Input("cfg-train-min-leaf-ratio", "value"),
+        Input("cfg-train-min-bin-ratio", "value"),
+        Input("cfg-train-feature-weights", "value"),
+        Input("cfg-train-path-smooth", "value"),
+        Input("cfg-train-cat-l2", "value"),
+        Input("cfg-train-cat-smooth", "value"),
+        Input("cfg-train-bagging-freq", "value"),
+        Input("cfg-train-max-bin", "value"),
+        Input("cfg-train-max-drop", "value"),
+        Input("cfg-train-min-gain", "value"),
+        Input("cfg-train-top-k", "value"),
         prevent_initial_call=True,
     )(_cb_build_config_yaml)
 
@@ -543,6 +556,11 @@ def create_app() -> dash.Dash:
         Input("cfg-task-type", "value"),
         Input("cfg-train-auto-class-weight", "value"),
     )(_cb_update_class_weight_visibility)
+
+    app.callback(
+        Output("cfg-container-top-k", "style"),
+        Input("cfg-task-type", "value"),
+    )(_cb_update_top_k_visibility)
 
     # --- Run Page Auto-Action ---
     app.callback(
@@ -953,7 +971,16 @@ def _cb_detect_run_action(yaml_text: str) -> tuple[str, str, str]:
 def _cb_update_tune_objectives(task_type: str) -> list[dict]:
     objectives = {
         "regression": ["rmse", "mae", "r2"],
-        "binary": ["auc", "logloss", "accuracy", "f1", "precision", "recall"],
+        "binary": [
+            "auc",
+            "logloss",
+            "brier",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "precision_at_k",
+        ],
         "multiclass": ["accuracy", "macro_f1", "logloss"],
         "frontier": ["pinball", "pinball_coverage_penalty"],
     }
@@ -1061,6 +1088,19 @@ def _cb_build_config_yaml(
     tune_ff_max,
     t_auto_class_weight=None,
     t_class_weight=None,
+    t_auto_num_leaves=None,
+    t_num_leaves_ratio=None,
+    t_min_leaf_ratio=None,
+    t_min_bin_ratio=None,
+    t_feature_weights=None,
+    t_path_smooth=None,
+    t_cat_l2=None,
+    t_cat_smooth=None,
+    t_bagging_freq=None,
+    t_max_bin=None,
+    t_max_drop=None,
+    t_min_gain=None,
+    t_top_k=None,
 ) -> str:
     cfg = {
         "config_version": 1,
@@ -1153,6 +1193,47 @@ def _cb_build_config_yaml(
                 # Keep GUI YAML generation resilient; validation runs separately.
                 pass
 
+    auto_num_leaves = bool(t_auto_num_leaves)
+    cfg["train"]["auto_num_leaves"] = auto_num_leaves
+    if t_num_leaves_ratio is not None and t_num_leaves_ratio != "":
+        cfg["train"]["num_leaves_ratio"] = float(t_num_leaves_ratio)
+    if t_min_leaf_ratio is not None and t_min_leaf_ratio != "":
+        cfg["train"]["min_data_in_leaf_ratio"] = float(t_min_leaf_ratio)
+    if t_min_bin_ratio is not None and t_min_bin_ratio != "":
+        cfg["train"]["min_data_in_bin_ratio"] = float(t_min_bin_ratio)
+    if isinstance(t_feature_weights, str) and t_feature_weights.strip():
+        try:
+            parsed_feature_weights = yaml.safe_load(t_feature_weights)
+            if isinstance(parsed_feature_weights, dict):
+                cfg["train"]["feature_weights"] = {
+                    str(k): float(v) for k, v in parsed_feature_weights.items()
+                }
+        except Exception:
+            # Keep GUI YAML generation resilient; validation runs separately.
+            pass
+    if task_type == "binary" and t_top_k is not None and t_top_k != "":
+        cfg["train"]["top_k"] = int(t_top_k)
+
+    if auto_num_leaves:
+        cfg["train"]["lgb_params"].pop("num_leaves", None)
+
+    advanced_lgb_params = {
+        "path_smooth": t_path_smooth,
+        "cat_l2": t_cat_l2,
+        "cat_smooth": t_cat_smooth,
+        "bagging_freq": t_bagging_freq,
+        "max_bin": t_max_bin,
+        "max_drop": t_max_drop,
+        "min_gain_to_split": t_min_gain,
+    }
+    for key, value in advanced_lgb_params.items():
+        if value is None or value == "":
+            continue
+        if key in {"bagging_freq", "max_bin", "max_drop"}:
+            cfg["train"]["lgb_params"][key] = int(value)
+        else:
+            cfg["train"]["lgb_params"][key] = float(value)
+
     return yaml.dump(cfg, sort_keys=False)
 
 
@@ -1164,6 +1245,10 @@ def _cb_update_class_weight_visibility(
         return {"display": "none"}, {"display": "none"}
     show_manual = not bool(auto_class_weight_enabled)
     return {"display": "block"}, {"display": "block" if show_manual else "none"}
+
+
+def _cb_update_top_k_visibility(task_type: str | None) -> dict[str, str]:
+    return {"display": "block"} if task_type == "binary" else {"display": "none"}
 
 
 def _cb_update_run_launch_state(

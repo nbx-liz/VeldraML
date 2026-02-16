@@ -59,3 +59,24 @@ def test_binary_evaluate_validation_errors(tmp_path, binary_frame) -> None:
             },
             frame,
         )
+
+
+def test_binary_evaluate_returns_precision_at_k_when_configured(tmp_path, binary_frame) -> None:
+    frame = binary_frame(rows=90, seed=88, coef1=1.3, coef2=-0.6, noise=0.35)
+    data_path = tmp_path / "train_binary_topk.csv"
+    frame.to_csv(data_path, index=False)
+    run = fit(
+        {
+            "config_version": 1,
+            "task": {"type": "binary"},
+            "data": {"path": str(data_path), "target": "target"},
+            "split": {"type": "stratified", "n_splits": 3, "seed": 21},
+            "train": {"top_k": 10},
+            "postprocess": {"calibration": "platt"},
+            "export": {"artifact_dir": str(tmp_path / "artifacts")},
+        }
+    )
+    artifact = Artifact.load(run.artifact_path)
+    result = evaluate(artifact, frame)
+
+    assert "precision_at_10" in result.metrics

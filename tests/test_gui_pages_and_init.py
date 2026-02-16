@@ -98,6 +98,13 @@ def test_config_builder_ux_layout_contracts() -> None:
     export_preset = _find_component_by_id(builder, "cfg-export-dir-preset")
     ts_warning = _find_component_by_id(builder, "cfg-timeseries-time-warning")
     ts_col = _find_component_by_id(builder, "cfg-split-time-col")
+    top_k_container = _find_component_by_id(builder, "cfg-container-top-k")
+    top_k_input = _find_component_by_id(builder, "cfg-train-top-k")
+    auto_num_leaves = _find_component_by_id(builder, "cfg-train-auto-num-leaves")
+    num_leaves_ratio = _find_component_by_id(builder, "cfg-train-num-leaves-ratio")
+    min_leaf_ratio = _find_component_by_id(builder, "cfg-train-min-leaf-ratio")
+    min_bin_ratio = _find_component_by_id(builder, "cfg-train-min-bin-ratio")
+    feature_weights = _find_component_by_id(builder, "cfg-train-feature-weights")
 
     assert run_now_btn is not None
     assert run_now_btn.color == "primary"
@@ -108,5 +115,12 @@ def test_config_builder_ux_layout_contracts() -> None:
     assert ts_warning is not None
     assert ts_col is not None
     assert ts_col.placeholder == "Select required time column..."
+    assert top_k_container is not None
+    assert top_k_input is not None
+    assert auto_num_leaves is not None
+    assert num_leaves_ratio is not None
+    assert min_leaf_ratio is not None
+    assert min_bin_ratio is not None
+    assert feature_weights is not None
     assert "Categorical Columns (Optional override)" not in str(data_settings_card)
     assert "ID Columns (Optional - for Group K-Fold)" not in str(split_strategy_card)

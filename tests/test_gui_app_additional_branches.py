@@ -192,7 +192,12 @@ def test_config_related_callbacks_branches(monkeypatch, tmp_path: Path) -> None:
     assert "CAUSAL" in app_module._cb_detect_run_action("task:\n  causal_method: dr\n")[1]
 
     assert app_module._cb_update_tune_objectives("regression")
+    binary_opts = app_module._cb_update_tune_objectives("binary")
+    assert any(opt["value"] == "brier" for opt in binary_opts)
+    assert any(opt["value"] == "precision_at_k" for opt in binary_opts)
     assert app_module._cb_update_tune_objectives("unknown") == []
+    assert app_module._cb_update_top_k_visibility("binary") == {"display": "block"}
+    assert app_module._cb_update_top_k_visibility("regression") == {"display": "none"}
 
 
 def test_populate_builder_options_modern_and_legacy(monkeypatch) -> None:

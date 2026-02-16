@@ -916,6 +916,27 @@ Tune trial 内で `precision_at_k` が objective に指定された場合:
 - 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
 - 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
+### Decision（provisional）
+- `train.top_k` が指定された場合、Early Stopping は `precision_at_{k}` を優先監視する（`metric=None + feval`）。
+- `train.feature_weights` は未知特徴量キーを許容しない。未知キーは学習前に `VeldraValidationError` とする。
+
+### 実装結果（2026-02-16）
+- `TrainConfig` に `auto_num_leaves / num_leaves_ratio / min_data_in_leaf_ratio / min_data_in_bin_ratio / feature_weights / top_k` を追加し、cross-field validation を実装。
+- `modeling/utils.py` に `resolve_auto_num_leaves / resolve_ratio_params / resolve_feature_weights` を追加し、全4 task 学習器へ適用。
+- binary 学習に `precision_at_k` を実装し、`fit / tune / evaluate / training_history` で利用可能にした。
+- binary `metrics.mean` に `accuracy/f1/precision/recall` を含めるよう修正し、既存 tuning objective の実行不整合を解消。
+- GUI Builder に Phase25.8 パラメータ入力を追加し、`auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
+- `_cb_update_tune_objectives("binary")` に `brier` と `precision_at_k` を追加。
+- `scripts/generate_runconfig_reference.py` を更新し、README RunConfig Reference を再生成。
+
+### 検証結果（2026-02-16）
+- `uv run ruff check .` : passed
+- `uv run pytest -q tests/test_config_train_fields.py tests/test_lgb_param_resolution.py tests/test_top_k_precision.py` : **19 passed**
+- `uv run pytest -q tests/test_tuning_internal.py tests/test_tune_objective_selection.py tests/test_tune_validation.py tests/test_binary_evaluate_metrics.py` : **17 passed**
+- `uv run pytest -q tests/test_gui_app_callbacks_config.py tests/test_gui_pages_and_init.py tests/test_gui_new_layout.py tests/test_gui_app_additional_branches.py` : **28 passed**
+- `uv run pytest -q -m "not gui"` : **385 passed**
+- `uv run pytest -q -m "gui"` : **100 passed**
+
 ## 12.9 Phase25.9: LightGBMの機能強化のテスト計画
 ### 目的
 - 目的変数の自動判定機能のテスト
