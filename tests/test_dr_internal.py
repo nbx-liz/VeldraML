@@ -22,6 +22,29 @@ def _config(*, task_type: str = "regression", with_causal: bool = True) -> RunCo
     return RunConfig.model_validate(payload)
 
 
+def _dr_config_with_panel_unit_id() -> RunConfig:
+    cfg = RunConfig.model_validate(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": "dummy.csv", "target": "outcome"},
+            "split": {"type": "kfold", "n_splits": 2, "seed": 7},
+            "causal": {
+                "method": "dr_did",
+                "treatment_col": "treatment",
+                "design": "panel",
+                "time_col": "time",
+                "post_col": "post",
+                "unit_id_col": "unit_id",
+            },
+            "export": {"artifact_dir": "artifacts"},
+        }
+    )
+    assert cfg.causal is not None
+    object.__setattr__(cfg.causal, "method", "dr")
+    return cfg
+
+
 def _base_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -319,4 +342,130 @@ def test_run_dr_estimation_falls_back_to_kfold_without_group(monkeypatch) -> Non
 
     result = dr_mod.run_dr_estimation(cfg, frame)
     assert result.method == "dr"
+    assert called.get("kfold") is True
+
+
+def test_run_dr_estimation_uses_groupkfold_from_unit_id_col(monkeypatch) -> None:
+    cfg = _dr_config_with_panel_unit_id()
+    frame = _base_frame().copy()
+    frame["unit_id"] = [0, 0, 1, 1, 2, 2]
+    frame["time"] = [0, 1, 0, 1, 0, 1]
+    frame["post"] = [0, 1, 0, 1, 0, 1]
+    x = frame[["x1", "x2"]].reset_index(drop=True)
+    y = frame["outcome"].reset_index(drop=True)
+    t = frame["treatment"].reset_index(drop=True)
+    called: dict[str, bool] = {}
+
+    class _FakeGroupKFold:
+        def __init__(self, n_splits: int) -> None:
+            _ = n_splits
+            called["group"] = True
+
+        def split(self, x_data, groups=None):  # type: ignore[no-untyped-def]
+            _ = x_data, groups
+            return [
+                (np.array([0, 1, 2], dtype=int), np.array([3, 4, 5], dtype=int)),
+                (np.array([3, 4, 5], dtype=int), np.array([0, 1, 2], dtype=int)),
+            ]
+
+    class _FakeKFold:
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args, kwargs
+            called["kfold"] = True
+
+        def split(self, x_data):  # type: ignore[no-untyped-def]
+            _ = x_data
+            return []
+
+    class _FakeCalibrator:
+        def predict_proba(self, values):  # type: ignore[no-untyped-def]
+            p = np.clip(values.flatten(), 1e-3, 1 - 1e-3)
+            return np.column_stack([1.0 - p, p])
+
+        def predict(self, values):  # type: ignore[no-untyped-def]
+            return np.clip(values, 1e-3, 1 - 1e-3)
+
+    monkeypatch.setattr(dr_mod, "_feature_frame", lambda *_args, **_kwargs: (x, y, t))
+    monkeypatch.setattr(dr_mod, "_fit_propensity_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        dr_mod,
+        "_predict_propensity",
+        lambda _model, x_part: np.full(len(x_part), 0.6, dtype=float),
+    )
+    monkeypatch.setattr(dr_mod, "_fit_outcome_with_fallback", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        dr_mod,
+        "_predict_outcome",
+        lambda _model, x_part: np.full(len(x_part), 1.0, dtype=float),
+    )
+    monkeypatch.setattr(dr_mod, "_fit_calibrator", lambda *_args, **_kwargs: _FakeCalibrator())
+    monkeypatch.setattr(dr_mod, "GroupKFold", _FakeGroupKFold)
+    monkeypatch.setattr(dr_mod, "KFold", _FakeKFold)
+
+    result = dr_mod.run_dr_estimation(cfg, frame)
+    assert result.method == "dr"
+    assert called.get("group") is True
+    assert called.get("kfold") is not True
+
+
+def test_run_dr_estimation_unit_id_single_group_falls_back_to_kfold(monkeypatch) -> None:
+    cfg = _dr_config_with_panel_unit_id()
+    frame = _base_frame().copy()
+    frame["unit_id"] = [7, 7, 7, 7, 7, 7]
+    frame["time"] = [0, 1, 0, 1, 0, 1]
+    frame["post"] = [0, 1, 0, 1, 0, 1]
+    x = frame[["x1", "x2"]].reset_index(drop=True)
+    y = frame["outcome"].reset_index(drop=True)
+    t = frame["treatment"].reset_index(drop=True)
+    called: dict[str, bool] = {}
+
+    class _FakeGroupKFold:
+        def __init__(self, n_splits: int) -> None:
+            _ = n_splits
+            called["group"] = True
+
+        def split(self, x_data, groups=None):  # type: ignore[no-untyped-def]
+            _ = x_data, groups
+            return []
+
+    class _FakeKFold:
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args, kwargs
+            called["kfold"] = True
+
+        def split(self, x_data):  # type: ignore[no-untyped-def]
+            _ = x_data
+            return [
+                (np.array([0, 1, 2], dtype=int), np.array([3, 4, 5], dtype=int)),
+                (np.array([3, 4, 5], dtype=int), np.array([0, 1, 2], dtype=int)),
+            ]
+
+    class _FakeCalibrator:
+        def predict_proba(self, values):  # type: ignore[no-untyped-def]
+            p = np.clip(values.flatten(), 1e-3, 1 - 1e-3)
+            return np.column_stack([1.0 - p, p])
+
+        def predict(self, values):  # type: ignore[no-untyped-def]
+            return np.clip(values, 1e-3, 1 - 1e-3)
+
+    monkeypatch.setattr(dr_mod, "_feature_frame", lambda *_args, **_kwargs: (x, y, t))
+    monkeypatch.setattr(dr_mod, "_fit_propensity_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        dr_mod,
+        "_predict_propensity",
+        lambda _model, x_part: np.full(len(x_part), 0.6, dtype=float),
+    )
+    monkeypatch.setattr(dr_mod, "_fit_outcome_with_fallback", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        dr_mod,
+        "_predict_outcome",
+        lambda _model, x_part: np.full(len(x_part), 1.0, dtype=float),
+    )
+    monkeypatch.setattr(dr_mod, "_fit_calibrator", lambda *_args, **_kwargs: _FakeCalibrator())
+    monkeypatch.setattr(dr_mod, "GroupKFold", _FakeGroupKFold)
+    monkeypatch.setattr(dr_mod, "KFold", _FakeKFold)
+
+    result = dr_mod.run_dr_estimation(cfg, frame)
+    assert result.method == "dr"
+    assert called.get("group") is not True
     assert called.get("kfold") is True

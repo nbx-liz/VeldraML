@@ -106,3 +106,54 @@ def test_cv_training_uses_es_split_not_oof_valid(monkeypatch) -> None:
     regression.train_regression_with_cv(cfg, frame)
     for es_valid, fold_valid in zip(es_valid_indices[:3], fold_valids):
         assert set(es_valid).isdisjoint(set(fold_valid.tolist()))
+
+
+def test_training_history_records_best_iteration_contract(monkeypatch) -> None:
+    cfg = _regression_config()
+    cfg.train.num_boost_round = 20
+
+    frame = pd.DataFrame(
+        {
+            "x1": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "x2": [1.0, 1.2, 1.1, 0.9, 1.3, 1.4],
+            "target": [2.0, 2.2, 2.4, 2.6, 2.8, 3.0],
+        }
+    )
+    splits = [
+        (np.array([0, 1, 2], dtype=int), np.array([3, 4, 5], dtype=int)),
+        (np.array([3, 4, 5], dtype=int), np.array([0, 1, 2], dtype=int)),
+    ]
+    monkeypatch.setattr(regression, "iter_cv_splits", lambda *_args, **_kwargs: splits)
+    monkeypatch.setattr(
+        regression,
+        "split_for_early_stopping",
+        lambda x, y, _cfg: (x, x, y, y),
+    )
+
+    captured_rounds: list[int] = []
+
+    class _FakeBooster:
+        best_iteration = 4
+
+        def current_iteration(self) -> int:
+            return 9
+
+        def predict(self, x, num_iteration=None):  # type: ignore[no-untyped-def]
+            _ = num_iteration
+            return np.full(len(x), 2.5, dtype=float)
+
+        def model_to_string(self) -> str:
+            return "fake"
+
+    def _fake_train(**kwargs):  # type: ignore[no-untyped-def]
+        captured_rounds.append(int(kwargs["num_boost_round"]))
+        return _FakeBooster()
+
+    monkeypatch.setattr(regression.lgb, "train", _fake_train)
+
+    output = regression.train_regression_with_cv(cfg, frame)
+
+    assert captured_rounds == [20, 20, 20]
+    final_history = output.training_history["final_model"]
+    assert final_history["best_iteration"] == 4
+    assert final_history["best_iteration"] < cfg.train.num_boost_round
