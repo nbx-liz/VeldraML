@@ -946,3 +946,72 @@
 - 追加/更新テスト群（config/lgb resolver/top_k/tuning/evaluate/gui）を通過。
 - `uv run pytest -q -m "not gui"`: **385 passed**
 - `uv run pytest -q -m "gui"`: **100 passed**
+
+### 2026-02-16（作業/PR: phase25.9-test-gap-closure-plan-lock）
+**背景**
+- Phase25.7/25.8 の LightGBM 強化は主要機能が実装済みだが、学習ループ適用・search space・objective override・Artifact整合性の一部が未検証だった。
+- 実装前に、テスト主導で不足ギャップを閉じる方針を文書として固定する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `12.9 Phase25.9` を更新し、実装方針を「不足テスト + 必要時の最小修正」に固定。
+- 早期停止 `best_iteration` 検証を「実学習依存」から「monkeypatch 契約検証優先」へ更新。
+- Causal GroupKFold 項目を `tests/test_auto_split_selection.py` 前提から `tests/test_dr_internal.py` の `unit_id_col` 経路検証へ更新。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase25.9 は不足テスト追加で差分が出た場合に、同フェーズ内で最小本体修正まで実施する。
+  - 理由: テスト未整備のままギャップを先送りせず、回帰防止と安定運用を同時に満たすため。
+  - 影響範囲: modeling / tests / docs
+- Decision: provisional（暫定）
+  - 内容: Causal GroupKFold は既存 `group_col` 分岐に加え、`unit_id_col` 経路を `tests/test_dr_internal.py` で追加検証する。
+  - 理由: 既存カバレッジ重複を避けつつ、未検証分岐のみを効率よく補完するため。
+  - 影響範囲: causal/dr tests / docs
+
+**検証結果**
+- 文書更新段階のため、コード検証は未実施（次ステップで実装・検証予定）。
+
+### 2026-02-16（作業/PR: phase25.9-lightgbm-test-gap-closure）
+**背景**
+- Phase25.9 で特定した不足ギャップ（学習ループ適用、search space、objective override、Artifact整合、best_iteration契約、causal unit_id経路）をテストで閉じる必要があった。
+- 追加テストで不足が見つかった場合は、同フェーズ内で最小修正まで行う方針（provisional）を確定させる必要があった。
+
+**変更内容**
+- 新規テストを追加:
+  - `tests/test_auto_num_leaves.py`
+  - `tests/test_ratio_params.py`
+  - `tests/test_feature_weights.py`
+  - `tests/test_tuning_search_space.py`
+  - `tests/test_objective_override.py`
+  - `tests/test_artifact_param_roundtrip.py`
+- 既存テストを拡張:
+  - `tests/test_num_boost_round.py`（`num_boost_round` 既定値300の後方互換）
+  - `tests/test_early_stopping_validation.py`（monkeypatchで `best_iteration` 記録契約を検証）
+  - `tests/test_dr_internal.py`（`unit_id_col` 経路の GroupKFold 選択と KFold フォールバック）
+- 本体の最小修正を実施:
+  - `src/veldra/modeling/regression.py`
+  - `src/veldra/modeling/binary.py`
+  - `src/veldra/modeling/multiclass.py`
+  - `src/veldra/modeling/frontier.py`
+  - `feature_weights` 指定時に `params["feature_pre_filter"] = False` を付与し、学習パラメータ適用契約を固定。
+- `DESIGN_BLUEPRINT.md` の Phase25.9 を更新し、best_iteration/causal項目を実装方針に一致させた。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase25.9 は不足テスト追加で差分が出た場合に、同フェーズ内で最小本体修正まで実施する。
+  - 理由: 回帰防止と品質ゲートを同一フェーズで閉じるため。
+  - 影響範囲: modeling / tests / docs
+- Decision: confirmed（確定）
+  - 内容: Causal GroupKFold は `group_col` 既存検証を維持しつつ、`unit_id_col` 経路を `tests/test_dr_internal.py` で補完する。
+  - 理由: 重複を増やさず未検証分岐のみを効率的に埋めるため。
+  - 影響範囲: causal/dr tests / docs
+- Decision: confirmed（確定）
+  - 内容: 早期停止 `best_iteration` は実学習依存ではなく、monkeypatch による契約検証を主方式とする。
+  - 理由: CI環境差による不安定性を回避し、履歴記録契約を安定的に担保するため。
+  - 影響範囲: early stopping tests
+
+**検証結果**
+- `uv run pytest -q tests/test_auto_num_leaves.py tests/test_ratio_params.py tests/test_feature_weights.py` : **6 passed**
+- `uv run pytest -q tests/test_tuning_search_space.py tests/test_objective_override.py tests/test_artifact_param_roundtrip.py` : **4 passed**
+- `uv run pytest -q tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py` : **26 passed**
+- `uv run ruff check .` : passed
+- `uv run pytest -q -m "not gui"` : **399 passed, 100 deselected**

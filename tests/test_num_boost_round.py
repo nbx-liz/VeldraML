@@ -87,3 +87,23 @@ def test_num_boost_round_for_frontier(monkeypatch) -> None:
     monkeypatch.setattr(frontier.lgb, "train", _fake_train)
     frontier._train_single_booster(x, y, x, y, cfg)
     assert captured["rounds"] == 21
+
+
+def test_num_boost_round_default_is_300_for_regression(monkeypatch) -> None:
+    cfg = RunConfig.model_validate(
+        {
+            "config_version": 1,
+            "task": {"type": "regression"},
+            "data": {"path": "dummy.csv", "target": "target"},
+        }
+    )
+    x, y = _xy()
+    captured: dict = {}
+
+    def _fake_train(**kwargs):  # type: ignore[no-untyped-def]
+        captured["rounds"] = kwargs["num_boost_round"]
+        return _DummyBooster()
+
+    monkeypatch.setattr(regression.lgb, "train", _fake_train)
+    regression._train_single_booster(x, y, x, y, cfg)
+    assert captured["rounds"] == 300

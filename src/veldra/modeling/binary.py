@@ -122,6 +122,7 @@ def _train_single_booster(
     feature_weights = resolve_feature_weights(config, list(x_train.columns))
     if feature_weights is not None:
         params["feature_weights"] = feature_weights
+        params["feature_pre_filter"] = False
     if config.train.class_weight is not None:
         neg_weight = float(config.train.class_weight.get("0", 1.0))
         pos_weight = float(config.train.class_weight.get("1", 1.0))

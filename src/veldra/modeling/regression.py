@@ -82,6 +82,7 @@ def _train_single_booster(
     feature_weights = resolve_feature_weights(config, list(x_train.columns))
     if feature_weights is not None:
         params["feature_weights"] = feature_weights
+        params["feature_pre_filter"] = False
 
     train_set = lgb.Dataset(
         x_train,

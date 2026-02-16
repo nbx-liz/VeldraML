@@ -942,6 +942,11 @@ Tune trial 内で `precision_at_k` が objective に指定された場合:
 ### 目的
 Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テストでカバーされていないギャップを特定し、不足テストを追加する。
 
+### 実装方針（2026-02-16 更新）
+- 不足テスト追加で差分が見つかった場合、Phase25.9 内で最小本体修正まで行う。
+- Causal の GroupKFold は既存 `split.group_col` 検証に加えて、`causal.unit_id_col` 経路を追加検証する。
+- `best_iteration` は実学習依存を避け、monkeypatch による安定した契約検証を優先する。
+
 ### 既存テストカバレッジ分析（2026-02-16 時点）
 
 #### Phase25.7: カバー済み
@@ -969,8 +974,8 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 | **Tuning search space 拡充** | — | **不在**: standard プリセットに `lambda_l1`/`lambda_l2`/`path_smooth`/`min_gain_to_split` が含まれるか未検証 |
 | **新パラメーター Artifact roundtrip** | — | **不在**: 新パラメーター付き Artifact → predict 成功の検証なし |
 | **num_boost_round 既定値後方互換** | — | **不在**: 未指定時に既定値300で動作するか未検証 |
-| **早期停止の best_iteration 動作** | — | **不在**: 実際の学習で `best_iteration < num_boost_round` となるか未検証 |
-| **Causal での GroupKFold 自動適用** | — | **不在**: `test_auto_split_selection.py` は binary/regression のみ |
+| **早期停止の best_iteration 動作** | — | **不在**: monkeypatch で `best_iteration` 記録契約（`< num_boost_round`）を固定検証していない |
+| **Causal での GroupKFold 自動適用** | `test_dr_internal.py` | **一部充足**: `split.group_col` は検証済み、`causal.unit_id_col` 経路が未検証 |
 | **目的関数ユーザー上書き** | — | **不在**: `lgb_params.objective` 指定時の優先動作が未検証 |
 
 ---
@@ -1011,12 +1016,12 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 
 #### 7. 早期停止 `best_iteration` 動作テスト
 - **ファイル**: `tests/test_early_stopping_validation.py`（既存に追加）
-- 小データで実際に fit を実行し、`early_stopping_rounds` 設定時に `training_history` の `best_iteration` が `num_boost_round` 以下であることを検証する。
+- `lgb.train()` を monkeypatch し、`best_iteration < num_boost_round` の Booster を返したときに `training_history.final_model.best_iteration` へ正しく記録されることを検証する。
 
 #### 8. Causal での GroupKFold 自動適用テスト
-- **ファイル**: `tests/test_auto_split_selection.py`（既存に追加）
-- `causal.method="dr"` + `split.group_col` 指定時に `GroupKFold` が自動的に使用されることを monkeypatch で検証する。
-- `group_col` 未指定時に `KFold` にフォールバックすることを検証する。
+- **ファイル**: `tests/test_dr_internal.py`（既存に追加）
+- 既存の `split.group_col` 分岐テストを維持しつつ、`split.group_col` 未指定でも `causal.unit_id_col`（panel想定）経路で `GroupKFold` が選択されることを monkeypatch で検証する。
+- `unit_id_col` が実質1群など GroupKFold が成立しない場合に `KFold` フォールバックが維持されることを検証する。
 
 #### 9. 目的関数ユーザー上書きテスト
 - **ファイル**: `tests/test_objective_override.py`（新規）
@@ -1037,19 +1042,19 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 | `tests/test_objective_override.py` | 新規 | 2 |
 | `tests/test_num_boost_round.py` | 既存追加 | +1 |
 | `tests/test_early_stopping_validation.py` | 既存追加 | +1 |
-| `tests/test_auto_split_selection.py` | 既存追加 | +2 |
+| `tests/test_dr_internal.py` | 既存追加 | +2 |
 
 ### 検証コマンド
 - `uv run pytest tests/test_auto_num_leaves.py tests/test_ratio_params.py tests/test_feature_weights.py -v`
 - `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py tests/test_objective_override.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_auto_split_selection.py -v`
+- `uv run pytest tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py -v`
 - `uv run pytest tests -x --tb=short`
 
 ### 完了条件
 - Phase25.8 の学習ループ適用テスト（auto_num_leaves / ratio_params / feature_weights）が追加され、`resolve_*` 関数のユニットテストだけでなく実際の学習器への適用が検証されること。
 - Tuning search space の standard プリセットに追加されたパラメーターの存在が検証されること。
 - 新パラメーター付き Artifact の save → load ラウンドトリップが成功すること。
-- `num_boost_round` 既定値後方互換、早期停止の `best_iteration` 動作、Causal GroupKFold 自動適用、目的関数ユーザー上書きのテストが追加されること。
+- `num_boost_round` 既定値後方互換、`best_iteration` 記録契約（monkeypatch）、Causal GroupKFold 自動適用（`unit_id_col` 経路を含む）、目的関数ユーザー上書きのテストが追加されること。
 - 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
 ## 13 Phase 26: ジョブキュー強化 & 優先度システム

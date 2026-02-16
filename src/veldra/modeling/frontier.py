@@ -86,6 +86,7 @@ def _train_single_booster(
     feature_weights = resolve_feature_weights(config, list(x_train.columns))
     if feature_weights is not None:
         params["feature_weights"] = feature_weights
+        params["feature_pre_filter"] = False
 
     categorical = [col for col in config.data.categorical if col in x_train.columns]
     train_set = lgb.Dataset(
