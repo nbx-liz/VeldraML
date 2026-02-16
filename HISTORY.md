@@ -1015,3 +1015,49 @@
 - `uv run pytest -q tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py` : **26 passed**
 - `uv run ruff check .` : passed
 - `uv run pytest -q -m "not gui"` : **399 passed, 100 deselected**
+
+### 2026-02-16（作業/PR: phase26-ux-ui-implementation）
+**背景**
+- Phase26（UX/UI 改善）を 4画面構成から 6+2画面構成へ再編し、初学者導線の完遂率を上げる必要があった。
+- 実装着手前に、ロールアウト方式・Export 範囲・`/config` 互換方針を固定する必要があった。
+
+**変更内容**
+- 画面と導線を拡張: `Target / Validation / Train / Runs / Compare` を新設し、`/config` は互換メッセージ付きで `/target` 導線へ集約。
+- `workflow-state` を拡張し、`_build_config_from_state` / `_state_from_config_payload` を導入して state 駆動で RunConfig YAML を生成。
+- `services.py` に `GuardRailChecker`、`infer_task_type`、Artifact 比較ロジック、Excel/HTML レポート生成を追加。
+- `job_store.py` に `get_jobs` / `delete_jobs` を追加し、Runs ページの複数選択操作（削除/比較/複製）を実装。
+- Results を拡張し、Learning Curves タブ・Config タブ・Export ジョブ（`export_excel` / `export_html_report`）を追加。
+- テスト追加/更新:
+  - 新規: `tests/test_gui_target_page.py`, `tests/test_gui_validation_page.py`, `tests/test_gui_train_page.py`, `tests/test_gui_runs_page.py`, `tests/test_gui_compare_page.py`, `tests/test_gui_guardrail.py`, `tests/test_gui_workflow_state.py`, `tests/test_gui_config_from_state.py`, `tests/test_gui_stepper.py`, `tests/test_gui_export_excel.py`, `tests/test_gui_export_html.py`, `tests/test_gui_results_enhanced.py`, `tests/test_gui_data_enhanced.py`, `tests/test_gui_e2e_flow.py`
+  - 更新: `tests/test_gui_pages_logic.py`, `tests/test_gui_app_additional_branches.py`
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26 は Stage A/B/C の 3 段階分割で実装し、各 Stage ごとに GUI テストを通して段階収束する。
+  - 理由: 変更範囲が `app.py`/ページ/非同期ジョブに跨るため、単発導入より回帰抑止がしやすい。
+  - 影響範囲: gui app/pages/services/tests/docs
+- Decision: provisional（暫定）
+  - 内容: Phase26 の Export は Excel + HTML までを必須実装とし、SHAP は `export-report` extra 導入時のみ有効化する。
+  - 理由: GUI 基盤改修と同時に必須依存を増やし過ぎず、機能を段階導入するため。
+  - 影響範囲: gui services/job actions/dependencies
+- Decision: provisional（暫定）
+  - 内容: `/config` 導線は 1 フェーズ互換を維持し、画面導線は `/target` へ誘導する。
+  - 理由: 既存テストと運用導線の急激な破壊を避けつつ、新導線へ移行するため。
+  - 影響範囲: gui routing/tests/user workflow
+- Decision: confirmed（確定）
+  - 内容: Stage A/B/C の 3 段階分割方針で Phase26 実装を完了し、各 Stage の機能（画面分割/ガードレール/Results拡張/Runs比較/Export）を同一PRで収束させる。
+  - 理由: 段階ごとの回帰確認を維持しつつ、利用者導線を中途半端な状態で残さないため。
+  - 影響範囲: gui app/pages/services/components/tests/docs
+- Decision: confirmed（確定）
+  - 内容: Export は Excel + HTML を GUI 非同期ジョブとして実装し、SHAP は依存未導入時にシートへ「未生成」表示でフォールバックする。
+  - 理由: 依存差異でジョブを失敗させず、レポート導線を常時利用可能にするため。
+  - 影響範囲: gui services/results page/job queue/dependencies
+- Decision: confirmed（確定）
+  - 内容: `/config` は互換経路として維持し、新規操作導線は `Data -> Target -> Validation -> Train -> Run -> Results` を正規経路とする。
+  - 理由: 既存テスト契約と新UX導線を両立するため。
+  - 影響範囲: gui routing/stepper/sidebar/tests
+
+**検証結果**
+- `uv run ruff check src/veldra/gui tests` を通過。
+- `uv run pytest -q -m "gui"`: **126 passed, 399 deselected**
+- `uv run pytest tests -x --tb=short`: **525 passed, 0 failed**

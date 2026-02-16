@@ -152,3 +152,55 @@ def plot_comparison_bar(
 
     fig.update_layout(barmode="group", title="Metric Comparison")
     return _apply_theme(fig)
+
+
+def plot_learning_curves(training_history: dict[str, object]) -> go.Figure:
+    """Plot fold-level learning curves from training_history payload."""
+    fig = go.Figure()
+    if not isinstance(training_history, dict):
+        return _apply_theme(fig)
+
+    folds = training_history.get("folds")
+    if not isinstance(folds, list):
+        return _apply_theme(fig)
+
+    mean_curve: dict[int, list[float]] = {}
+    for idx, fold in enumerate(folds):
+        if not isinstance(fold, dict):
+            continue
+        metrics = fold.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        first_metric = next(iter(metrics.values()), None)
+        if not isinstance(first_metric, list):
+            continue
+        xs = list(range(1, len(first_metric) + 1))
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=first_metric,
+                mode="lines",
+                line={"width": 1},
+                opacity=0.35,
+                name=f"fold_{idx + 1}",
+                showlegend=False,
+            )
+        )
+        for x, y in zip(xs, first_metric):
+            mean_curve.setdefault(x, []).append(float(y))
+
+    if mean_curve:
+        xs = sorted(mean_curve.keys())
+        ys = [sum(mean_curve[x]) / len(mean_curve[x]) for x in xs]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line={"width": 3, "color": COLORS["secondary"]},
+                name="mean",
+            )
+        )
+
+    fig.update_layout(title="Learning Curves", xaxis_title="Iteration", yaxis_title="Metric")
+    return _apply_theme(fig)

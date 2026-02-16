@@ -78,10 +78,12 @@ Implemented:
   - `causal.method=dr` with `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
   - `causal.method=dr_did` with `task.type=regression|binary` (2-period panel/repeated cross-section)
 - Dash GUI adapter MVP:
-  - Config editor + validation
-  - Config migrate workflow (preview/diff/apply)
+  - Guided workflow: `Data -> Target -> Validation -> Train -> Run -> Results`
+  - Runs history + Compare view
   - Run console async queue (`fit/evaluate/tune/simulate/export/estimate_dr`)
-  - Artifact explorer + re-evaluate
+  - Results explorer with learning curves and config view
+  - Async report export (`export_excel`, `export_html_report`)
+  - `/config` route is retained as compatibility entrypoint and redirects users to new flow
 - Config migration utility:
   - `veldra config migrate --input <path> [--output <path>]`
   - strict validation + non-destructive output (`*.migrated.yaml`)
@@ -120,6 +122,15 @@ Optional GUI dependencies:
 ```bash
 uv sync --extra gui
 ```
+
+Optional report-export extra:
+
+```bash
+uv sync --extra export-report
+```
+
+Note: `export-report` is a placeholder extra for environment-specific report dependencies
+(e.g. SHAP). Install those packages manually when your NumPy/runtime combination is compatible.
 
 ### Verify installation
 
@@ -597,7 +608,10 @@ GUI run behavior:
 - `/run` enqueues jobs asynchronously and keeps history in SQLite.
 - queued jobs can be canceled immediately.
 - running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
-- `/config` includes migrate preview/diff and file migrate apply (overwrite is rejected).
+- Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.
+- `/runs` provides history, clone, compare, and migrate actions.
+- `/compare` shows metric/config diffs for two artifacts.
+- `/config` remains available for compatibility and forwards users to `/target`.
 - default run config path is `configs/gui_run.yaml` (auto-created if missing).
 
 Windows quick start (launch server + open browser):

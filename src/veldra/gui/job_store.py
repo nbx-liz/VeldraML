@@ -284,3 +284,27 @@ class GuiJobStore:
                     (status, safe_limit),
                 ).fetchall()
         return [_row_to_record(row) for row in rows]
+
+    def get_jobs(self, job_ids: list[str]) -> list[GuiJobRecord]:
+        ids = [str(job_id) for job_id in job_ids if str(job_id).strip()]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM jobs WHERE job_id IN ({placeholders}) ORDER BY created_at_utc DESC",
+                tuple(ids),
+            ).fetchall()
+        return [_row_to_record(row) for row in rows]
+
+    def delete_jobs(self, job_ids: list[str]) -> int:
+        ids = [str(job_id) for job_id in job_ids if str(job_id).strip()]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM jobs WHERE job_id IN ({placeholders})",
+                tuple(ids),
+            )
+            return int(cur.rowcount or 0)

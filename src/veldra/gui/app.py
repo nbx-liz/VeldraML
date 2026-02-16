@@ -22,19 +22,37 @@ from dash import Input, Output, State, callback_context, dcc, html
 from veldra.gui.components.charts import (
     plot_comparison_bar,
     plot_feature_importance,
+    plot_learning_curves,
     plot_metrics_bar,
 )
+from veldra.gui.components.guardrail import render_guardrails
 from veldra.gui.components.kpi_cards import kpi_card
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.toast import make_toast, toast_container
-from veldra.gui.pages import config_page, data_page, results_page, run_page
+from veldra.gui.components.yaml_diff import render_yaml_diff
+from veldra.gui.pages import (
+    compare_page,
+    data_page,
+    results_page,
+    run_page,
+    runs_page,
+    target_page,
+    train_page,
+    validation_page,
+)
 from veldra.gui.services import (
+    GuardRailChecker,
     cancel_run_job,
+    compare_artifacts,
+    delete_run_jobs,
     get_run_job,
+    infer_task_type,
     inspect_data,
     list_artifacts,
     list_run_jobs,
+    list_run_jobs_filtered,
     load_config_yaml,
+    load_job_config_yaml,
     migrate_config_file_via_gui,
     migrate_config_from_yaml,
     normalize_gui_error,
@@ -163,6 +181,221 @@ def _cleanup_gui_system_temp_files(max_age_seconds: int | None = None) -> None:
             continue
 
 
+def _default_split_for_task(
+    task_type: str | None, *, causal_enabled: bool = False
+) -> dict[str, Any]:
+    if causal_enabled:
+        return {"type": "group", "n_splits": 5, "seed": 42, "group_col": None}
+    task = (task_type or "regression").strip().lower()
+    split_type = "stratified" if task in {"binary", "multiclass"} else "kfold"
+    return {"type": split_type, "n_splits": 5, "seed": 42}
+
+
+def _default_train_config() -> dict[str, Any]:
+    return {
+        "learning_rate": 0.05,
+        "num_boost_round": 300,
+        "num_leaves": 31,
+        "max_depth": -1,
+        "min_child_samples": 20,
+        "subsample": 1.0,
+        "colsample_bytree": 1.0,
+        "reg_alpha": 0.0,
+        "reg_lambda": 0.0,
+        "early_stopping_rounds": 100,
+        "auto_class_weight": True,
+        "class_weight_text": "",
+    }
+
+
+def _default_tuning_config() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "preset": "standard",
+        "n_trials": 30,
+        "objective": None,
+    }
+
+
+def _ensure_workflow_state_defaults(state: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(state or {})
+    task_type = str(current.get("task_type") or current.get("task", "regression"))
+    causal_cfg = current.get("causal_config") or {}
+    current.setdefault("task_type", task_type)
+    current.setdefault("exclude_cols", [])
+    current.setdefault("causal_config", causal_cfg)
+    if not isinstance(current.get("split_config"), dict) or not current.get("split_config"):
+        current["split_config"] = _default_split_for_task(task_type)
+    if not isinstance(current.get("train_config"), dict) or not current.get("train_config"):
+        current["train_config"] = _default_train_config()
+    if not isinstance(current.get("tuning_config"), dict) or not current.get("tuning_config"):
+        current["tuning_config"] = _default_tuning_config()
+    current.setdefault("artifact_dir", "artifacts")
+    current.setdefault("config_yaml", "")
+    current.setdefault("last_job_succeeded", False)
+    return current
+
+
+def _build_config_payload_from_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    task_type = str(current.get("task_type") or "regression")
+    data_path = current.get("data_path")
+    target_col = current.get("target_col")
+    exclude_cols = list(current.get("exclude_cols") or [])
+    split_cfg = dict(current.get("split_config") or {})
+    train_cfg = dict(current.get("train_config") or {})
+    tuning_cfg = dict(current.get("tuning_config") or {})
+    causal_cfg = dict(current.get("causal_config") or {})
+
+    payload: dict[str, Any] = {
+        "config_version": 1,
+        "task": {"type": task_type},
+        "data": {
+            "path": data_path or "",
+            "target": target_col or "",
+        },
+        "split": {
+            "type": split_cfg.get("type", "kfold"),
+            "n_splits": int(split_cfg.get("n_splits", 5)),
+            "seed": int(split_cfg.get("seed", 42)),
+        },
+        "train": {
+            "num_boost_round": int(train_cfg.get("num_boost_round", 300)),
+            "lgb_params": {
+                "learning_rate": float(train_cfg.get("learning_rate", 0.05)),
+                "num_leaves": int(train_cfg.get("num_leaves", 31)),
+                "max_depth": int(train_cfg.get("max_depth", -1)),
+                "min_child_samples": int(train_cfg.get("min_child_samples", 20)),
+                "subsample": float(train_cfg.get("subsample", 1.0)),
+                "colsample_bytree": float(train_cfg.get("colsample_bytree", 1.0)),
+                "reg_alpha": float(train_cfg.get("reg_alpha", 0.0)),
+                "reg_lambda": float(train_cfg.get("reg_lambda", 0.0)),
+            },
+            "early_stopping_rounds": int(train_cfg.get("early_stopping_rounds", 100)),
+            "seed": 42,
+        },
+        "tuning": {
+            "enabled": bool(tuning_cfg.get("enabled", False)),
+        },
+        "export": {
+            "artifact_dir": current.get("artifact_dir") or "artifacts",
+        },
+    }
+
+    if exclude_cols:
+        payload["data"]["drop_cols"] = exclude_cols
+
+    if task_type in {"binary", "multiclass"}:
+        payload["train"]["auto_class_weight"] = bool(train_cfg.get("auto_class_weight", True))
+        class_weight_text = str(train_cfg.get("class_weight_text") or "").strip()
+        if not payload["train"]["auto_class_weight"] and class_weight_text:
+            try:
+                parsed = yaml.safe_load(class_weight_text)
+                if isinstance(parsed, dict):
+                    payload["train"]["class_weight"] = {str(k): float(v) for k, v in parsed.items()}
+            except Exception:
+                pass
+
+    split_type = str(split_cfg.get("type", "kfold"))
+    if split_type == "group" and split_cfg.get("group_col"):
+        payload["split"]["group_col"] = split_cfg.get("group_col")
+    if split_type == "timeseries":
+        if split_cfg.get("time_col"):
+            payload["split"]["time_col"] = split_cfg.get("time_col")
+        payload["split"]["timeseries_mode"] = split_cfg.get("timeseries_mode", "expanding")
+        if split_cfg.get("test_size"):
+            payload["split"]["test_size"] = int(split_cfg.get("test_size"))
+        payload["split"]["gap"] = int(split_cfg.get("gap", 0))
+        payload["split"]["embargo"] = int(split_cfg.get("embargo", 0))
+
+    if payload["tuning"]["enabled"]:
+        payload["tuning"]["preset"] = tuning_cfg.get("preset", "standard")
+        payload["tuning"]["n_trials"] = int(tuning_cfg.get("n_trials", 30))
+        objective = tuning_cfg.get("objective")
+        if objective:
+            payload["tuning"]["objective"] = objective
+
+    if causal_cfg.get("enabled") and causal_cfg.get("method"):
+        payload["task"]["causal_method"] = causal_cfg.get("method")
+        causal_payload: dict[str, Any] = {}
+        if causal_cfg.get("treatment_col"):
+            causal_payload["treatment_col"] = causal_cfg.get("treatment_col")
+        if causal_cfg.get("unit_id_col"):
+            causal_payload["unit_id_col"] = causal_cfg.get("unit_id_col")
+        if causal_payload:
+            payload["causal"] = causal_payload
+    return payload
+
+
+def _build_config_from_state(state: dict[str, Any] | None) -> str:
+    payload = _build_config_payload_from_state(state)
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+
+def _state_from_config_payload(
+    payload: dict[str, Any], base_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    state = _ensure_workflow_state_defaults(base_state)
+    task = payload.get("task") or {}
+    data_obj = payload.get("data") or {}
+    split_obj = payload.get("split") or {}
+    train_obj = payload.get("train") or {}
+    lgb_obj = train_obj.get("lgb_params") or {}
+    tuning_obj = payload.get("tuning") or {}
+    causal_obj = payload.get("causal") or {}
+
+    state["task_type"] = task.get("type", state.get("task_type", "regression"))
+    if isinstance(data_obj.get("path"), str):
+        state["data_path"] = data_obj.get("path")
+    if isinstance(data_obj.get("target"), str):
+        state["target_col"] = data_obj.get("target")
+    state["exclude_cols"] = list(data_obj.get("drop_cols") or [])
+    state["split_config"] = {
+        "type": split_obj.get("type", "kfold"),
+        "n_splits": int(split_obj.get("n_splits", 5)),
+        "seed": int(split_obj.get("seed", 42)),
+        "group_col": split_obj.get("group_col"),
+        "time_col": split_obj.get("time_col"),
+        "timeseries_mode": split_obj.get("timeseries_mode", "expanding"),
+        "test_size": split_obj.get("test_size"),
+        "gap": int(split_obj.get("gap", 0)) if split_obj.get("gap") is not None else 0,
+        "embargo": int(split_obj.get("embargo", 0)) if split_obj.get("embargo") is not None else 0,
+    }
+    state["train_config"] = {
+        "learning_rate": float(lgb_obj.get("learning_rate", 0.05)),
+        "num_boost_round": int(train_obj.get("num_boost_round", 300)),
+        "num_leaves": int(lgb_obj.get("num_leaves", 31)),
+        "max_depth": int(lgb_obj.get("max_depth", -1)),
+        "min_child_samples": int(lgb_obj.get("min_child_samples", 20)),
+        "subsample": float(lgb_obj.get("subsample", 1.0)),
+        "colsample_bytree": float(lgb_obj.get("colsample_bytree", 1.0)),
+        "reg_alpha": float(lgb_obj.get("reg_alpha", 0.0)),
+        "reg_lambda": float(lgb_obj.get("reg_lambda", 0.0)),
+        "early_stopping_rounds": int(train_obj.get("early_stopping_rounds", 100)),
+        "auto_class_weight": bool(train_obj.get("auto_class_weight", True)),
+        "class_weight_text": (
+            yaml.safe_dump(train_obj.get("class_weight"), sort_keys=False).strip()
+            if train_obj.get("class_weight")
+            else ""
+        ),
+    }
+    state["tuning_config"] = {
+        "enabled": bool(tuning_obj.get("enabled", False)),
+        "preset": tuning_obj.get("preset", "standard"),
+        "n_trials": int(tuning_obj.get("n_trials", 30)),
+        "objective": tuning_obj.get("objective"),
+    }
+    state["artifact_dir"] = str((payload.get("export") or {}).get("artifact_dir", "artifacts"))
+    state["causal_config"] = {
+        "enabled": bool(task.get("causal_method")),
+        "method": task.get("causal_method"),
+        "treatment_col": causal_obj.get("treatment_col"),
+        "unit_id_col": causal_obj.get("unit_id_col"),
+    }
+    state["config_yaml"] = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    return state
+
+
 def _sidebar() -> html.Div:
     return html.Div(
         [
@@ -180,8 +413,20 @@ def _sidebar() -> html.Div:
                         className="nav-link",
                     ),
                     dbc.NavLink(
-                        [html.I(className="bi bi-gear me-2"), "Config"],
-                        href="/config",
+                        [html.I(className="bi bi-bullseye me-2"), "Target"],
+                        href="/target",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-scissors me-2"), "Validation"],
+                        href="/validation",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-sliders me-2"), "Train"],
+                        href="/train",
                         active="exact",
                         className="nav-link",
                     ),
@@ -197,6 +442,19 @@ def _sidebar() -> html.Div:
                         active="exact",
                         className="nav-link",
                     ),
+                    html.Hr(className="w-100 my-2"),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-clock-history me-2"), "Runs"],
+                        href="/runs",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-shuffle me-2"), "Compare"],
+                        href="/compare",
+                        active="exact",
+                        className="nav-link",
+                    ),
                 ],
                 vertical=True,
                 pills=True,
@@ -207,34 +465,47 @@ def _sidebar() -> html.Div:
     )
 
 
-def _stepper_bar(pathname: str) -> html.Div:
+def _stepper_bar(pathname: str, state: dict[str, Any] | None = None) -> html.Div:
     steps = [
         {"label": "Data", "path": "/data"},
-        {"label": "Config", "path": "/config"},
+        {"label": "Target", "path": "/target"},
+        {"label": "Validation", "path": "/validation"},
+        {"label": "Train", "path": "/train"},
         {"label": "Run", "path": "/run"},
         {"label": "Results", "path": "/results"},
     ]
 
-    step_elems = []
-    current_idx = -1
+    normalized_state = _ensure_workflow_state_defaults(state)
+    completed_map = {
+        "/data": bool(normalized_state.get("data_path")),
+        "/target": bool(normalized_state.get("target_col"))
+        and bool(normalized_state.get("task_type")),
+        "/validation": bool(normalized_state.get("split_config")),
+        "/train": bool(normalized_state.get("train_config")),
+        "/run": bool(normalized_state.get("last_job_succeeded")),
+        "/results": bool(normalized_state.get("last_run_artifact")),
+    }
 
-    # Find current step index
+    step_elems = []
+    current_idx = 0
+    normalized_path = "/target" if pathname == "/config" else (pathname or "/data")
     for i, step in enumerate(steps):
-        if pathname and step["path"] in pathname:
+        if step["path"] == normalized_path or normalized_path.startswith(step["path"]):
             current_idx = i
             break
-    if current_idx == -1 and pathname == "/":  # Default to data
-        current_idx = 0
 
     for i, step in enumerate(steps):
         status_class = ""
         icon = str(i + 1)
+        is_completed = bool(completed_map.get(step["path"])) or i < current_idx
 
-        if i < current_idx:
+        if is_completed:
             status_class = "completed"
             icon = "✓"
-        elif i == current_idx:
+        if i == current_idx:
             status_class = "active"
+            if is_completed:
+                icon = "✓"
 
         step_content = html.Div(
             [html.Div(icon, className="step-circle"), html.Span(step["label"])],
@@ -244,9 +515,12 @@ def _stepper_bar(pathname: str) -> html.Div:
             dcc.Link(step_content, href=step["path"], style={"textDecoration": "none"})
         )
 
-        # Add connector line if not last item
         if i < len(steps) - 1:
-            connector_color = "var(--success)" if i < current_idx else "rgba(148, 163, 184, 0.1)"
+            connector_color = (
+                "var(--success)"
+                if (is_completed or i < current_idx)
+                else "rgba(148, 163, 184, 0.1)"
+            )
             step_elems.append(
                 html.Div(
                     style={
@@ -291,11 +565,33 @@ def render_page(pathname: str, state: dict | None = None) -> html.Div:
     if pathname == "/data" or pathname == "/":
         return data_page.layout()
     if pathname == "/config":
-        return config_page.layout()
+        return html.Div(
+            [
+                dbc.Alert(
+                    (
+                        "The /config route is kept for compatibility. "
+                        "Please use Target/Validation/Train."
+                    ),
+                    color="info",
+                    className="mb-3",
+                ),
+                target_page.layout(state),
+            ]
+        )
+    if pathname == "/target":
+        return target_page.layout(state)
+    if pathname == "/validation":
+        return validation_page.layout(state)
+    if pathname == "/train":
+        return train_page.layout(state)
     if pathname == "/run":
         return run_page.layout(state)
     if pathname == "/results":
         return results_page.layout()
+    if pathname == "/runs":
+        return runs_page.layout()
+    if pathname == "/compare":
+        return compare_page.layout()
     return data_page.layout()
 
 
@@ -377,7 +673,7 @@ def create_app() -> dash.Dash:
         State("workflow-state", "data"),
     )
     def _render_page(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
-        return render_page(pathname, state), _stepper_bar(pathname or "/")
+        return render_page(pathname, state), _stepper_bar(pathname or "/", state)
 
     # --- Data Page Callbacks ---
     app.callback(
@@ -562,6 +858,140 @@ def create_app() -> dash.Dash:
         Input("cfg-task-type", "value"),
     )(_cb_update_top_k_visibility)
 
+    # --- Phase26 Target / Validation / Train callbacks ---
+    app.callback(
+        Output("target-data-path", "value"),
+        Output("target-col-select", "options"),
+        Output("target-col-select", "value"),
+        Output("target-exclude-cols", "options"),
+        Output("target-exclude-cols", "value"),
+        Output("target-treatment-col", "options"),
+        Output("target-unit-id-col", "options"),
+        Output("target-task-type", "value"),
+        Output("target-task-hint", "children"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_target_page)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("target-col-select", "value"),
+        Input("target-task-type", "value"),
+        Input("target-exclude-cols", "value"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+        Input("target-treatment-col", "value"),
+        Input("target-unit-id-col", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_target_state)
+
+    app.callback(
+        Output("target-guardrail-container", "children"),
+        Input("target-col-select", "value"),
+        Input("target-task-type", "value"),
+        Input("target-exclude-cols", "value"),
+        State("workflow-state", "data"),
+    )(_cb_target_guardrails)
+
+    app.callback(
+        Output("validation-group-col", "options"),
+        Output("validation-time-col", "options"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_validation_options)
+
+    app.callback(
+        Output("validation-group-container", "style"),
+        Output("validation-timeseries-container", "style"),
+        Input("validation-split-type", "value"),
+    )(_cb_update_split_options)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("validation-split-type", "value"),
+        Input("validation-n-splits", "value"),
+        Input("validation-seed", "value"),
+        Input("validation-group-col", "value"),
+        Input("validation-time-col", "value"),
+        Input("validation-ts-mode", "value"),
+        Input("validation-test-size", "value"),
+        Input("validation-gap", "value"),
+        Input("validation-embargo", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_validation_state)
+
+    app.callback(
+        Output("validation-guardrail-container", "children"),
+        Input("validation-split-type", "value"),
+        Input("validation-n-splits", "value"),
+        Input("validation-group-col", "value"),
+        Input("validation-time-col", "value"),
+        State("workflow-state", "data"),
+    )(_cb_validation_guardrails)
+
+    app.callback(
+        Output("train-tune-objective", "options"),
+        Input("workflow-state", "data"),
+    )(_cb_update_train_tune_objectives)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("train-learning-rate", "value"),
+        Input("train-num-boost-round", "value"),
+        Input("train-num-leaves", "value"),
+        Input("train-max-depth", "value"),
+        Input("train-min-child", "value"),
+        Input("train-early-stopping", "value"),
+        Input("train-auto-class-weight", "value"),
+        Input("train-class-weight", "value"),
+        Input("train-tune-enabled", "value"),
+        Input("train-tune-preset", "value"),
+        Input("train-tune-trials", "value"),
+        Input("train-tune-objective", "value"),
+        Input("train-artifact-dir", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_train_state)
+
+    app.callback(
+        Output("train-config-yaml-preview", "value"),
+        Output("train-summary-container", "children"),
+        Input("workflow-state", "data"),
+    )(_cb_update_train_yaml_preview)
+
+    app.callback(
+        Output("train-config-yaml-preview", "value", allow_duplicate=True),
+        Output("train-config-validate-result", "children"),
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("train-config-load-btn", "n_clicks"),
+        Input("train-config-save-btn", "n_clicks"),
+        Input("train-config-validate-btn", "n_clicks"),
+        Input("train-config-yaml-import-btn", "n_clicks"),
+        State("train-config-yaml-preview", "value"),
+        State("train-config-file-path", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_train_yaml_actions)
+
+    app.callback(
+        Output("train-guardrail-container", "children"),
+        Input("train-learning-rate", "value"),
+        Input("train-num-boost-round", "value"),
+        State("workflow-state", "data"),
+    )(_cb_train_guardrails)
+
+    app.callback(
+        Output("run-data-path", "value", allow_duplicate=True),
+        Output("run-config-yaml", "value", allow_duplicate=True),
+        Output("run-config-path", "value", allow_duplicate=True),
+        Output("run-artifact-path", "value", allow_duplicate=True),
+        Input("url", "pathname"),
+        Input("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_sync_run_inputs_from_state)
+
     # --- Run Page Auto-Action ---
     app.callback(
         Output("run-action", "value"),
@@ -669,6 +1099,78 @@ def create_app() -> dash.Dash:
         State("artifact-eval-data-path", "value"),
         prevent_initial_call=True,
     )(_cb_evaluate_artifact_action)
+
+    app.callback(
+        Output("result-learning-curve", "figure"),
+        Output("result-config-view", "children"),
+        Output("result-overview-summary", "children"),
+        Input("artifact-select", "value"),
+    )(_cb_update_result_extras)
+
+    app.callback(
+        Output("result-export-status", "children"),
+        Input("result-export-excel-btn", "n_clicks"),
+        Input("result-export-html-btn", "n_clicks"),
+        State("artifact-select", "value"),
+        prevent_initial_call=True,
+    )(_cb_result_export_actions)
+
+    app.callback(
+        Output("result-config-download", "data"),
+        Input("result-download-config-btn", "n_clicks"),
+        State("artifact-select", "value"),
+        prevent_initial_call=True,
+    )(_cb_result_download_config)
+
+    # --- Runs / Compare Callbacks ---
+    app.callback(
+        Output("runs-table", "data"),
+        Input("runs-refresh-btn", "n_clicks"),
+        Input("url", "pathname"),
+        Input("runs-status-filter", "value"),
+        Input("runs-action-filter", "value"),
+        Input("runs-search", "value"),
+    )(_cb_refresh_runs_table)
+
+    app.callback(
+        Output("runs-detail", "children"),
+        Output("runs-selection-store", "data"),
+        Input("runs-table", "selected_rows"),
+        State("runs-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_runs_selection_detail)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Output("url", "pathname", allow_duplicate=True),
+        Output("runs-feedback", "children"),
+        Input("runs-compare-btn", "n_clicks"),
+        Input("runs-clone-btn", "n_clicks"),
+        Input("runs-delete-btn", "n_clicks"),
+        Input("runs-view-results-btn", "n_clicks"),
+        Input("runs-migrate-btn", "n_clicks"),
+        State("runs-selection-store", "data"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_runs_actions)
+
+    app.callback(
+        Output("compare-artifact-a", "options"),
+        Output("compare-artifact-b", "options"),
+        Output("compare-artifact-a", "value"),
+        Output("compare-artifact-b", "value"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_compare_options)
+
+    app.callback(
+        Output("compare-checks", "children"),
+        Output("compare-metrics-table", "data"),
+        Output("compare-chart", "figure"),
+        Output("compare-config-diff", "children"),
+        Input("compare-artifact-a", "value"),
+        Input("compare-artifact-b", "value"),
+    )(_cb_compare_runs)
 
     # --- Preset Synchronization Callbacks ---
 
@@ -791,8 +1293,24 @@ def _cb_inspect_data(
     label = (
         f"✔ {display_name}  ({result['stats']['n_rows']} rows × {result['stats']['n_cols']} cols)"
     )
-    next_state = dict(current_state)
+    next_state = _ensure_workflow_state_defaults(current_state)
     next_state["data_path"] = final_path
+    next_state["data_stats"] = result.get("stats", {})
+    cols = list(result.get("stats", {}).get("columns", []))
+    if not next_state.get("target_col") and cols:
+        next_state["target_col"] = cols[-1]
+    if next_state.get("target_col") and cols:
+        try:
+            data_preview_df = _get_load_tabular_data()(final_path)
+            inferred = infer_task_type(data_preview_df, str(next_state["target_col"]))
+            next_state["task_type"] = inferred
+        except Exception:
+            next_state["task_type"] = next_state.get("task_type") or "regression"
+    next_state["split_config"] = _default_split_for_task(
+        str(next_state.get("task_type") or "regression"),
+        causal_enabled=bool((next_state.get("causal_config") or {}).get("enabled")),
+    )
+    next_state["config_yaml"] = _build_config_from_state(next_state)
     return _ret(
         html.Div([stats_div, preview_div], className="data-inspection-zone"),
         "",
@@ -803,10 +1321,10 @@ def _cb_inspect_data(
 
 
 def _cb_save_target_col(target_col: str, state: dict) -> dict:
-    if not state:
-        state = {}
-    state["target_col"] = target_col
-    return state
+    current = _ensure_workflow_state_defaults(state)
+    current["target_col"] = target_col
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
 
 
 def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[str, str]:
@@ -820,10 +1338,9 @@ def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[st
 
 
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
-    if not state:
-        state = {}
-    state["config_yaml"] = config_yaml or ""
-    return state
+    current = _ensure_workflow_state_defaults(state)
+    current["config_yaml"] = config_yaml or ""
+    return current
 
 
 def _cb_handle_config_actions(
@@ -986,6 +1503,334 @@ def _cb_update_tune_objectives(task_type: str) -> list[dict]:
     }
     opts = objectives.get(task_type, [])
     return [{"label": o.upper(), "value": o} for o in opts]
+
+
+def _load_data_from_state(state: dict[str, Any] | None) -> pd.DataFrame | None:
+    current = _ensure_workflow_state_defaults(state)
+    data_path = current.get("data_path")
+    if not isinstance(data_path, str) or not data_path.strip():
+        return None
+    try:
+        return _get_load_tabular_data()(data_path)
+    except Exception:
+        return None
+
+
+def _cb_populate_target_page(pathname: str, state: dict | None) -> tuple[Any, ...]:
+    source_state = dict(state or {})
+    current = _ensure_workflow_state_defaults(state)
+    if pathname not in {"/target", "/config"}:
+        return (
+            current.get("data_path", ""),
+            [],
+            current.get("target_col", ""),
+            [],
+            current.get("exclude_cols", []),
+            [],
+            [],
+            current.get("task_type", "regression"),
+            "",
+        )
+
+    frame = _load_data_from_state(current)
+    columns = list(frame.columns) if frame is not None else []
+    target_col = current.get("target_col")
+    if not target_col and columns:
+        target_col = columns[-1]
+
+    inferred = current.get("task_type")
+    if frame is not None and target_col:
+        inferred = infer_task_type(frame, str(target_col))
+    task_type = source_state.get("task_type") or inferred or "regression"
+
+    options = [{"label": c, "value": c} for c in columns]
+    non_target = [{"label": c, "value": c} for c in columns if c != target_col]
+    hint = f"Recommended task type: {inferred}" if inferred else ""
+    return (
+        current.get("data_path", ""),
+        options,
+        target_col,
+        non_target,
+        current.get("exclude_cols", []),
+        options,
+        options,
+        task_type,
+        hint,
+    )
+
+
+def _cb_save_target_state(
+    target_col: str | None,
+    task_type: str | None,
+    exclude_cols: list[str] | None,
+    causal_enabled: bool | None,
+    causal_method: str | None,
+    treatment_col: str | None,
+    unit_id_col: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    current["target_col"] = target_col
+    if task_type:
+        current["task_type"] = task_type
+    current["exclude_cols"] = list(exclude_cols or [])
+    current["causal_config"] = {
+        "enabled": bool(causal_enabled),
+        "method": causal_method if causal_enabled else None,
+        "treatment_col": treatment_col if causal_enabled else None,
+        "unit_id_col": unit_id_col if causal_enabled else None,
+    }
+    if not current.get("split_config"):
+        current["split_config"] = _default_split_for_task(
+            current.get("task_type"),
+            causal_enabled=bool(causal_enabled),
+        )
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _cb_target_guardrails(
+    target_col: str | None,
+    task_type: str | None,
+    exclude_cols: list[str] | None,
+    state: dict | None,
+) -> Any:
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return render_guardrails([{"level": "info", "message": "Load data first."}])
+    checker = GuardRailChecker()
+    findings = checker.check_target(
+        frame,
+        target_col,
+        task_type,
+        exclude_cols=list(exclude_cols or []),
+    )
+    payload = [asdict(item) for item in findings]
+    return render_guardrails(payload)
+
+
+def _cb_populate_validation_options(
+    pathname: str, state: dict | None
+) -> tuple[list[dict], list[dict]]:
+    if pathname != "/validation":
+        return [], []
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return [], []
+    cols = [{"label": c, "value": c} for c in frame.columns]
+    return cols, cols
+
+
+def _cb_save_validation_state(
+    split_type: str | None,
+    n_splits: int | None,
+    seed: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    ts_mode: str | None,
+    test_size: int | None,
+    gap: int | None,
+    embargo: int | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    current["split_config"] = {
+        "type": split_type or current.get("split_config", {}).get("type", "kfold"),
+        "n_splits": int(n_splits or 5),
+        "seed": int(seed or 42),
+        "group_col": group_col,
+        "time_col": time_col,
+        "timeseries_mode": ts_mode or "expanding",
+        "test_size": int(test_size) if test_size not in (None, "") else None,
+        "gap": int(gap or 0),
+        "embargo": int(embargo or 0),
+    }
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _cb_validation_guardrails(
+    split_type: str | None,
+    n_splits: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    state: dict | None,
+) -> Any:
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return render_guardrails([{"level": "info", "message": "Load data first."}])
+    current = _ensure_workflow_state_defaults(state)
+    split_config = {
+        "type": split_type or "kfold",
+        "n_splits": int(n_splits or 5),
+        "group_col": group_col,
+        "time_col": time_col,
+    }
+    checker = GuardRailChecker()
+    findings = checker.check_validation(
+        frame,
+        split_config,
+        task_type=current.get("task_type"),
+        exclude_cols=list(current.get("exclude_cols") or []),
+    )
+    return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_update_train_tune_objectives(state: dict | None) -> list[dict]:
+    current = _ensure_workflow_state_defaults(state)
+    return _cb_update_tune_objectives(str(current.get("task_type") or "regression"))
+
+
+def _cb_save_train_state(
+    learning_rate: float | None,
+    num_boost_round: int | None,
+    num_leaves: int | None,
+    max_depth: int | None,
+    min_child: int | None,
+    early_stopping: int | None,
+    auto_class_weight: bool | None,
+    class_weight: str | None,
+    tune_enabled: bool | None,
+    tune_preset: str | None,
+    tune_trials: int | None,
+    tune_objective: str | None,
+    artifact_dir: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    train_cfg = dict(current.get("train_config") or {})
+    train_cfg.update(
+        {
+            "learning_rate": float(learning_rate or train_cfg.get("learning_rate", 0.05)),
+            "num_boost_round": int(num_boost_round or train_cfg.get("num_boost_round", 300)),
+            "num_leaves": int(num_leaves or train_cfg.get("num_leaves", 31)),
+            "max_depth": int(
+                max_depth if max_depth is not None else train_cfg.get("max_depth", -1)
+            ),
+            "min_child_samples": int(
+                min_child if min_child is not None else train_cfg.get("min_child_samples", 20)
+            ),
+            "early_stopping_rounds": int(
+                early_stopping
+                if early_stopping is not None
+                else train_cfg.get("early_stopping_rounds", 100)
+            ),
+            "auto_class_weight": bool(
+                auto_class_weight
+                if auto_class_weight is not None
+                else train_cfg.get("auto_class_weight", True)
+            ),
+            "class_weight_text": class_weight or "",
+        }
+    )
+    current["train_config"] = train_cfg
+    current["tuning_config"] = {
+        "enabled": bool(tune_enabled),
+        "preset": tune_preset or "standard",
+        "n_trials": int(tune_trials or 30),
+        "objective": tune_objective,
+    }
+    current["artifact_dir"] = artifact_dir or "artifacts"
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _render_train_summary(state: dict | None) -> html.Div:
+    current = _ensure_workflow_state_defaults(state)
+    split = current.get("split_config") or {}
+    train = current.get("train_config") or {}
+    tune = current.get("tuning_config") or {}
+    return html.Ul(
+        [
+            html.Li(f"Task: {current.get('task_type', 'regression')}"),
+            html.Li(f"Split: {split.get('type', 'kfold')} ({split.get('n_splits', 5)} folds)"),
+            html.Li(
+                "Train: "
+                f"lr={train.get('learning_rate', 0.05)}, "
+                f"rounds={train.get('num_boost_round', 300)}, "
+                f"leaves={train.get('num_leaves', 31)}"
+            ),
+            html.Li(f"Tuning: {'ON' if tune.get('enabled') else 'OFF'}"),
+        ],
+        className="mb-0",
+    )
+
+
+def _cb_update_train_yaml_preview(state: dict | None) -> tuple[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    yaml_text = _build_config_from_state(current)
+    return yaml_text, _render_train_summary(current)
+
+
+def _cb_train_yaml_actions(
+    _load_clicks: int,
+    _save_clicks: int,
+    _validate_clicks: int,
+    _import_clicks: int,
+    yaml_text: str,
+    config_path: str,
+    state: dict | None,
+) -> tuple[Any, str, dict[str, Any]]:
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    current = _ensure_workflow_state_defaults(state)
+    message = ""
+    out_yaml = yaml_text or ""
+
+    try:
+        if triggered == "train-config-load-btn":
+            out_yaml = load_config_yaml(config_path or "configs/gui_run.yaml")
+            payload = yaml.safe_load(out_yaml) or {}
+            if isinstance(payload, dict):
+                current = _state_from_config_payload(payload, current)
+            message = f"Loaded: {config_path}"
+        elif triggered == "train-config-save-btn":
+            saved = save_config_yaml(config_path or "configs/gui_run.yaml", out_yaml)
+            message = f"Saved: {saved}"
+        elif triggered == "train-config-validate-btn":
+            validate_config(out_yaml)
+            message = "Config validation passed."
+        elif triggered == "train-config-yaml-import-btn":
+            payload = yaml.safe_load(out_yaml) or {}
+            if not isinstance(payload, dict):
+                raise ValueError("YAML must deserialize to a mapping.")
+            current = _state_from_config_payload(payload, current)
+            message = "Imported YAML into workflow state."
+        current["config_yaml"] = out_yaml
+        return out_yaml, message, current
+    except Exception as exc:
+        current["config_yaml"] = out_yaml
+        return out_yaml, f"Error: {exc}", current
+
+
+def _cb_train_guardrails(
+    learning_rate: float | None,
+    num_boost_round: int | None,
+    state: dict | None,
+) -> Any:
+    checker = GuardRailChecker()
+    findings = checker.check_train(
+        {
+            "learning_rate": float(learning_rate or 0.05),
+            "num_boost_round": int(num_boost_round or 300),
+        }
+    )
+    return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_sync_run_inputs_from_state(
+    pathname: str | None, state: dict | None
+) -> tuple[Any, Any, Any, Any]:
+    if pathname != "/run":
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    current = _ensure_workflow_state_defaults(state)
+    config_yaml = current.get("config_yaml") or _build_config_from_state(current)
+    artifact_dir = current.get("artifact_dir") or "artifacts"
+    return (
+        current.get("data_path", ""),
+        config_yaml,
+        "configs/gui_run.yaml",
+        artifact_dir,
+    )
 
 
 class _PopulateBuilderLegacyResult:
@@ -1368,6 +2213,8 @@ def _cb_refresh_run_jobs(
 
             if job.status == "succeeded" and not is_batch and current_path == "/run":
                 next_path = "/results"
+            if job.status == "succeeded":
+                next_state["last_job_succeeded"] = True
             payload = (
                 job.result.payload if (job.result and isinstance(job.result.payload, dict)) else {}
             )
@@ -1715,6 +2562,225 @@ def _cb_evaluate_artifact_action(_n_clicks: int, artifact_path: str, data_path: 
         return _json_dumps(payload)
     except Exception as exc:
         return f"Evaluation failed: {exc}"
+
+
+def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
+    if not artifact_path:
+        return go.Figure(), "", "Select artifact to view details."
+    try:
+        art = Artifact.load(artifact_path)
+        metadata = getattr(art, "metadata", {}) or {}
+        history = metadata.get("training_history")
+        if history is None:
+            history_path = Path(artifact_path) / "training_history.json"
+            if history_path.exists():
+                history = json.loads(history_path.read_text(encoding="utf-8"))
+        curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
+        cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
+        cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
+
+        schema = getattr(art, "feature_schema", {}) or {}
+        summary = html.Ul(
+            [
+                html.Li(f"Features: {len(schema.get('feature_names', []))}"),
+                html.Li(f"Rows: {schema.get('n_rows', 'n/a')}"),
+                html.Li(f"Task: {getattr(art, 'task_type', 'n/a')}"),
+            ],
+            className="mb-0",
+        )
+        return curve_fig, cfg_text, summary
+    except Exception as exc:
+        return go.Figure(), f"Error: {exc}", f"Error: {exc}"
+
+
+def _cb_result_export_actions(
+    _excel_clicks: int,
+    _html_clicks: int,
+    artifact_path: str | None,
+) -> str:
+    if not artifact_path:
+        return "Select an artifact first."
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    action = "export_excel" if triggered == "result-export-excel-btn" else "export_html_report"
+    try:
+        result = submit_run_job(RunInvocation(action=action, artifact_path=artifact_path))
+        return f"[QUEUED] {action} (Job ID: {result.job_id})"
+    except Exception as exc:
+        return f"[ERROR] {exc}"
+
+
+def _cb_result_download_config(_n_clicks: int, artifact_path: str | None) -> Any:
+    if not artifact_path:
+        return dash.no_update
+    try:
+        art = Artifact.load(artifact_path)
+        cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
+        cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
+        return dcc.send_string(cfg_text, filename="run_config.yaml")
+    except Exception:
+        return dash.no_update
+
+
+def _cb_refresh_runs_table(
+    _refresh_clicks: int,
+    pathname: str | None,
+    status_filter: str | None,
+    action_filter: str | None,
+    query: str | None,
+) -> list[dict[str, Any]]:
+    if pathname != "/runs":
+        return []
+    jobs = list_run_jobs_filtered(
+        limit=300,
+        status=status_filter or None,
+        action=action_filter or None,
+        query=query or None,
+    )
+    rows: list[dict[str, Any]] = []
+    for job in jobs:
+        artifact_path = job.invocation.artifact_path or ""
+        if job.result and isinstance(job.result.payload, dict):
+            artifact_path = str(job.result.payload.get("artifact_path") or artifact_path)
+        rows.append(
+            {
+                "job_id": job.job_id,
+                "status": job.status,
+                "action": job.action,
+                "created_at_utc": job.created_at_utc,
+                "artifact_path": artifact_path,
+            }
+        )
+    return rows
+
+
+def _cb_runs_selection_detail(
+    selected_rows: list[int] | None, data: list[dict] | None
+) -> tuple[str, list[str]]:
+    if not selected_rows or not data:
+        return "Select one or more runs.", []
+    job_ids: list[str] = []
+    details: list[str] = []
+    for idx in selected_rows:
+        if idx >= len(data):
+            continue
+        row = data[idx]
+        job_id = str(row.get("job_id") or "")
+        if not job_id:
+            continue
+        job = get_run_job(job_id)
+        if job is None:
+            continue
+        job_ids.append(job_id)
+        details.append(
+            f"Job ID: {job.job_id}\n"
+            f"Status: {job.status}\n"
+            f"Action: {job.action}\n"
+            f"Created: {job.created_at_utc}\n"
+            f"Artifact: {job.invocation.artifact_path or ''}\n"
+        )
+    return "\n---\n".join(details) or "No details.", job_ids
+
+
+def _cb_runs_actions(
+    _compare_clicks: int,
+    _clone_clicks: int,
+    _delete_clicks: int,
+    _view_results_clicks: int,
+    _migrate_clicks: int,
+    selected_job_ids: list[str] | None,
+    state: dict | None,
+) -> tuple[dict[str, Any], Any, str]:
+    current = _ensure_workflow_state_defaults(state)
+    job_ids = list(selected_job_ids or [])
+    if not job_ids:
+        return current, dash.no_update, "Select one or more runs."
+
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    try:
+        if triggered == "runs-delete-btn":
+            count = delete_run_jobs(job_ids)
+            return current, dash.no_update, f"Deleted {count} run records."
+
+        if triggered == "runs-compare-btn":
+            if len(job_ids) != 2:
+                return current, dash.no_update, "Select exactly two runs for compare."
+            paths: list[str] = []
+            for job_id in job_ids:
+                job = get_run_job(job_id)
+                if not job:
+                    continue
+                path = job.invocation.artifact_path or ""
+                if job.result and isinstance(job.result.payload, dict):
+                    path = str(job.result.payload.get("artifact_path") or path)
+                if path:
+                    paths.append(path)
+            if len(paths) != 2:
+                return current, dash.no_update, "Artifacts not found for selected runs."
+            current["compare_selection"] = paths
+            return current, "/compare", "Moved to Compare."
+
+        primary = get_run_job(job_ids[0])
+        if primary is None:
+            return current, dash.no_update, "Run not found."
+
+        if triggered == "runs-clone-btn":
+            yaml_text = load_job_config_yaml(primary)
+            payload = yaml.safe_load(yaml_text) or {}
+            if not isinstance(payload, dict):
+                return current, dash.no_update, "Invalid config payload."
+            current = _state_from_config_payload(payload, current)
+            return current, "/train", "Config cloned to Train."
+
+        if triggered == "runs-view-results-btn":
+            path = primary.invocation.artifact_path or ""
+            if primary.result and isinstance(primary.result.payload, dict):
+                path = str(primary.result.payload.get("artifact_path") or path)
+            if not path:
+                return current, dash.no_update, "No artifact path available."
+            current["last_run_artifact"] = path
+            return current, "/results", "Moved to Results."
+
+        if triggered == "runs-migrate-btn":
+            if not primary.invocation.config_path:
+                return current, dash.no_update, "No config path stored for selected run."
+            msg = migrate_config_file_via_gui(primary.invocation.config_path, target_version=1)
+            return current, dash.no_update, msg
+    except Exception as exc:
+        return current, dash.no_update, f"Run action failed: {exc}"
+
+    return current, dash.no_update, "No action."
+
+
+def _cb_populate_compare_options(
+    pathname: str | None, state: dict | None
+) -> tuple[list[dict[str, str]], list[dict[str, str]], Any, Any]:
+    if pathname != "/compare":
+        return [], [], None, None
+    options = [
+        {"label": f"{item.task_type} | {item.run_id}", "value": item.path}
+        for item in list_artifacts("artifacts")
+    ]
+    compare_selection = (_ensure_workflow_state_defaults(state)).get("compare_selection") or []
+    value_a = compare_selection[0] if len(compare_selection) > 0 else None
+    value_b = compare_selection[1] if len(compare_selection) > 1 else None
+    return options, options, value_a, value_b
+
+
+def _cb_compare_runs(
+    artifact_a: str | None, artifact_b: str | None
+) -> tuple[Any, list[dict], Any, Any]:
+    if not artifact_a or not artifact_b:
+        return "Select both artifacts.", [], go.Figure(), ""
+    try:
+        payload = compare_artifacts(artifact_a, artifact_b)
+        checks = render_guardrails(payload.get("checks", []))
+        fig = plot_comparison_bar(
+            payload.get("metrics_a", {}), payload.get("metrics_b", {}), "Run A", "Run B"
+        )
+        diff = render_yaml_diff(payload.get("config_yaml_a", ""), payload.get("config_yaml_b", ""))
+        return checks, payload.get("metric_rows", []), fig, diff
+    except Exception as exc:
+        return f"Compare failed: {exc}", [], go.Figure(), ""
 
 
 def _sync_path_preset(preset_val: str, current_path: str) -> tuple[str, str]:

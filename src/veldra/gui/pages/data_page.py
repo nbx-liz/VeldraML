@@ -73,6 +73,21 @@ def layout() -> html.Div:
 
 def render_data_stats(stats: dict) -> html.Div:
     """Render data statistics cards."""
+    profile_rows = []
+    for profile in (stats.get("column_profiles") or [])[:40]:
+        profile_rows.append(
+            html.Tr(
+                [
+                    html.Td(profile.get("name")),
+                    html.Td(profile.get("kind")),
+                    html.Td(profile.get("dtype")),
+                    html.Td(f"{float(profile.get('missing_rate', 0.0)):.1%}"),
+                    html.Td(str(profile.get("unique_count", ""))),
+                ]
+            )
+        )
+
+    warning_items = [html.Li(text) for text in (stats.get("warnings") or [])[:8]]
     return html.Div(
         [
             html.H4("Dataset Summary", className="mb-3"),
@@ -96,13 +111,42 @@ def render_data_stats(stats: dict) -> html.Div:
                     "marginBottom": "24px",
                 },
             ),
-            # Target selection moved to Config Page
-            # Target selection moved to Config Page
+            html.H5("Data Quality Summary", className="mb-2"),
+            html.Div(
+                [
+                    html.Table(
+                        [
+                            html.Thead(
+                                html.Tr(
+                                    [
+                                        html.Th("Column"),
+                                        html.Th("Kind"),
+                                        html.Th("DType"),
+                                        html.Th("Missing"),
+                                        html.Th("Unique"),
+                                    ]
+                                )
+                            ),
+                            html.Tbody(profile_rows),
+                        ],
+                        className="table table-dark table-striped table-sm",
+                    )
+                ],
+                style={"maxHeight": "280px", "overflowY": "auto"},
+                className="mb-3",
+            ),
+            html.Div(
+                [
+                    html.Div("Data Quality Warnings", className="fw-bold"),
+                    html.Ul(warning_items or [html.Li("No quality warnings detected.")]),
+                ],
+                className="mb-3",
+            ),
             dbc.Button(
-                "Next: Configure →",
-                id="data-to-config-btn",
+                "Next: Target →",
+                id="data-to-target-btn",
                 color="primary",
-                href="/config",
+                href="/target",
                 className="w-100",
             ),
         ]
