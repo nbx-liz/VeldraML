@@ -1109,11 +1109,24 @@ def create_app() -> dash.Dash:
 
     app.callback(
         Output("result-export-status", "children"),
+        Output("result-export-job-store", "data"),
+        Output("result-export-poll-interval", "disabled"),
+        Output("result-export-poll-interval", "n_intervals"),
         Input("result-export-excel-btn", "n_clicks"),
         Input("result-export-html-btn", "n_clicks"),
         State("artifact-select", "value"),
         prevent_initial_call=True,
     )(_cb_result_export_actions)
+
+    app.callback(
+        Output("result-report-download", "data"),
+        Output("result-export-status", "children", allow_duplicate=True),
+        Output("result-export-job-store", "data", allow_duplicate=True),
+        Output("result-export-poll-interval", "disabled", allow_duplicate=True),
+        Input("result-export-poll-interval", "n_intervals"),
+        State("result-export-job-store", "data"),
+        prevent_initial_call=True,
+    )(_cb_poll_result_export_job)
 
     app.callback(
         Output("result-config-download", "data"),
@@ -2227,7 +2240,7 @@ def _cb_refresh_run_jobs(
             "job_id": job.job_id,
             "action": job.action,
             "status": _status_badge(job.status),
-            "created_at_utc": job.created_at_utc,
+            "created_at_utc": _format_jst_timestamp(job.created_at_utc),
             "id": job.job_id,
         }
         for job in jobs
@@ -2278,15 +2291,24 @@ def _cb_show_selected_job_detail(
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Created: ", className="fw-bold"), html.Span(job.created_at_utc)],
+            [
+                html.Span("Created: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.created_at_utc)),
+            ],
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Started: ", className="fw-bold"), html.Span(job.started_at_utc or "-")],
+            [
+                html.Span("Started: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.started_at_utc)),
+            ],
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Finished: ", className="fw-bold"), html.Span(job.finished_at_utc or "-")],
+            [
+                html.Span("Finished: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.finished_at_utc)),
+            ],
             className="mb-2",
         ),
     ]
@@ -2569,12 +2591,7 @@ def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
         return go.Figure(), "", "Select artifact to view details."
     try:
         art = Artifact.load(artifact_path)
-        metadata = getattr(art, "metadata", {}) or {}
-        history = metadata.get("training_history")
-        if history is None:
-            history_path = Path(artifact_path) / "training_history.json"
-            if history_path.exists():
-                history = json.loads(history_path.read_text(encoding="utf-8"))
+        history = getattr(art, "training_history", None)
         curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
         cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
         cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
@@ -2597,16 +2614,66 @@ def _cb_result_export_actions(
     _excel_clicks: int,
     _html_clicks: int,
     artifact_path: str | None,
-) -> str:
+) -> tuple[str, dict[str, str] | None, bool, int]:
     if not artifact_path:
-        return "Select an artifact first."
-    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+        return "Select an artifact first.", None, True, 0
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if not triggered:
+        triggered = (
+            "result-export-excel-btn"
+            if (_excel_clicks or 0) >= (_html_clicks or 0)
+            else "result-export-html-btn"
+        )
     action = "export_excel" if triggered == "result-export-excel-btn" else "export_html_report"
     try:
         result = submit_run_job(RunInvocation(action=action, artifact_path=artifact_path))
-        return f"[QUEUED] {action} (Job ID: {result.job_id})"
+        state = {"job_id": result.job_id, "action": action}
+        return f"生成中... ({action}, Job ID: {result.job_id})", state, False, 0
     except Exception as exc:
-        return f"[ERROR] {exc}"
+        return f"[ERROR] {exc}", None, True, 0
+
+
+def _cb_poll_result_export_job(
+    _n_intervals: int,
+    export_state: dict[str, Any] | None,
+) -> tuple[Any, str, dict[str, Any] | None, bool]:
+    if not export_state:
+        return dash.no_update, dash.no_update, dash.no_update, True
+
+    job_id = str(export_state.get("job_id") or "")
+    action = str(export_state.get("action") or "export")
+    if not job_id:
+        return dash.no_update, "[ERROR] Export job id is missing.", None, True
+
+    job = get_run_job(job_id)
+    if job is None:
+        return dash.no_update, f"[ERROR] Export job not found: {job_id}", None, True
+
+    if job.status in {"queued", "running", "cancel_requested"}:
+        return dash.no_update, f"生成中... ({action}, Job ID: {job_id})", export_state, False
+
+    if job.status == "succeeded":
+        payload = (
+            job.result.payload if (job.result and isinstance(job.result.payload, dict)) else {}
+        )
+        output_path = str(payload.get("output_path") or "")
+        if not output_path:
+            return dash.no_update, "[ERROR] Export output path is missing.", None, True
+        path_obj = Path(output_path)
+        if not path_obj.is_file():
+            return dash.no_update, f"[ERROR] Export file not found: {path_obj}", None, True
+        return dcc.send_file(str(path_obj)), "ダウンロード完了", None, True
+
+    if job.status in {"failed", "canceled"}:
+        message = job.error_message or (job.result.message if job.result else "Export failed.")
+        return dash.no_update, f"[ERROR] {message}", None, True
+
+    return dash.no_update, f"[INFO] Export status: {job.status}", export_state, False
 
 
 def _cb_result_download_config(_n_clicks: int, artifact_path: str | None) -> Any:
@@ -2646,7 +2713,9 @@ def _cb_refresh_runs_table(
                 "job_id": job.job_id,
                 "status": job.status,
                 "action": job.action,
-                "created_at_utc": job.created_at_utc,
+                "created_at_utc": _format_jst_timestamp(job.created_at_utc),
+                "started_at_utc": _format_jst_timestamp(job.started_at_utc),
+                "finished_at_utc": _format_jst_timestamp(job.finished_at_utc),
                 "artifact_path": artifact_path,
             }
         )
@@ -2675,7 +2744,9 @@ def _cb_runs_selection_detail(
             f"Job ID: {job.job_id}\n"
             f"Status: {job.status}\n"
             f"Action: {job.action}\n"
-            f"Created: {job.created_at_utc}\n"
+            f"Created: {_format_jst_timestamp(job.created_at_utc)}\n"
+            f"Started: {_format_jst_timestamp(job.started_at_utc)}\n"
+            f"Finished: {_format_jst_timestamp(job.finished_at_utc)}\n"
             f"Artifact: {job.invocation.artifact_path or ''}\n"
         )
     return "\n---\n".join(details) or "No details.", job_ids

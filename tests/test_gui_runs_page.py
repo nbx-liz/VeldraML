@@ -55,6 +55,9 @@ def test_refresh_runs_table(monkeypatch) -> None:
     rows = app_module._cb_refresh_runs_table(1, "/runs", "", "", "")
     assert len(rows) == 2
     assert rows[0]["job_id"] == "a1"
+    assert rows[0]["created_at_utc"].endswith("JST")
+    assert rows[0]["started_at_utc"] == "n/a"
+    assert rows[0]["finished_at_utc"] == "n/a"
 
 
 def test_runs_selection_detail(monkeypatch) -> None:

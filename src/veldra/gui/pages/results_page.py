@@ -44,6 +44,14 @@ def layout() -> html.Div:
             ),
             html.Div(id="result-export-status", className="small text-info mb-3"),
             dcc.Download(id="result-config-download"),
+            dcc.Download(id="result-report-download"),
+            dcc.Store(id="result-export-job-store"),
+            dcc.Interval(
+                id="result-export-poll-interval",
+                interval=1000,
+                n_intervals=0,
+                disabled=True,
+            ),
             # Artifact Selection
             html.Div(
                 [

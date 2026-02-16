@@ -58,6 +58,8 @@ def layout() -> html.Div:
                     {"name": "status", "id": "status"},
                     {"name": "action", "id": "action"},
                     {"name": "created", "id": "created_at_utc"},
+                    {"name": "started", "id": "started_at_utc"},
+                    {"name": "finished", "id": "finished_at_utc"},
                     {"name": "artifact", "id": "artifact_path"},
                 ],
                 data=[],

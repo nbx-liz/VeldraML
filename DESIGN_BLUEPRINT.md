@@ -68,6 +68,8 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 21: Dash GUI MVP（Config編集 + Run実行 + Artifact閲覧）
 - Phase 22: Config migration utility MVP（`veldra config migrate`）
 - Phase 25: GUI運用強化（async job queue + config migrate統合）
+- Phase 26: UX/UI改善（7画面再構成 + Export + Learning Curves）
+- Phase 26.1: UI改善（バグ修正3件 + ユースケース駆動UI再構成設計）← **実装中**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -176,886 +178,149 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 
 ## 12. Phase 25（完了）: GUI運用強化
 
-### 完了内容
-- 非同期ジョブ実行（SQLite永続 + single worker + best-effort cancel）
-- `/config` への config migrate 統合（preview/diff/apply）
-- GUI callback の堅牢化
-  - uploadデータのbase64デコード例外をユーザー向けエラーに変換
-  - callback外実行でも破綻しない互換フォールバックを追加
-  - 旧テスト契約（引数/戻り値）との後方互換を維持
+### 要約
+- 非同期ジョブ実行基盤を GUI に導入（SQLite 永続 + single worker + best-effort cancel）。
+- `/config` に config migrate（preview/diff/apply）を統合。
+- GUI callback の堅牢化を実施（アップロード例外のユーザー向け変換、callback 外フォールバック、旧テスト契約互換維持）。
 
 ### 検証結果
 - `pytest -q`: **405 passed, 0 failed**
-- GUI主要フロー（Data → Config → Run → Results）で callback 破綻が発生しないことを確認
+- Data → Config → Run → Results の主要導線で callback 破綻なし。
 
 ### Notes
-- `ruff check` はリポジトリ全体で既存違反が残っており、Phase25スコープ外として別途整理する。
+- `ruff check` の既存違反は Phase25 スコープ外として別管理。
 
 ## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）(完了)
 
-### Context（2026-02-14 時点）
-- テストスイートは約145ファイル。
-- データ生成ロジック（`_binary_frame` など）が42ファイルに分散し、関連ヘルパー定義は56箇所ある。
-- タスク別の契約テストは regression だけ `fit_smoke / predict_contract / evaluate_metrics / artifact_roundtrip` が不足している。
-- `*_internal` テストの一部が private関数に直結し、リファクタリング耐性を下げている。
+### 要約
+- 課題: テストデータ生成の重複（42ファイル）、regression 契約テスト不足、private 関数依存テストの存在。
+- 実施:
+  - `tests/conftest.py` に共通ファクトリー群（`binary_frame` / `multiclass_frame` / `regression_frame` / `frontier_frame` / `panel_frame` / `config_payload` / `FakeBooster`）を追加し、Wave 方式で移行。
+  - regression の契約テスト 4 種を補完（fit/predict/evaluate/artifact roundtrip）。
+  - 公開ユーティリティ化:
+    - `src/veldra/split/cv.py`: `iter_cv_splits`
+    - `src/veldra/causal/diagnostics.py`: `overlap_metric`, `max_standardized_mean_difference`
+  - task 実装の private `_iter_cv_splits` と causal 内重複ロジックを公開関数利用へ置換。
+- 非公開維持: `_train_single_booster`, `_to_python_scalar`, `_normalize_proba`。
 
-### 目的
-- DRY原則に沿ってテストデータ生成を共通化する。
-- task間で同じ種類の契約テストを揃える。
-- private実装依存のテストを公開ユーティリティ/公開API検証へ移す。
-
-### Phase 1: データ生成ロジックの共通化（DRY）
-- `tests/conftest.py` に以下を追加する。
-- `binary_frame(rows, seed, coef1, coef2, noise)`
-- `multiclass_frame(rows_per_class, seed, scale)`
-- `regression_frame(rows, seed, coef1, coef2, noise)`
-- `frontier_frame(rows, seed)`
-- `panel_frame(n_units, seed)`
-- `config_payload(task_type, **overrides)`
-- `FakeBooster`
-- 42ファイルをWave方式で段階移行する。
-- Wave1: smoke/contract系 + internal系（優先）
-- Wave2: tune/simulate/export 系
-- Wave3: examples/補助テスト系
-- 再発防止として、対象Waveでローカル `def _*frame` を禁止する契約テストを追加する。
-
-### Phase 2: テスト対称性の確保（regression補完）
-- 新規作成:
-- `tests/test_regression_fit_smoke.py`
-- `tests/test_regression_predict_contract.py`
-- `tests/test_regression_evaluate_metrics.py`
-- `tests/test_regression_artifact_roundtrip.py`
-- 既存の binary/frontier 契約テストをテンプレートにし、以下を検証する。
-- fitでartifactと主要ファイルが生成されること
-- predict契約（出力shape、特徴量順序、欠損特徴量エラー）
-- evaluate契約（`rmse`, `mae`, `r2`）
-- save/load往復で予測整合と `feature_schema` 維持
-
-### Phase 3: internalテストの公式API化
-- 3.1 CV splitユーティリティの公開化。
-- 新規: `src/veldra/split/cv.py` に `iter_cv_splits(config, data, x, y=None)` を追加
-- `src/veldra/split/__init__.py` でexport
-- `binary/multiclass/regression/frontier` の private `_iter_cv_splits` を削除し公開関数利用へ置換
-- 新規: `tests/test_split_cv.py`
-- 3.2 因果診断メトリクスの公開化。
-- 新規: `src/veldra/causal/diagnostics.py`
-- 公開関数: `overlap_metric`, `max_standardized_mean_difference`
-- `src/veldra/causal/__init__.py` でexport
-- `dr.py` と `dr_did.py` の重複実装を当該公開関数へ置換
-- 新規: `tests/test_causal_diagnostics.py`
-- `tests/test_drdid_internal.py` の該当private依存テストを置換
-- 3.3 private維持方針。
-- 公開化しない: `_train_single_booster`, `_to_python_scalar`, `_normalize_proba`
-- 将来検討: `_default_search_space`
-
-### 検証コマンド
-- `uv run pytest tests -x --tb=short`
-- `uv run pytest tests/test_binary_fit_smoke.py tests/test_multiclass_fit_smoke.py -v`
-- `uv run pytest tests/test_regression_fit_smoke.py tests/test_regression_predict_contract.py tests/test_regression_evaluate_metrics.py tests/test_regression_artifact_roundtrip.py -v`
-- `uv run pytest tests/test_split_cv.py tests/test_causal_diagnostics.py -v`
-- `uv run pytest tests/test_binary_internal.py tests/test_regression_internal.py -v`
-- `uv run ruff check src/veldra/split src/veldra/causal tests`
-
-### 完了条件
-- regressionの契約テスト4種が追加され、task間の対称性ギャップが解消される。
-- 優先Waveの重複データ生成ロジックがconftestファクトリーへ移行される。
-- CV split/causal diagnostics が公開ユーティリティとしてテストされる。
-- Stable API（`veldra.api.*`）の互換性は維持される。
+### 完了条件の達成
+- regression の契約対称性を解消。
+- DRY 化と公開 API 寄せを完了。
+- Stable API（`veldra.api.*`）互換性を維持。
 
 ## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）(完了)
 
-### 目的
-- ダークテーマ上の可読性を改善する。
-- データプレビューの操作性（縦スクロール時の列ヘッダー参照性）を改善する。
-- Configページ内の主要導線を視覚的に統一し、操作迷いを減らす。
+### 要約
+- スコープを CSS/HTML に限定し、機能追加や API/Artifact/RunConfig 契約変更は未実施。
+- 主な改善:
+  - 可読性改善（`text-muted-readable`）。
+  - データプレビューのヘッダー sticky 化。
+  - `Split Type=Time Series` 時の `Time Column` 必須警告を明示。
+  - Data Settings の簡素化（Categorical Columns 非表示化）。
+  - 不要表示削除（`ID Columns (Optional - for Group K-Fold)` を非表示維持）。
+  - workflow ボタン色/ステッパー状態の視覚統一、export preset 初期値を `artifacts` に固定。
 
-### 非スコープ
-- 機能追加（新しいコールバック、データ処理ロジック、永続化仕様の変更）。
-- 公開API/Artifact/RunConfig契約の変更。
-
-### 主要成果物
-- `text-muted-readable` クラス導入（`#cbd5e1`）による補助テキストのコントラスト改善。
-- データプレビュー表の `thead th` sticky固定（インラインstyle + CSS fallback）。
-- `ID Columns (Optional - for Group K-Fold)` の表示を削除（内部互換のため関連IDは非表示維持）。
-- Export preset (`cfg-export-dir-preset`) の初期選択を `artifacts` に固定。
-- ワークフロー進行ボタン色を `primary` に統一。
-- ステッパー活性状態に glow、完了済みコネクタに成功色を反映。
-- `Split Type=Time Series` 時に `Time Column` 必須であることを GUI 上で明示する警告表示を追加。
-- Data Settings から `Categorical Columns (Optional override)` を非表示化し、導線を簡素化。
-
-### 検証コマンド
-- `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v`
-- `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
-- `uv run pytest tests -x --tb=short`
+### 検証
+- GUI 関連テスト群および全体スモーク（`uv run pytest tests -x --tb=short`）で確認。
 
 ## 12.7 Phase25.7: LightGBMの機能強化（完了・検証済み）
 
 ### 目的
-- 目的変数の自動判定機能
-- バリデーションデータの適切な自動設定
-- ImbalanceデータにWeightを自動適用する機能
-- `num_boost_round` の設定可能化（現在300にハードコード）
-- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping）
-- 学習曲線データの記録・Artifact保存（可視化はPhase30で対応）
-- GUI対応（新パラメーター、ラベル修正）
-- Config migration（`lgb_params.n_estimators` → `train.num_boost_round`）
+- 学習契約を RunConfig 駆動で強化（`num_boost_round`、Early Stopping 分割、class weight、自動 split、学習履歴保存、GUI/migrate 連携）。
 
-### 現状分析
-
-| 機能 | 現状 | 対応 |
-|------|------|------|
-| `num_boost_round` | 300にハードコード。GUIの `n_estimators` は `lgb_params` に格納されるが `lgb.train()` では無視される | `TrainConfig` に昇格 |
-| 目的関数 | タスクごとにハードコード（`binary`, `regression` 等）。自動判定は既存で機能している | ユーザー上書きは `lgb_params.objective` 経由で既に可能。GUIドロップダウン追加 |
-| クラス不均衡 | 未実装 | `is_unbalance` / sample weight の自動・手動設定 |
-| バリデーション分割 | CVフォールドから適切に生成されている。ただしタスクに応じた分割タイプの自動選択は未実装 | タスク/設定に応じた分割タイプの自動適用を実装 |
-| 早期停止 | CVフォールドではOOFデータをES監視に使用（OOFの独立性にリーク）。最終モデルは `x_valid=x, y_valid=y` でES実質無効 | CVフォールド・最終モデルの両方で、train部分からES用バリデーションを自動分割。OOFは純粋にOOF予測専用 |
-| 学習曲線 | イテレーションごとのメトリクス保存なし | `record_evaluation` callback + Artifact保存。可視化はPhase30で対応 |
-
----
-
-### Step 1: `TrainConfig` スキーマ拡張
-
-**対象**: `src/veldra/config/models.py`
-
-```python
-class TrainConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lgb_params: dict[str, Any] = Field(default_factory=dict)
-    early_stopping_rounds: int | None = 100
-    early_stopping_validation_fraction: float = 0.1  # NEW: 最終モデルの early stopping 用バリデーション比率
-    num_boost_round: int = 300                    # NEW
-    seed: int = 42
-    auto_class_weight: bool = True                # NEW: opt-out
-    class_weight: dict[str, float] | None = None  # NEW: ユーザー手動指定
-```
-
-**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
-- `auto_class_weight=True` は `binary` / `multiclass` のみ許可（`regression`/`frontier` で True なら ValueError）
-- `class_weight` は `binary` / `multiclass` のみ許可
-- `auto_class_weight=True` と `class_weight` の同時指定は禁止（手動指定が優先される旨のエラー）
-- `num_boost_round >= 1` を検証
-- `0.0 < early_stopping_validation_fraction < 1.0` を検証
-
----
-
-### Step 2: `num_boost_round` の設定可能化 + 最終モデル Early Stopping 用バリデーション分割
-
-**対象**: 全 `_train_single_booster` 関数（4ファイル）+ 全 `train_*_with_cv` 関数（4ファイル）
-
-#### 2a: `num_boost_round` の設定可能化
-
-```python
-# Before（全タスク共通）
-num_boost_round=300
-
-# After
-num_boost_round=config.train.num_boost_round
-```
-
-#### 2b: Early Stopping 用バリデーション分割（CVフォールド + 最終モデル共通）
-
-**問題**:
-- CVフォールド: 現在OOFデータ（valid部分）を early stopping の監視対象として使用している。これではOOFが完全にOOFでなくなる（early stopping の判断にリークする）。
-- 最終モデル: `x_valid=x, y_valid=y`（訓練データ＝バリデーションデータ）のため early stopping が実質無効。
-
-**設計方針**:
-- CVフォールド・最終モデルの両方で、**学習に使うデータ（train部分）からさらに early stopping 用バリデーションデータを自動分割**する
-- OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、**純粋にOOF予測専用**として扱う
-- 分割比率: `train.early_stopping_validation_fraction`（既定 `0.1`、train部分の10%をearly stopping用バリデーションに使用）
-- `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習する
-
-**タスクに応じた分割タイプの自動適用**:
-- `task.type=binary/multiclass` → `sklearn.model_selection.StratifiedShuffleSplit` で層化分割
-- `task.type=regression/frontier` → `sklearn.model_selection.ShuffleSplit` でランダム分割
-- `split.type=timeseries` → 時系列順で末尾 N% をバリデーションに使用（シャッフルしない）
-
-**CVフォールドの変更**:
-```python
-# Before
-for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-    booster = _train_single_booster(
-        x_train=x.iloc[train_idx], y_train=y.iloc[train_idx],
-        x_valid=x.iloc[valid_idx], y_valid=y.iloc[valid_idx],  # OOFデータをES監視に使用（リーク）
-        config=config,
-    )
-
-# After
-for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-    x_fold_train, y_fold_train = x.iloc[train_idx], y.iloc[train_idx]
-    # train部分からES用バリデーションを分割（OOFは純粋にOOFのまま）
-    x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
-        x_fold_train, y_fold_train, config
-    )
-    booster = _train_single_booster(
-        x_train=x_es_train, y_train=y_es_train,
-        x_valid=x_es_valid, y_valid=y_es_valid,  # ES専用バリデーション
-        config=config,
-    )
-    # OOFデータはES非依存で予測のみに使用
-    pred = booster.predict(x.iloc[valid_idx], ...)
-```
-
-**最終モデルの変更**:
-```python
-# Before
-final_model = _train_single_booster(
-    x_train=x, y_train=y,
-    x_valid=x, y_valid=y,  # 訓練データ＝バリデーションデータ（ES無効）
-    config=config,
-)
-
-# After
-x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
-    x, y, config
-)
-final_model = _train_single_booster(
-    x_train=x_es_train, y_train=y_es_train,
-    x_valid=x_es_valid, y_valid=y_es_valid,
-    config=config,
-)
-```
-
-**`_split_for_early_stopping` 関数**（`src/veldra/modeling/utils.py` に新設）:
-```python
-def _split_for_early_stopping(
-    x: pd.DataFrame,
-    y: pd.Series,
-    config: RunConfig,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """学習データから early stopping 用バリデーションデータを分割する。
-
-    - early_stopping_rounds=None の場合は分割せず (x, x, y, y) を返す（従来互換）。
-    - タスクに応じた分割タイプを自動適用する。
-    - CVフォールド内でも最終モデル学習時でも共通で使用する。
-    """
-```
-
-**`TrainConfig` 追加フィールド**:
-```python
-early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーション比率
-```
-
-**対象ファイル**:
-- `src/veldra/modeling/utils.py`（新設: `_split_for_early_stopping`）
-- `src/veldra/modeling/binary.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/multiclass.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/regression.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/frontier.py`（CVループ + 最終モデル）
-
----
-
-### Step 3: クラス不均衡の自動検出・重み適用
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`
-
-**Binary**（`_train_single_booster` 内）:
-- `config.train.class_weight` が指定されている場合:
-  - `class_weight` から `scale_pos_weight`（= neg_count / pos_count 相当）を算出し `params` に設定
-- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
-  - `params["is_unbalance"] = True` を自動的に設定
-
-**Multiclass**（`_train_single_booster` 内）:
-- `config.train.class_weight` が指定されている場合:
-  - `class_weight` dict からサンプルごとの重みを算出し `lgb.Dataset(weight=...)` に渡す
-- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
-  - `sklearn.utils.class_weight.compute_sample_weight("balanced", y_train)` でサンプル重みを自動算出し `lgb.Dataset(weight=...)` に渡す
-
----
-
-### Step 4: バリデーション分割の自動適用
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`, 因果推論経路
-
-**実装方針**（分割タイプをタスク/設定に応じて自動的に適用する）:
-- `task.type=binary/multiclass` かつ `split.type=kfold` → 内部で `stratified` 分割を自動適用する
-  - ユーザーが明示的に `split.type` を設定している場合はそれを尊重する
-- `causal` 設定時 → `split.group_col` または `causal.unit_id_col`（panel）利用可能時に `GroupKFold` を適用し、利用不可時は `KFold` にフォールバックする
-- `split.type=timeseries` → 既存実装で時系列分割が適用される（変更なし）
-
----
-
-### Step 5: 学習曲線データの記録・Artifact保存
-
-**対象**: 全 `_train_single_booster` + 各 `TrainingOutput` + Artifact保存
-
-**実装方針**:
-- `_train_single_booster` の戻り値を `tuple[lgb.Booster, dict]` に変更し、`lgb.record_evaluation()` の結果を返す
-- 各 `TrainingOutput` dataclass に `training_history: list[dict]` フィールドを追加
-- Artifact保存時に `training_history.json` として永続化
-
-**Artifactスキーマ**:
-```json
-{
-  "folds": [
-    {
-      "fold": 1,
-      "num_iterations": 150,
-      "best_iteration": 120,
-      "eval_history": {"binary_logloss": [0.69, 0.55, 0.42, ...]}
-    }
-  ]
-}
-```
-
-**注**: 学習曲線の可視化（GUI/チャート）はPhase30で対応する。本Stepではデータ保存のみ。
-
----
-
-### Step 6: GUI対応
-
-**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
-
-**変更点**:
-1. `N Estimators` ラベルを `Num Boost Round` に変更し、意味を正確に反映する
-2. `Auto Class Weight` トグルスイッチ追加（`binary`/`multiclass` 選択時のみ表示、既定 ON）
-3. `Class Weight` 手動入力フィールド追加（`Auto Class Weight=OFF` 時のみ活性化）
-4. Config builder で `num_boost_round` を `train.num_boost_round` に正しくマッピング（現在の `lgb_params.n_estimators` のミスマッピングを修正）
-
----
-
-### Step 7: Config Migration
-
-**対象**: `src/veldra/config/migrate.py`
-
-- `train.lgb_params.n_estimators` が存在する場合 → 値を `train.num_boost_round` に移行
-- `n_estimators` キーを `lgb_params` から削除
-- migration utility に変換ルールを追加
-
----
-
-### Step 8: テスト計画
-
-| テスト | 内容 | ファイル |
-|--------|------|----------|
-| スキーマ検証 | `num_boost_round`, `auto_class_weight`, `class_weight`, `early_stopping_validation_fraction` のバリデーション | `tests/test_config_train_fields.py` |
-| Binary不均衡自動 | `auto_class_weight=True` で `is_unbalance` が自動的に設定される | `tests/test_binary_class_weight.py` |
-| Binary手動重み | `class_weight` 指定で `scale_pos_weight` が適用される | 同上 |
-| Multiclass不均衡自動 | `auto_class_weight=True` で balanced sample weight が自動的に適用される | `tests/test_multiclass_class_weight.py` |
-| Multiclass手動重み | `class_weight` 指定で指定重みがサンプルに適用される | 同上 |
-| num_boost_round | 設定値が実際の学習に反映される | `tests/test_num_boost_round.py` |
-| 分割自動適用 | binary/multiclass で stratified が自動適用される | `tests/test_auto_split_selection.py` |
-| 分割自動適用(causal) | causal 設定時に group KFold が自動適用される | 同上 |
-| ES用バリデーション分割(CV) | CVフォールドでtrain部分からES用バリデーションが分割され、OOFがES監視に使用されない | `tests/test_early_stopping_validation.py` |
-| ES用バリデーション分割(最終モデル) | 最終モデル学習時にも全データからES用バリデーションが分割される | 同上 |
-| ES用バリデーション分割(timeseries) | 時系列データで末尾N%がバリデーションに使用される | 同上 |
-| ES用バリデーション分割(stratified) | binary/multiclass で層化分割がバリデーション生成に使用される | 同上 |
-| ES無効時 | `early_stopping_rounds=None` の場合は分割せず全データで学習される | 同上 |
-| 学習曲線 | `training_history` がArtifactに保存される | `tests/test_training_history.py` |
-| 早期停止 | `best_iteration` が `training_history` に記録される | 同上 |
-| GUI | Config builder が新フィールドを正しく生成する | `tests/test_gui_app_callbacks_config.py` |
-| Migration | `lgb_params.n_estimators` → `num_boost_round` 変換 | `tests/test_config_migration.py` |
-
-### 検証コマンド
-- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
-- `uv run pytest tests/test_training_history.py -v`
-- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
-- `uv run pytest tests -x --tb=short`
-
-### 実装順序（依存関係順）
-1. Step 1: `TrainConfig` スキーマ拡張 + バリデーション
-2. Step 2: `num_boost_round` 設定可能化 + 最終モデル Early Stopping 用バリデーション分割（全4ファイル + utils.py 新設）
-3. Step 3: クラス不均衡の自動検出・重み適用（binary + multiclass）
-4. Step 4: バリデーション分割の自動適用
-5. Step 5: 学習曲線データの記録・Artifact保存
-6. Step 6: GUI対応
-7. Step 7: Config Migration
-8. Step 8: テスト
-
-### 完了条件
-- 目的変数の自動判定機能が実装され、ユーザーが明示的に指定しなくても適切な目的関数が選択されること。必要に応じてユーザーが設定変更もできること。
-- バリデーションデータの適切な設定が自動的に行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
-  - データが時系列の場合は、時系列分割が自動的に適用されること。
-  - 目的変数がカテゴリカル（Binary or Multi-class）であれば、層化分割が自動的に適用されること。
-  - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が自動的に適用されること。
-- CVフォールド・最終モデルの両方で、学習データ（train部分）からタスクに応じた分割タイプで early stopping 用バリデーションデータが自動分割されること。OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、純粋にOOF予測専用として扱われること。
-  - binary/multiclass → 層化分割（StratifiedShuffleSplit）で自動分割されること。
-  - regression/frontier → ランダム分割（ShuffleSplit）で自動分割されること。
-  - timeseries → 時系列順で末尾 N% がバリデーションに使用されること。
-  - `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習すること。
-  - 分割比率は `early_stopping_validation_fraction`（既定 0.1）で制御可能であること。
-- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが自動的に行われること。
-  - Binary分類タスクで、`auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
-    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
-  - Multi-class分類タスクで、`auto_class_weight=True`（既定）の場合に、balanced sample weight が自動的に算出・適用されること。
-    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
-- `num_boost_round` が `TrainConfig` から制御可能で、全タスク（regression/binary/multiclass/frontier）で反映されること。
-- 学習曲線の早期停止機能が実装され、ユーザーが `early_stopping_rounds` と `num_boost_round` を設定できること。
-- 学習曲線データ（foldごとのイテレーション別メトリクス + best_iteration）が `training_history.json` としてArtifactに保存されること。学習曲線の可視化はPhase30で対応する。
-- GUI で `Num Boost Round`、`Auto Class Weight`、`Class Weight` が設定可能であること。
-- `lgb_params.n_estimators` → `train.num_boost_round` の Config migration が動作すること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+### 実装要点（Step1-8 完了）
+- `TrainConfig` 拡張:
+  - `num_boost_round`, `early_stopping_validation_fraction`, `auto_class_weight`, `class_weight` を追加。
+  - cross-field validation を追加（task 制約、競合指定、値域）。
+- 学習ループ:
+  - 全 task で `num_boost_round` を 300 固定から設定値駆動へ移行。
+  - CV/最終学習ともに train 部分から ES 用 validation を自動分割（OOF を ES 監視に使わない）。
+  - `timeseries` は末尾 N%、分類は stratified、回帰/frontier は shuffle split。
+- クラス不均衡対応:
+  - binary: `is_unbalance` 自動、手動 `class_weight` から `scale_pos_weight` 適用。
+  - multiclass: 自動/手動 sample weight を `Dataset(weight=...)` へ反映。
+- 学習履歴:
+  - `record_evaluation` を保存し、Artifact に `training_history.json` を永続化。
+- GUI + migration:
+  - `Num Boost Round` 表示、`Auto Class Weight` / `Class Weight` 入力追加。
+  - `lgb_params.n_estimators` → `train.num_boost_round` を migrate。
 
 ### 検証結果（2026-02-16）
-- 全8ステップ（スキーマ拡張 / num_boost_round / ES分割 / クラス不均衡 / 分割自動適用 / 学習曲線 / GUI / Migration）が実装完了。
-- Phase25.7 関連テスト: **31 passed, 0 failed**
-- Stable API 互換性: 維持確認済み
+- Phase25.7 関連: **31 passed, 0 failed**
+- Stable API 互換性: 維持確認済み。
 
-## 12.8 Phase25.8: LightGBMのパラメーター追加
+## 12.8 Phase25.8: LightGBMのパラメーター追加（実装・検証完了）
 
 ### 目的
-- Top-K Precision の追加（`top_k` パラメーター）により、Binary モデル性能評価の多様化を実現する。
-- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、特定特徴量への分割集中を制御する。
-- `num_leaves` の自動調整機能（`auto_num_leaves` + `num_leaves_ratio`）により、木構造のデータ適応を自動化する。
-- 比率ベースのリーフ制約（`min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）により、過学習防止とモデル安定性を向上する。
-- 既存の `lgb_params` 経由パラメーターを GUI で直接設定可能にする。
-
-### 現状分析
-
-| パラメーター | 現状 | 対応 |
-|-------------|------|------|
-| `top_k` | 未実装。Binary 評価・学習に precision@k がない | `TrainConfig` に追加。LightGBM カスタム metric（`feval`）として学習ループに組込み、ES 監視・tune objective・evaluate 返却で利用可能にする |
-| `feature_weights` | 未実装 | `TrainConfig` に追加し、`lgb.Dataset(feature_name=..., weight=...)` とは別に `lgb.Dataset` の `feature_name` パラメータに続けて適用 |
-| `auto_num_leaves` | 未実装。GUI で `num_leaves` を手動入力するのみ | `TrainConfig` にフラグ追加。`max_depth` から動的に `num_leaves` を算出 |
-| `num_leaves_ratio` | 未実装 | `auto_num_leaves=True` 時の補正係数として `TrainConfig` に追加 |
-| `min_data_in_leaf_ratio` | 未実装。`min_child_samples` は絶対値で `lgb_params` 経由 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_leaf` を動的算出 |
-| `min_data_in_bin_ratio` | 未実装。`min_data_in_bin` は `lgb_params` 経由で設定可能 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_bin` を動的算出 |
-| `path_smooth` / `cat_l2` / `cat_smooth` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
-| `bagging_freq` / `max_bin` / `max_drop` / `min_gain_to_split` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
-
----
-
-### Step 1: `TrainConfig` スキーマ拡張
-
-**対象**: `src/veldra/config/models.py`
-
-```python
-class TrainConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lgb_params: dict[str, Any] = Field(default_factory=dict)
-    early_stopping_rounds: int | None = 100
-    early_stopping_validation_fraction: float = 0.1
-    num_boost_round: int = 300
-    auto_class_weight: bool = True
-    class_weight: dict[str, float] | None = None
-    seed: int = 42
-    # --- Phase25.8 追加 ---
-    auto_num_leaves: bool = False               # NEW: max_depth から num_leaves を自動算出
-    num_leaves_ratio: float = 1.0               # NEW: auto_num_leaves 時の補正係数
-    min_data_in_leaf_ratio: float | None = None  # NEW: 行数に対する比率 (例: 0.01 → 1%)
-    min_data_in_bin_ratio: float | None = None   # NEW: 行数に対する比率 (例: 0.001)
-    feature_weights: dict[str, float] | None = None  # NEW: 特徴量名→重み
-    top_k: int | None = None                    # NEW: precision@k の k（binary のみ）
-```
-
-**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
-- `auto_num_leaves=True` の場合 `num_leaves_ratio` は `0.0 < ratio <= 1.0` を検証
-- `auto_num_leaves=True` かつ `lgb_params` に `num_leaves` が明示指定されている場合は ValueError（競合）
-- `min_data_in_leaf_ratio` は `0.0 < ratio < 1.0` を検証
-- `min_data_in_bin_ratio` は `0.0 < ratio < 1.0` を検証
-- `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定は禁止
-- `min_data_in_bin_ratio` と `lgb_params.min_data_in_bin` の同時指定は禁止
-- `top_k` は `binary` タスクのみ許可、`top_k >= 1` を検証
-- `feature_weights` の値は全て `> 0` を検証
-
----
-
-### Step 2: `auto_num_leaves` の動的算出ロジック
-
-**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
-
-```python
-def resolve_auto_num_leaves(config: RunConfig) -> int | None:
-    """auto_num_leaves=True の場合に num_leaves を動的に算出する。
-
-    - max_depth が指定されていない場合(-1): num_leaves = 131072（LightGBM上限）
-    - max_depth が指定されている場合: num_leaves = clip(2^max_depth, 8, 131072)
-    - num_leaves_ratio で補正: num_leaves = clip(ceil(num_leaves * ratio), 8, 131072)
-    - auto_num_leaves=False の場合は None を返す（既存の lgb_params.num_leaves が使われる）
-    """
-```
-
-**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
-```python
-# auto_num_leaves の解決
-resolved_leaves = resolve_auto_num_leaves(config)
-if resolved_leaves is not None:
-    params["num_leaves"] = resolved_leaves
-```
-
----
-
-### Step 3: 比率ベースのリーフ・ビン制約
-
-**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
-
-```python
-def resolve_ratio_params(config: RunConfig, n_rows: int) -> dict[str, int]:
-    """比率ベースのパラメーターを絶対値に変換する。
-
-    - min_data_in_leaf_ratio: n_rows * ratio → min_data_in_leaf（最小 1）
-    - min_data_in_bin_ratio: n_rows * ratio → min_data_in_bin（最小 1）
-    """
-```
-
-**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
-```python
-ratio_params = resolve_ratio_params(config, len(x_train))
-params.update(ratio_params)
-```
-
----
-
-### Step 4: `feature_weights` の適用
-
-**対象**: 全4ファイルの `_train_single_booster` 内
-
-**実装方針**:
-- `config.train.feature_weights` が指定されている場合、特徴量名のリストに対応する重みリストを構築
-- `lgb.Dataset` コンストラクタの `feature_name` と合わせて `lgb.train()` の `feature_weights` パラメータを使用
-- 指定されていない特徴量のデフォルト重みは `1.0`
-
-```python
-# feature_weights の適用
-if config.train.feature_weights:
-    fw = [config.train.feature_weights.get(col, 1.0) for col in x_train.columns]
-else:
-    fw = None
-# ...
-booster = lgb.train(
-    params=params,
-    train_set=train_set,
-    # ...,
-    feature_name=list(x_train.columns) if fw else "auto",
-)
-# feature_weights は lgb.Dataset ではなく lgb.train() の引数ではないため、
-# params["feature_fraction_bynode"] 等との組合せで実現するか、
-# lgb.Dataset(init_score=...) ではなく params dict に直接設定:
-# params["feature_weights"] = fw  ← LightGBM は内部で feature_weights を受け付ける（要確認）
-```
-
-**注**: LightGBM の `feature_weights` は `lgb.Dataset` の `set_feature_names` 後に
-`dataset.set_feature_names()` とは異なり `params` に直接渡す形式ではない。
-実際には `lgb.train()` の `feature_name` パラメータと合わせて
-`Dataset(feature_name=..., free_raw_data=False)` 構築後に
-`train_set.feature_name` を参照し weight リストを構築する方式を取る。
-→ LightGBM 4.x の `feature_pre_filter` と `feature_weights` サポートを確認の上、最適な方法を採用する。
-
----
-
-### Step 5: Top-K Precision のカスタム metric 実装
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/tuning.py`, `src/veldra/config/models.py`
-
-#### 5a: LightGBM カスタム評価関数（`feval`）
-
-**新規関数**（`src/veldra/modeling/binary.py`）:
-```python
-def _make_precision_at_k_feval(k: int):
-    """LightGBM の feval 互換の precision@k 評価関数を返す。
-
-    - feval シグネチャ: (y_pred, dataset) -> (name, value, is_higher_better)
-    - y_pred を降順ソートし、上位 k 件を抽出
-    - 抽出された k 件中の正例数 / k が precision@k
-    - k > len(y_true) の場合は全件を使用
-    - is_higher_better=True（precision は高いほど良い）
-    """
-    def _precision_at_k(y_pred, dataset):
-        y_true = dataset.get_label()
-        order = np.argsort(-y_pred)
-        top = order[:min(k, len(y_true))]
-        value = float(y_true[top].sum() / len(top))
-        return f"precision_at_{k}", value, True
-    return _precision_at_k
-```
-
-**適用箇所**（`_train_single_booster` 内）:
-- `config.train.top_k` が指定されている場合、`_make_precision_at_k_feval(k)` を生成
-- `lgb.train()` の `feval` 引数に渡す
-- これにより early stopping が `precision_at_{k}` を監視メトリクスとして利用可能になる
-
-```python
-feval_funcs = []
-if config.train.top_k is not None:
-    feval_funcs.append(_make_precision_at_k_feval(config.train.top_k))
-
-return lgb.train(
-    params=params,
-    train_set=train_set,
-    valid_sets=[valid_set],
-    num_boost_round=config.train.num_boost_round,
-    callbacks=callbacks,
-    feval=feval_funcs if feval_funcs else None,
-)
-```
-
-#### 5b: Tuning objective への統合
-
-**対象**: `src/veldra/config/models.py`
-
-`_TUNE_ALLOWED_OBJECTIVES["binary"]` に `precision_at_k` を追加:
-```python
-"binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall", "precision_at_k"},
-```
-
-**対象**: `src/veldra/modeling/tuning.py`
-
-Tune trial 内で `precision_at_k` が objective に指定された場合:
-- `config.train.top_k` の値を使用して OOF 予測に対する precision@k を算出
-- `top_k` 未指定時はエラー
-
-#### 5c: evaluate API での返却
-
-**対象**: `src/veldra/modeling/binary.py`
-
-`_binary_metrics` / `_binary_label_metrics` の呼び出し後に:
-- `config.train.top_k` が指定されていれば `precision_at_{k}` をメトリクス dict に追加
-- これにより `evaluate` API の返却値にも含まれる
-
-**メトリクスキー**: `precision_at_{k}`（例: `precision_at_100`）
-
-**学習曲線**: `record_evaluation` callback により `training_history.json` にイテレーションごとの `precision_at_{k}` が自動記録される。
-
----
-
-### Step 6: GUI Advanced Training Parameters の拡充
-
-**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
-
-**config_page.py の Advanced Training Parameters アコーディオン**に以下を追加:
-
-| GUI コンポーネント | ID | タイプ | デフォルト | 備考 |
-|-------------------|-----|--------|-----------|------|
-| Auto Num Leaves | `cfg-train-auto-num-leaves` | Switch | OFF | ON 時に Num Leaves 入力を無効化 |
-| Num Leaves Ratio | `cfg-train-num-leaves-ratio` | Slider (0.1–1.0) | 1.0 | `auto_num_leaves=ON` 時のみ活性 |
-| Min Data In Leaf Ratio | `cfg-train-min-leaf-ratio` | Input (number) | 空 | 設定時は `min_child_samples` より優先 |
-| Min Data In Bin Ratio | `cfg-train-min-bin-ratio` | Input (number) | 空 | |
-| Feature Weights | `cfg-train-feature-weights` | Textarea (JSON) | 空 | `{"col_name": 2.0, ...}` 形式 |
-| Path Smooth | `cfg-train-path-smooth` | Input (number) | 0 | |
-| Cat L2 | `cfg-train-cat-l2` | Input (number) | 10 | |
-| Cat Smooth | `cfg-train-cat-smooth` | Input (number) | 10 | |
-| Bagging Freq | `cfg-train-bagging-freq` | Input (number) | 0 | |
-| Max Bin | `cfg-train-max-bin` | Input (number) | 255 | |
-| Min Gain To Split | `cfg-train-min-gain` | Input (number) | 0 | |
-| Top K (Binary) | `cfg-train-top-k` | Input (number) | 空 | binary 選択時のみ表示。学習 feval + 評価 metric 両用 |
-
-**app.py の `_cb_build_config_yaml` への追加**:
-- 上記の各 Input を callback の引数に追加
-- `cfg["train"]` および `cfg["train"]["lgb_params"]` に値をマッピング
-- 空値（None / 空文字）はスキップし、YAML に含めない
-- `auto_num_leaves` / `num_leaves_ratio` / `min_data_in_leaf_ratio` / `min_data_in_bin_ratio` / `feature_weights` は `cfg["train"]` 直下に配置
-- `path_smooth` / `cat_l2` / `cat_smooth` / `bagging_freq` / `max_bin` / `min_gain_to_split` は `cfg["train"]["lgb_params"]` に配置
-
----
-
-### Step 7: Tuning Search Space の拡充
-
-**対象**: `src/veldra/modeling/tuning.py`
-
-**standard プリセット**に以下を追加:
-```python
-"standard": {
-    # 既存 ...
-    "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
-    "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
-    "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},              # NEW
-    "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},         # NEW
-}
-```
-
----
-
-### Step 8: Artifact パラメーター永続化の確認
-
-**現状**: `run_config.yaml` が Artifact に保存されるため、`TrainConfig` に追加された全フィールドと `lgb_params` 内のパラメーターは自動的に永続化される。
-
-**追加対応**:
-- `feature_weights` が大量の場合でも `run_config.yaml` に含まれるため、別ファイル化は不要（YAML のまま）
-- Artifact からの `predict` 実行時に `feature_weights` が保存された RunConfig から復元されることを確認
-
----
-
-### Step 9: テスト計画
-
-| テスト | 内容 | ファイル |
-|--------|------|----------|
-| スキーマ検証 | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` のバリデーション | `tests/test_config_param_fields.py` |
-| auto_num_leaves | `auto_num_leaves=True` で `max_depth` から `num_leaves` が動的算出される | `tests/test_auto_num_leaves.py` |
-| auto_num_leaves + ratio | `num_leaves_ratio=0.5` で葉数が半減する | 同上 |
-| auto_num_leaves 競合 | `auto_num_leaves=True` かつ `lgb_params.num_leaves` 指定でエラー | 同上 |
-| min_data_in_leaf_ratio | 比率から絶対値が正しく算出される | `tests/test_ratio_params.py` |
-| min_data_in_bin_ratio | 比率から絶対値が正しく算出される | 同上 |
-| 比率パラメーター競合 | `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定でエラー | 同上 |
-| feature_weights | 指定した重みが学習に反映される（モデルが作成可能なこと） | `tests/test_feature_weights.py` |
-| feature_weights 不正値 | 重み <= 0 でバリデーションエラー | 同上 |
-| top_k feval | `top_k` 指定時に LightGBM カスタム metric として学習ループ内で `precision_at_{k}` が算出される | `tests/test_top_k_precision.py` |
-| top_k early stopping | `precision_at_{k}` で early stopping が正しく動作する | 同上 |
-| top_k evaluate | Binary 評価で `precision_at_{k}` がメトリクスに含まれる | 同上 |
-| top_k tune objective | `precision_at_k` を tune objective に指定して最適化が動作する | 同上 |
-| top_k 非 binary | `top_k` を regression で指定してバリデーションエラー | 同上 |
-| top_k 学習曲線 | `training_history.json` にイテレーションごとの `precision_at_{k}` が記録される | 同上 |
-| GUI | Config builder が新フィールドを正しく YAML に生成する | `tests/test_gui_app_callbacks_config.py`（既存に追加） |
-| Tuning search space | standard プリセットに `lambda_l1`, `lambda_l2` 等が含まれる | `tests/test_tuning_search_space.py` |
-| Artifact 復元 | 新パラメーター付き Artifact からの predict が成功する | `tests/test_artifact_param_roundtrip.py` |
-
-### 検証コマンド
-- `uv run pytest tests/test_config_param_fields.py tests/test_auto_num_leaves.py tests/test_ratio_params.py -v`
-- `uv run pytest tests/test_feature_weights.py tests/test_top_k_precision.py -v`
-- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py -v`
-- `uv run pytest tests/test_gui_app_callbacks_config.py -v`
-- `uv run pytest tests -x --tb=short`
-
-### 実装順序（依存関係順）
-1. Step 1: `TrainConfig` / `PostprocessConfig` スキーマ拡張 + バリデーション
-2. Step 2: `auto_num_leaves` 動的算出ロジック（`utils.py` + 全4 modeling ファイル）
-3. Step 3: 比率ベースパラメーター算出ロジック（`utils.py` + 全4 modeling ファイル）
-4. Step 4: `feature_weights` の適用（全4 modeling ファイル）
-5. Step 5: Top-K Precision カスタム metric（`binary.py` + `tuning.py` + 評価経路）
-6. Step 6: GUI Advanced Training Parameters 拡充
-7. Step 7: Tuning Search Space 拡充
-8. Step 8: Artifact パラメーター永続化確認
-9. Step 9: テスト
-
-### 完了条件
-- `auto_num_leaves=True` の場合に `max_depth` から `num_leaves` が動的に算出され、`num_leaves_ratio` で補正可能であること。`auto_num_leaves=True` と `lgb_params.num_leaves` の同時指定でバリデーションエラーとなること。
-- `min_data_in_leaf_ratio` が指定された場合に学習データの行数に基づいて `min_data_in_leaf` が動的に算出されること。`min_data_in_bin_ratio` も同様に動作すること。比率パラメーターと対応する `lgb_params` の絶対値パラメーターの同時指定でバリデーションエラーとなること。
-- `feature_weights` が指定された場合に、特徴量ごとの重みが LightGBM の学習に反映されること。重み <= 0 の指定でバリデーションエラーとなること。
-- `top_k` が指定された場合に precision@k が LightGBM カスタム metric（`feval`）として学習ループに組み込まれ、early stopping の監視指標として動作すること。`precision_at_k` を tune の objective として指定可能であること。`evaluate` API でも `precision_at_{k}` がメトリクスに含まれること。`training_history.json` にイテレーションごとの値が記録されること。`top_k` は `binary` タスクのみ許可され、他タスクではバリデーションエラーとなること。
-- GUI の Advanced Training Parameters に `Auto Num Leaves` / `Num Leaves Ratio` / `Min Data In Leaf Ratio` / `Min Data In Bin Ratio` / `Feature Weights` / `Path Smooth` / `Cat L2` / `Cat Smooth` / `Bagging Freq` / `Max Bin` / `Min Gain To Split` / `Top K` の入力欄が追加され、Config YAML に正しく反映されること。
-- Tuning の standard プリセットに `lambda_l1` / `lambda_l2` / `path_smooth` / `min_gain_to_split` が追加されること。
-- 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+- パラメーター拡張を RunConfig/GUI/Tuning/Evaluate/Artifact に一貫適用。
+
+### 実装要点（Step1-9 完了）
+- `TrainConfig` 拡張:
+  - `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` を追加。
+  - 競合・値域・task 制約（`top_k` は binary のみ）を検証。
+- modeling utils:
+  - `resolve_auto_num_leaves`, `resolve_ratio_params`, `resolve_feature_weights` を追加し、全4 task 学習器へ適用。
+- Binary Top-K:
+  - `precision_at_k` を `feval` として fit へ統合。
+  - tune objective（`precision_at_k`）と evaluate 返却、`training_history` 記録に連携。
+- GUI 拡張:
+  - Advanced Training Parameters に 25.8 項目を追加。
+  - `auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
+  - binary tune objective 候補に `brier` / `precision_at_k` を追加。
+- tuning search space:
+  - standard に `lambda_l1`, `lambda_l2`, `path_smooth`, `min_gain_to_split` を追加。
+- docs/運用:
+  - RunConfig reference 生成スクリプトを更新し README へ反映。
 
 ### Decision（provisional）
-- `train.top_k` が指定された場合、Early Stopping は `precision_at_{k}` を優先監視する（`metric=None + feval`）。
-- `train.feature_weights` は未知特徴量キーを許容しない。未知キーは学習前に `VeldraValidationError` とする。
-
-### 実装結果（2026-02-16）
-- `TrainConfig` に `auto_num_leaves / num_leaves_ratio / min_data_in_leaf_ratio / min_data_in_bin_ratio / feature_weights / top_k` を追加し、cross-field validation を実装。
-- `modeling/utils.py` に `resolve_auto_num_leaves / resolve_ratio_params / resolve_feature_weights` を追加し、全4 task 学習器へ適用。
-- binary 学習に `precision_at_k` を実装し、`fit / tune / evaluate / training_history` で利用可能にした。
-- binary `metrics.mean` に `accuracy/f1/precision/recall` を含めるよう修正し、既存 tuning objective の実行不整合を解消。
-- GUI Builder に Phase25.8 パラメータ入力を追加し、`auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
-- `_cb_update_tune_objectives("binary")` に `brier` と `precision_at_k` を追加。
-- `scripts/generate_runconfig_reference.py` を更新し、README RunConfig Reference を再生成。
+- `train.top_k` 指定時、ES 監視は `precision_at_{k}` 優先。
+- `train.feature_weights` は未知特徴量キーを許容せず、学習前に validation error。
 
 ### 検証結果（2026-02-16）
-- `uv run ruff check .` : passed
-- `uv run pytest -q tests/test_config_train_fields.py tests/test_lgb_param_resolution.py tests/test_top_k_precision.py` : **19 passed**
-- `uv run pytest -q tests/test_tuning_internal.py tests/test_tune_objective_selection.py tests/test_tune_validation.py tests/test_binary_evaluate_metrics.py` : **17 passed**
-- `uv run pytest -q tests/test_gui_app_callbacks_config.py tests/test_gui_pages_and_init.py tests/test_gui_new_layout.py tests/test_gui_app_additional_branches.py` : **28 passed**
-- `uv run pytest -q -m "not gui"` : **385 passed**
-- `uv run pytest -q -m "gui"` : **100 passed**
+- `uv run ruff check .`: passed
+- 主要テスト群（config/lgb resolver/top_k/tuning/evaluate/gui）通過。
+- `uv run pytest -q -m "not gui"`: **385 passed**
+- `uv run pytest -q -m "gui"`: **100 passed**
 
-## 12.9 Phase25.9: LightGBM機能強化の不足テスト補完
+## 12.9 Phase25.9: LightGBM機能強化の不足テスト補完（完了）
 
 ### 目的
-Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テストでカバーされていないギャップを特定し、不足テストを追加する。
+- Phase25.7/25.8 の未カバー領域をテストで閉じ、必要時は同フェーズ内で最小本体修正まで実施。
 
-### 実装方針（2026-02-16 更新）
-- 不足テスト追加で差分が見つかった場合、Phase25.9 内で最小本体修正まで行う。
-- Causal の GroupKFold は既存 `split.group_col` 検証に加えて、`causal.unit_id_col` 経路を追加検証する。
-- `best_iteration` は実学習依存を避け、monkeypatch による安定した契約検証を優先する。
+### 実装方針（固定）
+- 不足テスト追加で差分が出た場合は最小本体修正を同時適用。
+- Causal は `split.group_col` に加えて `causal.unit_id_col` 経路を検証。
+- `best_iteration` は monkeypatch 契約検証を主方式にして CI 安定性を優先。
 
-### 既存テストカバレッジ分析（2026-02-16 時点）
+### 追加/更新テスト
+- 新規:
+  - `tests/test_auto_num_leaves.py`
+  - `tests/test_ratio_params.py`
+  - `tests/test_feature_weights.py`
+  - `tests/test_tuning_search_space.py`
+  - `tests/test_objective_override.py`
+  - `tests/test_artifact_param_roundtrip.py`
+- 既存拡張:
+  - `tests/test_num_boost_round.py`（既定値 300 後方互換）
+  - `tests/test_early_stopping_validation.py`（`best_iteration` 記録契約）
+  - `tests/test_dr_internal.py`（`unit_id_col` 経路の GroupKFold / fallback）
 
-#### Phase25.7: カバー済み
-| テスト対象 | 既存テストファイル | 状態 |
-|---|---|---|
-| Config バリデーション | `test_config_train_fields.py` | 充足 |
-| Binary class weight | `test_binary_class_weight.py` | 充足 |
-| Multiclass class weight | `test_multiclass_class_weight.py` | 充足 |
-| num_boost_round 反映 | `test_num_boost_round.py` | 充足（全4タスク） |
-| 分割自動適用 | `test_auto_split_selection.py` | binary/regression のみ |
-| ES用バリデーション分割 | `test_early_stopping_validation.py` | 充足（無効時/timeseries/binary層化/CVでOOF非使用） |
-| 学習曲線Artifact保存 | `test_training_history.py` | 充足（save/load + legacy互換） |
-| Config migration | `test_config_migrate_file.py` / `test_config_migrate_payload.py` | 充足（`n_estimators` → `num_boost_round`） |
+### 最小本体修正
+- `src/veldra/modeling/regression.py`
+- `src/veldra/modeling/binary.py`
+- `src/veldra/modeling/multiclass.py`
+- `src/veldra/modeling/frontier.py`
+- `feature_weights` 指定時に `params["feature_pre_filter"] = False` を付与し、適用契約を固定。
 
-#### Phase25.8: ギャップあり
-| テスト対象 | 既存テストファイル | 状態 |
-|---|---|---|
-| Config バリデーション（25.8分） | `test_config_train_fields.py` | 充足（auto_num_leaves/ratio/feature_weights/top_k） |
-| パラメーター解決ロジック | `test_lgb_param_resolution.py` | ユニットテストのみ（`resolve_*` 関数の入出力検証） |
-| top_k precision | `test_top_k_precision.py` | 充足（helper/feval/CV metrics/training_history） |
-| GUI Config builder（25.8分） | `test_gui_new_layout.py` | 充足（YAML出力に25.8パラメーター含む） |
-| **auto_num_leaves 学習適用** | — | **不在**: 学習ループで `params["num_leaves"]` に算出値が渡されるか未検証 |
-| **ratio_params 学習適用** | — | **不在**: 学習ループで `params["min_data_in_leaf"]` 等が渡されるか未検証 |
-| **feature_weights 学習適用** | — | **不在**: 学習ループで重みリストが渡されるか未検証 |
-| **Tuning search space 拡充** | — | **不在**: standard プリセットに `lambda_l1`/`lambda_l2`/`path_smooth`/`min_gain_to_split` が含まれるか未検証 |
-| **新パラメーター Artifact roundtrip** | — | **不在**: 新パラメーター付き Artifact → predict 成功の検証なし |
-| **num_boost_round 既定値後方互換** | — | **不在**: 未指定時に既定値300で動作するか未検証 |
-| **早期停止の best_iteration 動作** | — | **不在**: monkeypatch で `best_iteration` 記録契約（`< num_boost_round`）を固定検証していない |
-| **Causal での GroupKFold 自動適用** | `test_dr_internal.py` | **一部充足**: `split.group_col` は検証済み、`causal.unit_id_col` 経路が未検証 |
-| **目的関数ユーザー上書き** | — | **不在**: `lgb_params.objective` 指定時の優先動作が未検証 |
+### Decision（confirmed）
+- 不足テスト + 必要時の最小本体修正を同一フェーズで閉じる方針を確定。
+- Causal GroupKFold は `group_col` 維持 + `unit_id_col` 補完で確定。
+- 早期停止 `best_iteration` は monkeypatch 契約検証を正式方式として確定。
 
----
-
-### 取り組み項目
-
-#### 1. `auto_num_leaves` 学習ループ適用テスト
-- **ファイル**: `tests/test_auto_num_leaves.py`（新規）
-- `auto_num_leaves=True` + `lgb_params.max_depth=5` + `num_leaves_ratio=0.5` で `lgb.train()` に渡される `params["num_leaves"]` が算出値（16）であることを monkeypatch で検証する。
-- `auto_num_leaves=False`（既定）の場合に `params["num_leaves"]` がセットされないことを検証する。
-- 代表タスク（regression）で検証し、`resolve_auto_num_leaves` の呼び出しが全4タスクで共通であることは `test_lgb_param_resolution.py` のユニットテストで担保する。
-
-#### 2. `ratio_params` 学習ループ適用テスト
-- **ファイル**: `tests/test_ratio_params.py`（新規）
-- `min_data_in_leaf_ratio=0.05` 指定時に `params["min_data_in_leaf"]` がデータ行数に基づく算出値であることを monkeypatch で検証する。
-- `min_data_in_bin_ratio=0.01` 指定時に `params["min_data_in_bin"]` が算出値であることを検証する。
-- 代表タスク（regression）で検証する。
-
-#### 3. `feature_weights` 学習ループ適用テスト
-- **ファイル**: `tests/test_feature_weights.py`（新規）
-- `feature_weights={"x1": 2.0}` 指定時に `params["feature_pre_filter"]` が `False` になり、`params["feature_weights"]` に正しい重みリストが渡されることを monkeypatch で検証する。
-- `feature_weights` 未指定時に `params` に `feature_weights` キーが含まれないことを検証する。
-- 代表タスク（regression）で検証する。
-
-#### 4. Tuning search space 拡充テスト
-- **ファイル**: `tests/test_tuning_search_space.py`（新規）
-- `_default_search_space("regression", "standard")` の返却 dict に `lambda_l1`, `lambda_l2`, `path_smooth`, `min_gain_to_split` キーが含まれることを検証する。
-- 各キーの `type`, `low`, `high` が妥当な値であることを検証する。
-
-#### 5. 新パラメーター付き Artifact ラウンドトリップテスト
-- **ファイル**: `tests/test_artifact_param_roundtrip.py`（新規）
-- `auto_num_leaves=True`, `feature_weights`, `top_k` を設定した RunConfig で Artifact を `save` → `load` し、`run_config.yaml` 内にこれらのフィールドが保持されていることを検証する。
-- ロードした Artifact から `predict` が成功すること（predict 自体は RunConfig のパラメーターに依存しないが、config 復元の整合性として検証）を確認する。
-
-#### 6. `num_boost_round` 既定値後方互換テスト
-- **ファイル**: `tests/test_num_boost_round.py`（既存に追加）
-- `train.num_boost_round` 未指定時に既定値 300 で `lgb.train()` が呼ばれることを monkeypatch で検証する。
-
-#### 7. 早期停止 `best_iteration` 動作テスト
-- **ファイル**: `tests/test_early_stopping_validation.py`（既存に追加）
-- `lgb.train()` を monkeypatch し、`best_iteration < num_boost_round` の Booster を返したときに `training_history.final_model.best_iteration` へ正しく記録されることを検証する。
-
-#### 8. Causal での GroupKFold 自動適用テスト
-- **ファイル**: `tests/test_dr_internal.py`（既存に追加）
-- 既存の `split.group_col` 分岐テストを維持しつつ、`split.group_col` 未指定でも `causal.unit_id_col`（panel想定）経路で `GroupKFold` が選択されることを monkeypatch で検証する。
-- `unit_id_col` が実質1群など GroupKFold が成立しない場合に `KFold` フォールバックが維持されることを検証する。
-
-#### 9. 目的関数ユーザー上書きテスト
-- **ファイル**: `tests/test_objective_override.py`（新規）
-- Binary タスクで `lgb_params.objective` を `cross_entropy` に指定した場合に、`lgb.train()` の `params["objective"]` がユーザー指定値になることを monkeypatch で検証する。
-- 未指定時にタスク既定値（例: `binary` → `binary`）が使用されることを検証する。
-
----
-
-### テストファイル一覧
-
-| ファイル | 新規/既存 | テスト数（想定） |
-|---|---|---|
-| `tests/test_auto_num_leaves.py` | 新規 | 2 |
-| `tests/test_ratio_params.py` | 新規 | 2 |
-| `tests/test_feature_weights.py` | 新規 | 2 |
-| `tests/test_tuning_search_space.py` | 新規 | 1–2 |
-| `tests/test_artifact_param_roundtrip.py` | 新規 | 1–2 |
-| `tests/test_objective_override.py` | 新規 | 2 |
-| `tests/test_num_boost_round.py` | 既存追加 | +1 |
-| `tests/test_early_stopping_validation.py` | 既存追加 | +1 |
-| `tests/test_dr_internal.py` | 既存追加 | +2 |
-
-### 検証コマンド
-- `uv run pytest tests/test_auto_num_leaves.py tests/test_ratio_params.py tests/test_feature_weights.py -v`
-- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py tests/test_objective_override.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py -v`
-- `uv run pytest tests -x --tb=short`
-
-### 完了条件
-- Phase25.8 の学習ループ適用テスト（auto_num_leaves / ratio_params / feature_weights）が追加され、`resolve_*` 関数のユニットテストだけでなく実際の学習器への適用が検証されること。
-- Tuning search space の standard プリセットに追加されたパラメーターの存在が検証されること。
-- 新パラメーター付き Artifact の save → load ラウンドトリップが成功すること。
-- `num_boost_round` 既定値後方互換、`best_iteration` 記録契約（monkeypatch）、Causal GroupKFold 自動適用（`unit_id_col` 経路を含む）、目的関数ユーザー上書きのテストが追加されること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+### 検証結果（2026-02-16）
+- 追加テスト群: **6 passed / 4 passed / 26 passed**（3バッチ）
+- `uv run ruff check .`: passed
+- `uv run pytest -q -m "not gui"`: **399 passed, 100 deselected**
 
 ## 13 Phase 26: UX/UI 改善
 
@@ -1654,6 +919,11 @@ export-report = [
 | 26.10 | Export 機能（Excel + HTML Report） | 26.8 |
 | 26.11 | テスト + 統合検証 | 全 Sub-Phase |
 
+> 注記（2026-02-16）:
+> この依存表は Phase26 実装時の旧サブフェーズ定義を保持する履歴である。
+> **Phase26.1 の正式定義は `13.1 Phase 26.1: UI改善` を唯一の正**とし、
+> Stage 1（バグ修正）/Stage 2（UI再構成設計）の2段階で運用する。
+
 ---
 
 ### テスト計画
@@ -1700,6 +970,378 @@ export-report = [
 9. **後方互換**: 既存の GUI テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。workflow-state の既存キーは維持されること。
 10. **E2E フロー**: Data → Target → Validation → Train → Run → Results の一連フローが、初学者が指示のもとで初回完遂可能であること。
 
+## 13.1 Phase 26.1: UI改善
+
+### 目的
+ユーザーの使い方に合わせたUI改善。バグ修正3件 + ユースケース駆動のGUI再構成を行う。
+
+---
+
+### 実装固定方針（2026-02-17）
+
+Phase 26.1 は **Stage 1（バグ修正）** と **Stage 2（UI再構成設計）** の2段階で実施する。
+
+---
+
+### Stage 1: バグ修正（3件）
+
+#### 1-A: Queue時刻の日本時間表示
+
+**現状**: `job_store.py` は UTC ISO 形式で保存。`app.py:643` の `_format_jst_timestamp()` で JST 変換して表示している。
+ただし Runs テーブル等で JST 変換が適用されていない箇所がある可能性がある。
+
+**対応内容**:
+- Runs テーブル（`runs_page.py`）、Run ページのジョブステータス表示、Compare ページ等、全てのユーザー向けタイムスタンプ表示箇所で `_format_jst_timestamp()` が適用されていることを確認・修正する。
+- Export ファイル名に使用されるタイムスタンプ（`services.py` の `_export_output_path()`）も JST に統一する。
+
+**対象ファイル**:
+- `src/veldra/gui/app.py` — Runs テーブルデータ生成コールバック内のタイムスタンプ変換確認
+- `src/veldra/gui/services.py` — `_export_output_path()` のタイムスタンプを JST に変更
+
+#### 1-B: HTMLレポートのブラウザダウンロード対応
+
+**現状**: HTMLレポート生成は `export_html_report` アクションとしてジョブキューに投入される（`app.py:2604`）。
+ジョブ完了後、レポートファイルは `{artifact}/reports/` ディレクトリに保存されるが、
+ブラウザへの自動ダウンロードトリガーが存在しない。ユーザーはファイルシステムから手動でアクセスする必要がある。
+
+**対応内容**:
+1. Results ページに `dcc.Download(id="result-report-download")` コンポーネントを追加する。
+2. HTMLレポートジョブ完了時に、`dcc.Interval` ポーリングで完了を検知し、`dcc.send_file()` でブラウザダウンロードをトリガーする。
+3. Excel レポートも同様に `dcc.send_file()` でダウンロード可能にする。
+4. ジョブ完了前はステータス表示（「生成中...」）、完了後は「ダウンロード」ボタンに切り替える。
+
+**具体的な実装方針**:
+- `results_page.py`: `dcc.Download` コンポーネントと「ダウンロード」ボタンを追加
+- `app.py`: エクスポートジョブ投入後、ジョブIDを `dcc.Store` に保持し、`dcc.Interval` でジョブ完了をポーリング。
+  完了検知時に `GuiRunResult.result_json` からファイルパスを取得し、`dcc.send_file()` を返す新規コールバックを追加
+- `services.py`: `export_html_report()` / `export_excel_report()` の戻り値（ファイルパス）が `GuiRunResult.result_json` に格納されていることを確認
+
+**対象ファイル**:
+- `src/veldra/gui/pages/results_page.py` — `dcc.Download` + ダウンロードボタン追加
+- `src/veldra/gui/app.py` — ポーリング + ダウンロードトリガーのコールバック追加
+
+#### 1-C: 学習曲線が表示されないバグの修正
+
+**原因特定**: `app.py:2572-2578` の `_cb_update_result_extras()` にバグがある。
+
+```python
+# 現在のコード（バグあり）
+metadata = getattr(art, "metadata", {}) or {}
+history = metadata.get("training_history")  # ← Artifact に metadata 属性は存在しない → 常に None
+if history is None:
+    history_path = Path(artifact_path) / "training_history.json"  # ← ファイル fallback
+    if history_path.exists():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+```
+
+`Artifact` クラスには `metadata` 属性が存在しない（`artifact.py:34-58`）。
+`training_history` は `art.training_history` として直接保持されている。
+そのため `metadata.get("training_history")` は常に `None` となり、ファイル fallback に頼る。
+しかし `Artifact.load()` → `store.load_artifact()` で `training_history.json` は既に読み込まれ
+`art.training_history` に格納済みであるため、ファイルパスの二重読み込みは冗長であり、
+`artifact_path` がディレクトリでない場合などに失敗する可能性がある。
+
+**修正内容**:
+```python
+# 修正後
+history = art.training_history
+curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
+```
+
+**対象ファイル**:
+- `src/veldra/gui/app.py` — `_cb_update_result_extras()` の `training_history` 取得ロジック修正
+
+---
+
+### Stage 2: ユースケース駆動UI再構成設計
+
+**方針**:
+- ユーザーの使い方に基づくUI改善を設計する。
+- 下記の全ユースケースパターンを分析し、現行GUI画面遷移との差分を特定する。
+- 具体的なUI変更は Stage 2 完了後に Phase 26.2 として実装する。
+
+**成果物**:
+- 各ユースケースパターンの現行GUI対応状況マトリクス
+- ギャップ一覧（現行GUIで対応できていない操作フロー）
+- Phase 26.2 実装計画のドラフト
+
+**分析対象ユースケースパターン**:
+- ユーザーがどのような順番で操作するのが自然かを考慮してGUIを再構成する
+  - Regression/Binary/Multiclassモデル学習・評価パターン
+    - データ指定
+    - 目的変数の指定
+    - タスクタイプの指定（Regression/Binary/Multiclassは自動判定、ユーザーが指定することもできる）
+    - 特徴量指定（目的変数以外全使用+除外変数指定）
+    - 分割方法の指定（KFold / StratifiedKFold / TimeSeriesSplit 等）
+    - 学習パラメーターの指定（LightGBMパラメーター）
+    - 学習実行
+    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
+    - HTMLレポートダウンロード
+
+  - Regression/Binary/Multiclassモデル学習（パラメーター最適化）・評価パターン
+    - データ指定
+    - 目的変数の指定
+    - タスクタイプの指定
+    - 特徴量指定
+    - 分割方法の指定
+    - チューニング設定の指定（探索回数、時間制限、探索空間）
+    - パラメーター最適化 & 学習実行
+    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
+    - HTMLレポートダウンロード
+
+  - 学習済みRegression/Binary/Multiclassモデルの予測値算出パターン
+    - 学習済みモデル（アーティファクト）指定
+    - 予測対象データ指定
+    - 予測実行
+    - 予測値ダウンロード
+
+  - 学習済みRegression/Binary/Multiclassモデルの別データによるモデル再評価パターン
+    - 学習済みモデル（アーティファクト）指定
+    - 評価対象データ指定（評価用Columnを含むかチェック、特徴量が一致するかチェック）
+    - 予測実行
+    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
+    - HTMLレポートダウンロード
+
+  - Frontier（分位点回帰）モデル学習・評価パターン
+    - データ指定
+    - 目的変数の指定
+    - タスクタイプの指定（frontier）
+    - **分位点（Alpha）の指定**（例: 0.90, 0.50 等）
+    - 特徴量指定
+    - 分割方法の指定
+    - 学習パラメーターの指定
+    - 学習実行
+    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
+    - HTMLレポートダウンロード
+
+  - Frontier（分位点回帰）モデル学習（パラメーター最適化）・評価パターン
+    - データ指定
+    - 目的変数の指定
+    - タスクタイプの指定（frontier）
+    - 分位点（Alpha）の指定
+    - 特徴量指定
+    - 分割方法の指定
+    - チューニング設定の指定（探索回数、時間制限、探索空間）
+    - パラメーター最適化 & 学習実行
+    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
+    - HTMLレポートダウンロード
+
+  - 因果推論（Doubly Robust法）効果推定パターン
+    - データ指定
+    - 目的変数（Outcome）の指定
+    - タスクタイプの指定（causal）
+    - **推定対象（Estimand）の指定**（ATE: 平均処置効果 / ATT: 処置群平均処置効果、DefaultはATT）
+    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
+    - **個体ID変数の指定**（パネルデータの場合のCross-fitting用）
+    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
+    - 傾向スコア・Outcomeモデルの設定
+      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
+      - **傾向スコアモデルのハイパーパラメーター**（LightGBM: num_leaves, learning_rate 等）
+      - **結果モデルのハイパーパラメーター**（LightGBM: num_leaves, learning_rate 等）
+      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
+      - **傾向スコアのクリッピング閾値**（極端な重みを防ぐための下限・上限カット：例 0.01）
+    - 学習・推定実行
+    - 診断・評価（**Overlap / SMD: 標準化平均差** 等のバランス確認）
+    - 推定結果レポート確認（ATE/ATTの推定値、点推定値、信頼区間）
+    - HTMLレポートダウンロード
+
+- 因果推論（Doubly Robust法）効果推定パターン＋パラメーター最適化
+    - データ指定
+    - 目的変数（Outcome）の指定
+    - タスクタイプの指定（causal）
+    - **推定対象（Estimand）の指定**（ATE: 平均処置効果 / ATT: 処置群平均処置効果、DefaultはATT）
+    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
+    - **個体ID変数の指定**（パネルデータの場合のCross-fitting用）
+    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
+    - モデル学習・探索の基本設定
+      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
+      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
+      - **傾向スコアのクリッピング閾値**
+    - チューニング設定（最適化）
+      - **チューニング実行の有無**（Enabled=True）
+      - **試行回数（n_trials）の指定**（例: 30回）
+      - **探索プリセットの指定**（Standard / Fast：探索範囲の広さを選択）
+      - **最適化ターゲット（Objective）の指定**
+        - **Balance Priority (dr_balance_priority)**: 共変量バランス（SMD）の確保を最優先し、その制約下で精度を最適化（Default）
+        - **Standard Error (dr_std_error)**: 推定量の標準誤差の最小化（精度の最大化）のみを目指す
+        - **Overlap Penalty (dr_overlap_penalty)**: 傾向スコアの重なり（Overlap）の確保を重視する
+      - **バランス閾値（Balance Threshold）の指定**（Balance Priority選択時、許容するSMDの最大値。例: 0.10）
+      - **ペナルティ重み（Penalty Weight）の指定**（制約違反時のペナルティ強度）
+    - 最適化 & 推定実行
+    - 診断・評価（最適化されたモデルでの **Overlap / SMD** 確認）
+    - 推定結果レポート確認（ATE/ATTの推定値、点推定値、信頼区間）
+    - HTMLレポートダウンロード
+
+  - 因果推論（Doubly Robust DiD法）効果推定パターン
+    - データ指定
+    - 目的変数（Outcome）の指定
+    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
+    - **時点変数の指定**
+      - **時点識別カラム（Time Col）**（例: year, date 等）
+      - **処置後フラグ（Post Col）**（バイナリ変数、自動チェック）
+    - **データ構造（Design）の指定**
+      - **パネルデータ（panel）**: 同一個体を複数時点で観測
+      - **繰り返しクロスセクション（repeated_cross_section）**: 時点ごとに異なる個体を観測
+    - **個体ID変数の指定**（パネルデータの場合は**必須**。各個体を識別するキー）
+    - **推定対象（Estimand）の指定**
+      - **ATT**（処置群における平均処置効果）：DiDの標準的な推定対象（※目的変数がBinaryの場合はATTのみサポート）
+    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
+    - 傾向スコア・結果モデルの設定（DR法と同様）
+      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
+      - **傾向スコアモデルのハイパーパラメーター**（LightGBM設定）
+      - **結果モデルのハイパーパラメーター**（LightGBM設定。※パネルの場合は「差分」に対して学習されます）
+      - **傾向スコアのキャリブレーション手法**（Platt / Isotonic）
+      - **傾向スコアのクリッピング閾値**
+    - 学習・推定実行
+    - 診断・評価（**Overlap / SMD: 標準化平均差** 等のバランス確認）
+    - 推定結果レポート確認（ATTの点推定値、信頼区間）
+    - HTMLレポートダウンロード
+
+- 因果推論（Doubly Robust DiD法）効果推定パターン＋パラメーター最適化
+    - データ指定
+    - 目的変数（Outcome）の指定
+    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
+    - **時点変数の指定**
+      - **時点識別カラム（Time Col）**（例: year, date 等）
+      - **処置後フラグ（Post Col）**（バイナリ変数、自動チェック）
+    - **データ構造（Design）の指定**
+      - **パネルデータ（panel）**: 同一個体を複数時点で観測
+      - **繰り返しクロスセクション（repeated_cross_section）**: 時点ごとに異なる個体を観測
+    - **個体ID変数の指定**（パネルデータの場合は**必須**。各個体を識別するキー）
+    - **推定対象（Estimand）の指定**
+      - **ATT**（処置群における平均処置効果）：DiDの標準的な推定対象（※目的変数がBinaryの場合はATTのみサポート）
+    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
+    - モデル学習・探索の基本設定
+      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
+      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
+      - **傾向スコアのクリッピング閾値**
+    - チューニング設定（最適化）
+      - **チューニング実行の有無**（Enabled=True）
+      - **試行回数（n_trials）の指定**（例: 30回）
+      - **探索プリセットの指定**（Standard / Fast）
+      - **最適化ターゲット（Objective）の指定**
+        - **DR-DiD Balance Priority (drdid_balance_priority)**: 共変量バランス（SMD）の確保を最優先し、その制約下で精度を最適化（Default）
+        - **DR-DiD Standard Error (drdid_std_error)**: 推定量の標準誤差の最小化のみを目指す
+        - **DR-DiD Overlap Penalty (drdid_overlap_penalty)**: 傾向スコアの重なり（Overlap）の確保を重視する
+      - **バランス閾値（Balance Threshold）の指定**（Balance Priority選択時、許容するSMDの最大値。例: 0.10）
+      - **ペナルティ重み（Penalty Weight）の指定**
+    - 最適化 & 推定実行
+    - 診断・評価（最適化されたモデルでの **Overlap / SMD** 確認）
+    - 推定結果レポート確認（ATTの点推定値、信頼区間）
+    - HTMLレポートダウンロード
+
+  - シミュレーション（Counterfactual）実行パターン
+    - 学習済みRegression/Binary/Multiclassモデル（アーティファクト）指定
+    - ベースラインデータ指定
+    - **シナリオ定義**（特定の変数に対する増減・固定などの操作定義）
+    - シミュレーション実行
+    - 結果比較（ベースライン予測値 vs シナリオ予測値の差分）
+    - 結果ダウンロード
+
+  - モデルエクスポートパターン
+    - 学習済みモデル（アーティファクト）指定
+    - **出力フォーマット指定**（Python Native / ONNX）
+    - エクスポート実行
+    - 検証レポート確認（推論結果の一致性確認）
+    - モデルファイルダウンロード
+
+---
+
+### テスト要件
+
+#### Stage 1 テスト
+
+1. **1-A: JST時刻表示**
+   - Runs テーブルの全タイムスタンプカラム（created_at, started_at, finished_at）が JST 形式で表示されること。
+   - Export ファイル名のタイムスタンプが JST であること。
+   - UTC タイムスタンプが `None` の場合に "n/a" が表示されること（既存テスト契約維持）。
+
+2. **1-B: レポートダウンロード**
+   - HTMLレポートのエクスポートジョブ完了後、ブラウザダウンロードがトリガーされること。
+   - Excelレポートのエクスポートジョブ完了後、同様にダウンロードがトリガーされること。
+   - ジョブ失敗時にエラーメッセージが表示され、ダウンロードがトリガーされないこと。
+   - `dcc.Download` コンポーネントがレイアウトに存在すること。
+
+3. **1-C: 学習曲線表示**
+   - `training_history` が存在する Artifact を選択した場合に学習曲線が描画されること。
+   - `training_history` が `None` の Artifact（因果推論等）でエラーにならず空グラフが表示されること。
+   - フォルドごとの曲線と平均曲線が正しくプロットされること。
+
+#### Stage 2 テスト
+- ユースケース分析の成果物（マトリクス、ギャップ一覧）が作成されていること。
+- Phase 26.2 実装計画ドラフトが DESIGN_BLUEPRINT に追記されていること。
+
+### 成功基準
+
+1. **Stage 1**: 3件のバグ修正が完了し、全既存テストがパスすること。
+2. **Stage 2**: 全ユースケースパターンの現行GUI対応状況が文書化されていること。
+3. **後方互換**: 既存の GUI テストが全パスし、Stable API の互換性が維持されること。
+
+### Stage 2 成果物（2026-02-16）
+
+#### A. 現行GUI対応状況マトリクス
+
+| ユースケース | 現行GUI対応 | 現行導線 | 主なギャップ | Phase26.2 での扱い |
+|---|---|---|---|---|
+| Regression/Binary/Multiclass 学習・評価 | 部分対応 | Data → Target → Validation → Train → Run → Results | Target/Validation の初学者向けガード説明が不足 | 導線説明カードとガードレールUI統合を追加 |
+| Regression/Binary/Multiclass チューニング学習・評価 | 部分対応 | Train（tuning有効化）→ Run → Results | チューニング設定の推奨値プリセット説明不足 | Objective別テンプレートと推奨値ヘルプ追加 |
+| 学習済みモデルで予測値算出 | 部分対応 | Run（evaluate） | 予測専用ウィザード不在、出力ダウンロード導線が弱い | Evaluate専用プリセット導線を Results/Runs から追加 |
+| 学習済みモデルの別データ再評価 | 部分対応 | Results（Re-evaluate）/Run（evaluate） | 特徴量一致チェックの可視化が不足 | 事前診断結果を実行前に表示 |
+| Frontier 学習・評価 | 部分対応 | Target/Train で frontier 設定 → Run | Alpha設定の意味説明不足 | Frontier専用ヘルプとデフォルト候補を追加 |
+| Frontier チューニング学習・評価 | 部分対応 | Train（tuning）→ Run | pinball最適化意図の説明不足 | Objective説明と推奨探索範囲を追加 |
+| DR 効果推定 | 部分対応 | Target（causal）→ Validation/Train → Run | estimand/treatment/unit_id の入力ガイド不足 | Causal専用フォームセクション分離 |
+| DR 効果推定 + 最適化 | 部分対応 | Train（tuning objective）→ Run | balance/objectiveの選択基準が不明瞭 | 目的別プリセットと警告文を追加 |
+| DR-DiD 効果推定 | 部分対応 | Target/Validation/Train → Run | panel/repeated_cs 条件の入力ミス防止が弱い | design別必須項目の動的ガード追加 |
+| DR-DiD 効果推定 + 最適化 | 部分対応 | Train（tuning）→ Run | objective差の説明不足 | DR-DiD objectiveの比較ヘルプ追加 |
+| Counterfactual シミュレーション | 部分対応 | Run（simulate） | シナリオ作成UIがなくファイルパス手入力依存 | Scenario DSL 補助UIは別Phaseで設計（26.2は導線整備まで） |
+| モデルエクスポート（Python/ONNX） | 部分対応 | Run（export） | Export設定と成果物参照の導線分断 | Runs/Results から export action へショートカット追加 |
+| HTML/Excel レポート出力 | 対応 | Results（export） | ジョブ完了後のブラウザDLが未実装（Stage1で修正） | Stage1で解消、26.2では文言/再実行導線を改善 |
+
+#### B. ギャップ一覧（優先度付き）
+
+| Priority | ギャップ | 影響範囲 | 解消方針（Phase26.2） |
+|---|---|---|---|
+| P0 | Causal系（DR/DR-DiD）の必須項目ガイド不足 | Target / Validation / Train / Run | Causal専用セクション化 + 必須入力のインライン診断 |
+| P0 | Evaluate/Export/Simulate が Run 画面の自由入力に依存 | Run / Results / Runs | ユースケース別プリセット導線を追加し手入力を削減 |
+| P1 | チューニング objective と指標の関係が不明瞭 | Train / Results | objective説明、推奨値、代表指標マッピング表示 |
+| P1 | Frontier の Alpha 設定支援不足 | Target / Train | Alpha の用途ヘルプと推奨プリセット追加 |
+| P1 | 実行前チェック結果の視認性不足 | Validation / Run | ガードレール結果を severity順に固定表示 |
+| P2 | Compare/Runs から再学習導線が弱い | Runs / Compare / Train | Clone時に「次にやること」を自動表示 |
+| P2 | Export/Artifact 操作結果のフィードバック不足 | Results / Runs | 成功/失敗ステータスと再試行導線を統一 |
+
+#### C. Phase 26.2 実装計画ドラフト
+
+1. 実装順序（画面単位）
+   - Step 1: Target 画面のユースケース別補助UI（task type / causal分岐）
+   - Step 2: Validation 画面の必須条件ガード強化（timeseries/causal）
+   - Step 3: Train 画面の objective/パラメータ説明テンプレート追加
+   - Step 4: Run 画面に action プリセット導線（fit/tune/evaluate/simulate/export）
+   - Step 5: Runs/Results から再実行・再評価のショートカット導線統一
+
+2. 依存関係
+   - 26.2 は 26.1 Stage 1 完了（JST/Export DL/Learning Curves 修正）を前提とする。
+   - Core/API 非変更。GUI adapter 層のみ更新。
+
+3. 完了条件
+   - 主要ユースケース（学習/チューニング/再評価/因果推定/エクスポート）で、手入力必須項目が現状比で減少していること。
+   - ガードレール警告が実行前に視認可能で、修正導線が明示されること。
+   - 既存GUIテスト + 26.2追加テストが全てパスすること。
+
+4. テスト観点（26.2追加予定）
+   - `tests/test_gui_target_page.py`: causal/frontier 分岐の必須項目ガイド
+   - `tests/test_gui_validation_page.py`: split/causal の必須条件表示
+   - `tests/test_gui_train_page.py`: objective説明と推奨値のUI契約
+   - `tests/test_gui_run_presets.py`（新規予定）: actionプリセットで必要入力が自動補完されること
+   - `tests/test_gui_e2e_flow.py`: 主要ユースケースの完遂導線
+
+### 対象ファイル（Stage 1）
+
+| ファイル | 変更内容 |
+|----------|----------|
+| `src/veldra/gui/app.py` | 1-A: JST変換適用箇所確認、1-B: ダウンロードコールバック追加、1-C: `training_history` 取得ロジック修正 |
+| `src/veldra/gui/pages/results_page.py` | 1-B: `dcc.Download` + ダウンロードボタン追加 |
+| `src/veldra/gui/services.py` | 1-A: Export ファイル名タイムスタンプ JST 化 |
+| `tests/test_gui_phase26_1.py` | 新規: Stage 1 の3件に対するユニットテスト |
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム
 

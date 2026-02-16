@@ -36,15 +36,17 @@ def test_results_layout_has_new_tabs() -> None:
     assert "result-learning-curve" in ids
     assert "result-config-view" in ids
     assert "result-export-excel-btn" in ids
+    assert "result-report-download" in ids
+    assert "result-export-job-store" in ids
+    assert "result-export-poll-interval" in ids
 
 
 def test_update_result_extras(monkeypatch, tmp_path) -> None:
     artifact_path = tmp_path / "art"
     artifact_path.mkdir(parents=True, exist_ok=True)
-    (artifact_path / "training_history.json").write_text('{"folds": []}', encoding="utf-8")
 
     fake_art = SimpleNamespace(
-        metadata={},
+        training_history={"folds": []},
         config={"task": {"type": "regression"}},
         run_config={"task": {"type": "regression"}},
         feature_schema={"feature_names": ["a", "b"], "n_rows": 10},

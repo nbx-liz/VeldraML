@@ -1061,3 +1061,91 @@
 - `uv run ruff check src/veldra/gui tests` を通過。
 - `uv run pytest -q -m "gui"`: **126 passed, 399 deselected**
 - `uv run pytest tests -x --tb=short`: **525 passed, 0 failed**
+
+### 2026-02-16（作業/PR: design-blueprint-phase25-summary-compression）
+**背景**
+- `DESIGN_BLUEPRINT.md` の Phase25〜25.9 が詳細化により長文化し、完了済みフェーズの参照コストが高かった。
+- 実装・決定・検証結果を保持したまま、要点中心に圧縮する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `12`〜`12.9` を再構成し、各フェーズを「目的/実装要点/検証結果」中心の短縮版へ置換。
+- 重複していた背景説明・擬似コード・詳細手順を削減し、以下を明示的に保持:
+  - Phase25: 非同期ジョブ基盤、config migrate、callback堅牢化
+  - Phase25.5: テストDRY化、regression契約補完、公開ユーティリティ化
+  - Phase25.6: CSS/HTML限定のUX改善と非スコープ
+  - Phase25.7: TrainConfig拡張、ES分割、class weight、自動split、training_history、GUI/migration
+  - Phase25.8: 追加パラメータ、top_k連携、GUI拡張、search space拡張、provisional decision
+  - Phase25.9: 不足テスト補完、最小本体修正、confirmed decision
+- Phase26 以降の記述は未変更。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 完了済みフェーズ（25〜25.9）は、将来の実装手順書ではなく運用参照向けに圧縮表現へ統一する。
+  - 理由: 主要契約・意思決定・検証実績を維持しつつ、読み取りコストを下げるため。
+  - 影響範囲: docs（`DESIGN_BLUEPRINT.md`）
+
+**検証結果**
+- ドキュメント編集のみ（コード/テスト変更なし）。
+- `DESIGN_BLUEPRINT.md` にて Phase25〜25.9 の情報欠落がないことを目視確認。
+
+### 2026-02-16（作業/PR: phase26.1-stage1-bugfixes）
+**背景**
+- Phase26.1 Stage1 の必須修正（JST表示統一 / Exportブラウザダウンロード / Learning Curves 表示）を、既存GUI基盤を維持したまま収束させる必要があった。
+
+**変更内容**
+- `src/veldra/gui/app.py`
+  - Runジョブ一覧テーブルの created 時刻を JST 表示へ統一。
+  - Run詳細の Created/Started/Finished を `_format_jst_timestamp()` 経由に統一し、欠損時は `n/a` 表示へ統一。
+  - Results Export を「ジョブ投入 + `dcc.Store` 保持 + `dcc.Interval` ポーリング」へ拡張。
+  - Export ジョブ完了時に `dcc.send_file()` で HTML/Excel をブラウザダウンロードするコールバックを追加。
+  - `_cb_update_result_extras()` の learning history 参照を `art.training_history` 優先に修正し、metadata/file fallback 依存を削除。
+  - Runs テーブルデータに `started_at_utc` / `finished_at_utc` を追加し、JST 表示へ統一。
+- `src/veldra/gui/pages/results_page.py`
+  - `result-report-download` / `result-export-job-store` / `result-export-poll-interval` を追加。
+- `src/veldra/gui/pages/runs_page.py`
+  - Runs DataTable に `started` / `finished` 列を追加。
+- `src/veldra/gui/services.py`
+  - `_export_output_path()` の出力ファイル名 timestamp を JST 基準へ変更。
+- テスト:
+  - 新規: `tests/test_gui_phase26_1.py`（Stage1受け入れ観点を集約）
+  - 更新: `tests/test_gui_runs_page.py`, `tests/test_gui_results_enhanced.py`
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.1 の正式定義は `DESIGN_BLUEPRINT.md` の 13.1 を唯一の正とする。
+  - 理由: 旧サブフェーズ表と 13.1 の解釈ズレを解消し、実装単位を固定するため。
+  - 影響範囲: docs / phase planning
+- Decision: confirmed（確定）
+  - 内容: Phase26.1 は Stage1（コード修正）/Stage2（設計成果物）を 2PR 分割で運用する。
+  - 理由: 回帰確認と設計レビューを分離し、変更責務を明確化するため。
+  - 影響範囲: delivery process / docs
+- Decision: confirmed（確定）
+  - 内容: Stage2 成果物（対応マトリクス・ギャップ一覧・Phase26.2ドラフト）は `DESIGN_BLUEPRINT.md` に集約する。
+  - 理由: 設計判断と次フェーズ実装計画を単一参照元に固定するため。
+  - 影響範囲: docs
+
+**検証結果**
+- `uv run ruff check src/veldra/gui tests` を通過。
+- `uv run pytest -q tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py tests/test_gui_export_excel.py tests/test_gui_export_html.py` を通過。
+- `uv run pytest -q -m "gui"` を通過。
+
+### 2026-02-16（作業/PR: phase26.1-stage2-usecase-design）
+**背景**
+- Phase26.2 実装に向け、現行GUIのユースケース対応状況を設計文書として固定し、ギャップと優先度を明文化する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の 13.1 配下へ以下を追加:
+  - 現行GUI対応状況マトリクス（全ユースケース対象）
+  - 優先度付きギャップ一覧（P0/P1/P2）
+  - 画面単位の Phase26.2 実装計画ドラフト（実装順/依存/完了条件/テスト観点）
+- `DESIGN_BLUEPRINT.md` の旧サブフェーズ依存表に注記を追加し、
+  `13.1` を Phase26.1 の正定義として明示。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 26.1 旧依存表は履歴として保持し、現在運用の意思決定は 13.1 を正とする。
+  - 理由: 履歴保全と現行運用の明確化を両立するため。
+  - 影響範囲: docs
+
+**検証結果**
+- 文書更新の相互参照（旧依存表注記 / 13.1 / Stage2成果物）を目視確認。

@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +36,7 @@ LOGGER = logging.getLogger("veldra.gui.services")
 _RUNTIME_LOCK = threading.Lock()
 _JOB_STORE: GuiJobStore | None = None
 _JOB_WORKER: Any | None = None
+_JST = timezone(timedelta(hours=9))
 
 # Lazy runtime symbols for heavyweight deps.
 _ARTIFACT_CLS: Any | None = None
@@ -589,7 +590,7 @@ def _export_output_path(artifact_path: str, suffix: str) -> Path:
     parent = Path(artifact_path).resolve()
     out_dir = parent / "reports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(UTC).astimezone(_JST).strftime("%Y%m%d_%H%M%S")
     return out_dir / f"{suffix}_{ts}"
 
 
