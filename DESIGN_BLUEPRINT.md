@@ -1712,6 +1712,224 @@ HELP_TEXTS: dict[str, dict[str, str]] = {
     - `docs/phase26_2_parity_report.md`
   - Optional 依存の graceful degradation を manifest と parity report に明示（例: `openpyxl` 未導入時の Excel export）。
 
+## 13.3 Phase26.3: ユースケース詳細化
+### 目的: Phase 26.2 で作成したNotebookユースケースを完成させる
+### 要件:
+#### LightGBMのパラメーターは以下の数値で設定する
+  - 'epochs': 2000,
+  - 'patience': 200,
+  - learning_rate: 0.01
+  - validation_ratio: 0.2
+  - max_bin: 255
+  - auto_num_leaves: True
+  - num_leaves_ratio: 1
+  - min_data_in_leaf_ratio: 0.01
+  - min_data_in_bin_ratio: 0.01
+  - max_depth: 10
+  - feature_fraction: 1
+  - bagging_fraction: 1
+  - bagging_freq: 0
+  - lambda_l1: 0
+  - lambda_l2: 0.000001
+  - min_child_samples: 20
+  - metrics: [rmse, mae]  (Regressionの場合)
+   - metrics: [logloss, auc]  (Binaryの場合)
+   - metrics: [multi_logloss, multi_error]  (Multiclassの場合)
+  - first_metric_only: True
+---
+#### パラメーター最適化のSpaceは以下の数値で設定する
+  - objective: [mape] (Regressionの場合)
+   - objective: [brier]  (Binaryの場合)
+   - objective: [multi_logloss]  (Multiclassの場合)
+   - objective: [dr_balance_priority, dr_std_error, dr_overlap_penalty] (Causal DRの場合)
+   - objective: [drdid_balance_priority, drdid_std_error, drdid_overlap_penalty] (Causal DR-DiDの場合)
+  - learning_rate: 0.01〜0.1 (log uniform)
+  - num_leaves_ratio: 0.5〜1.0 (float)
+  - validation_ratio: 0.1〜0.3 (float)
+  - max_bin: 127〜255 (int)
+  - num_leaves_ratio: 0.5〜1.0 (float)
+  - min_data_in_leaf_ratio: 0.01〜0.1 (float)
+  - min_data_in_bin_ratio: 0.01〜0.1 (float)
+  - max_depth: 3〜15 (int)
+  - feature_fraction: 0.5〜1.0 (float)
+  - bagging_fraction: 1.0 (float)
+  - bagging_freq: 0 (int)
+  - lambda_l1: 0 (float)
+  - lambda_l2: 0.000001〜0.1 (float)
+  - metrics: [rmse], [huber], [mae]  (Regressionの場合)
+   - metrics: [logloss], [auc]  (Binaryの場合)
+   - metrics: [multi_logloss], [multi_error]  (Multiclassの場合)
+---
+- SHAPの算出はLightGBMの内臓機能を使用する
+---
+#### Regression予測モデルの期待アウトプット・評価項目
+ * In sampleの誤差分布とOut of sampleの誤差分布のヒストグラム（比較して過学習の程度を確認したい）
+  * MAE, MAPE, RMSE、R²などの指標も併記して数値面からも比較したい
+ * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
+ * SHAP（全特徴量）
+ * 元データ＋In/Outラベル＋予測値・残差のテーブル（CSV)
+---
+#### Binary予測モデルの期待アウトプット・評価項目
+ * InSample/OutOfSampleそれぞれのROC Chart（比較して過学習の程度を確認したい）
+  * AUC、Brier, Average Precision, Loglossなどの指標も併記して数値面からも比較したい
+ * Lift Chart（全体の予測力の確認）
+ * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
+ * SHAP（全特徴量）
+ * 元データ＋In/Outラベル＋予測値(スコア)のテーブル（CSV)
+---
+#### Multiclass予測モデルの期待アウトプット・評価項目
+ * InSample/OutOfSampleそれぞれの**Negative Log Likelihood（= logloss のサンプル別寄与）**のヒストグラム（比較して過学習の程度を確認したい）
+ * InSample/OutOfSampleそれぞれの正解クラス確率 p(true_class) のヒストグラム（比較して過学習の程度を確認したい）
+  * 多クラスAUC、多クラスBrier、Multi-logloss, Multi-errorなどの指標も併記して数値面からも比較したい
+ * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
+ * SHAP（Probaが最大ラベルについてのSHAP、全特徴量）
+ * 元データ＋In/Outラベル＋予測値(クラスごとのスコア)のテーブル（CSV)
+---
+- 時系列予測モデルの期待アウトプット・評価項目
+ * X軸：時系列 Y軸：目的変数・予測値のプロット（In sample/Out of sampleの区切りが分かるように）
+ * X軸：時系列 Y軸：残差のプロット（In sample/Out of sampleの区切りが分かるように）
+  * MAE, MAPE, RMSE、R²などの指標も併記して数値面からも比較したい
+ * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
+ * SHAP（全特徴量）
+ * 元データ＋In/Outラベル＋予測値・残差のテーブル（CSV)
+---
+#### Frontierの期待アウトプット・評価項目
+ - 前提
+  - 分位点はユーザーで変更可能
+  - 特徴量に対して単調制約を設定できる
+  - Group CVですべてのデータに対してOOFとしての予測値が得られている
+  - Output Orientedの効率を算出
+   - **相対到達度**：  
+  \[
+  \text{eff} = \frac{y}{\hat{q}_{\tau}(x)}
+  \]
+  （1に近いほど良い。1を超える場合は“フロンティア超え”扱い）
+ * InSample/Out of sampleのPinball loss（サンプル別）ヒストグラム（比較して過学習の程度を確認したい）
+  * Pinball Loss、coverage、exceedance rateを併記して数値面からも比較したい
+ * フロンティア予測 vs 実測の散布図
+ * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
+ * SHAP（全特徴量）
+ * 元データ＋予測値・効率値のテーブル（CSV)
+---
+#### DR（Doubly Robust：ATE/ATT 推定）の期待アウトプット・評価項目
+
+##### 前提
+ - 推定対象：ATE / ATT（どちらか明示。両方出すなら両方）
+ - Cross-fitting（group K-fold）で nuisance を学習し、全データで OOF（out-of-fold）予測を保持
+ - nuisance 構成  
+  - Propensity model：e(x) = P(D=1|X=x)  
+   - 予測確率キャリブレーション
+  - Outcome model：μ1(x) = E[Y|D=1,X], μ0(x) = E[Y|D=0,X]
+- 推定量：AIPW / DR（標準誤差は influence function ベース or ブートストラップ）
+
+##### 最終推定（因果効果）のアウトプット
+- 推定値（ATE/ATT）、標準誤差、95%CI、p値
+- サブグループ別推定（任意）：主要セグメント（例：地域/業種/規模）で ATT を並べる
+- 推定への寄与（サンプル別）
+  - Influence function（IF）または pseudo-outcome の分布ヒストグラム（全体）
+  - IF の外れ値一覧（上位1%など）と、どの特徴が多いか
+
+##### Overlap / 重み・傾向スコア診断（重要）
+- 傾向スコア e(x) の分布
+  - Treated / Control 別ヒストグラム（または密度）
+- IPW 重みの分布ヒストグラム（ATE/ATT の定義に応じた w を出す）
+- Overlap 指標
+  - e(x) の最小/最大、分位点、極端値比率（例：<0.01, >0.99 など）
+  - 有効標本サイズ（ESS）
+
+##### バランスチェック（DRでも必須）
+- Covariate balance：SMD（標準化差）
+  - Unweighted vs Weighted（IPW後）で Love plot
+  - SMD の要約（中央値/最大値、|SMD|>0.1 の割合）
+
+##### nuisance モデルの健全性チェック（変な学習をしていないか）
+- Propensity model（分類）
+  - InFold / OOF それぞれの ROC、AUC、Logloss、Brier、Average Precision
+- Outcome model（回帰）
+  - InFold / OOF の誤差分布ヒストグラム（残差 or サンプル別誤差）
+  - MAE、RMSE、R²（補助指標）
+- Feature Importance / SHAP（nuisance に対して）
+  - Propensity：Feature importance（Split/Gain）＋ SHAP（全特徴量）
+  - Outcome：Feature importance（Split/Gain）＋ SHAP（全特徴量）
+  - 注意：処置割当を当てすぎる（AUCが極端に高い等）＝ overlap 崩壊の兆候になり得るため併記して注意喚起
+
+##### ロバストネス（あると実務で強い）
+- 重みのトリミング/クリッピング（例：1%/99%）ごとの推定結果比較
+
+##### 元データ＋推定に必要な付帯情報テーブル（CSV）
+- 元データ + fold_id
+- D（処置フラグ） + Y（アウトカム）
+- e(x)、μ1(x)、μ0(x)（すべて OOF 予測）
+- 重み w（ATE/ATT の定義に応じて）
+- pseudo-outcome / IF 成分（可能なら）
+- トリミング適用フラグ（適用した場合）
+---
+#### DR-DiD（Doubly Robust Difference-in-Differences：ATT）の期待アウトプット・評価項目
+
+##### 前提
+- 推定対象：基本は ATT（Average Treatment effect on the Treated）
+- データ構造：Panel（同一個体の追跡）/ Repeated cross-section（別個体）を明示
+- 時点：Pre / Post（DiDの前後）を明示
+- Cross-fitting（Group K-fold）で nuisance を学習し、全データで OOF（out-of-fold）予測を保持
+- nuisance（代表例。実装により多少変わる）
+  - 傾向スコア：e(x) = P(D=1|X)
+   - 予測確率キャリブレーション
+  - 結果モデル：E[Y_t | D, X]（t=pre,post）または差分 E[ΔY | D, X]
+- 標準誤差：クラスタロバスト（panelなら個体ID、必要ならグループ/時点も）or ブートストラップ
+
+##### 最終推定（ATT）のアウトプット
+- ATT 推定値、標準誤差、95%CI、p値
+- サンプル別寄与
+  - DR-DiD の influence function（IF）/ pseudo-outcome の分布ヒストグラム
+  - IF の外れ値一覧（上位1%など）
+
+##### DiD前提（並行トレンド）診断（可能なら必須）
+- Pre期間のみの placebo DID（効果=0 を期待）
+  - リード（介入前）がゼロ付近か（統計的に有意でないことを確認）
+- 平均推移プロット
+  - Treated vs Control の平均アウトカム推移（Unweighted と Weighted の両方が望ましい）
+
+##### Overlap / 重み・傾向スコア診断
+- 傾向スコア e(x) の分布
+  - Treated / Control 別ヒストグラム（または密度）
+- 重みの分布ヒストグラム（DR-DiDで使う定義に合わせた w を出す）
+- Overlap 指標
+  - e(x) の最小/最大、分位点、極端値比率（例：<0.01, >0.99）
+  - 有効標本サイズ（ESS）
+  - 極端重み比率（例：p99超の割合）
+
+##### バランスチェック（PreのXに対して）
+- Covariate balance：SMD（標準化差）
+  - Unweighted vs Weighted（重み付け後）で Love plot
+  - SMD の要約（中央値/最大値、|SMD|>0.1 の割合）
+
+##### nuisance モデルの健全性チェック（変な学習をしていないか）
+- Propensity model（分類）
+  - InFold / OOF それぞれの ROC、AUC、Logloss、Brier、Average Precision
+- Outcome model（回帰）
+  - Pre / Post それぞれ、または ΔY の InFold / OOF 誤差分布ヒストグラム
+  - MAE、RMSE、R²（補助指標）
+- Feature Importance / SHAP（nuisance に対して）
+  - Propensity：Feature importance（Split/Gain）＋ SHAP（全特徴量）
+  - Outcome：Feature importance（Split/Gain）＋ SHAP（全特徴量）
+  - 注意：処置割当を当てすぎる（AUCが極端に高い等）＝ overlap 崩壊の兆候になり得るため併記して注意喚起
+
+##### ロバストネス（あると実務で強い）
+- 重みのトリミング/クリッピング（例：1%/99%）ごとのATT比較
+- Placebo outcome（影響しないはずの目的変数があれば）で効果ゼロ確認（任意）
+
+##### 元データ＋推定に必要な付帯情報テーブル（CSV）
+- 元データ + fold_id
+- （Panelなら）個体ID + 時点 t + Pre/Post フラグ
+- D（treated indicator） + Y（アウトカム）
+- e(x)（OOF 予測）
+- Outcome nuisance（実装に応じて）
+  - μ_{d,pre}(x), μ_{d,post}(x) または Δμ_d(x)（すべて OOF 予測）
+- 重み w（DR-DiDの定義に応じて）
+- pseudo-outcome / IF 成分（可能なら）
+- トリミング適用フラグ（適用した場合）
+
+
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム
 
 **目的:** 優先度ベースのジョブスケジューリングと並列worker実行により、スループットとユーザー制御を向上させる。
