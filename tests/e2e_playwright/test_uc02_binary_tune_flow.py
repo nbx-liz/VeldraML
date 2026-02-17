@@ -9,7 +9,7 @@ from ._helpers import assert_ids, goto
 def test_uc02_binary_tune_controls_visible(page, gui_base_url: str) -> None:
     goto(page, gui_base_url, "/target")
     assert_ids(page, ["target-task-type", "target-task-context"])
-    page.get_by_text("Binary").first.click()
+    page.locator("#target-task-type").get_by_text("Binary").first.click()
 
     goto(page, gui_base_url, "/train")
     assert_ids(

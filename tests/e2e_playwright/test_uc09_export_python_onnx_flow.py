@@ -18,7 +18,10 @@ def test_uc09_export_controls_and_onnx_option(page, gui_base_url: str) -> None:
         ],
     )
 
-    page.click("#run-action-override-mode input[value='manual']")
+    page.get_by_text("Advanced Options (Override)").first.click()
+    page.wait_for_selector("#run-export-format", state="visible")
+    page.locator("#run-action-override-mode").get_by_text("Manual").click()
+    page.wait_for_selector("#run-action-manual-container", state="visible")
     page.select_option("#run-action-manual", "export")
     page.select_option("#run-export-format", "onnx")
 

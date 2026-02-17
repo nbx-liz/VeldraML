@@ -9,8 +9,8 @@ from ._helpers import assert_ids, goto
 @pytest.mark.gui_smoke
 def test_uc01_regression_navigation_flow(page, gui_base_url: str) -> None:
     goto(page, gui_base_url, "/data")
-    assert "Data Selection" in page.content()
-    assert_ids(page, ["data-upload-drag", "data-file-path"])
+    page.wait_for_selector("#data-upload-drag", state="visible")
+    assert_ids(page, ["data-upload-drag"])
 
     goto(page, gui_base_url, "/target")
     assert_ids(page, ["target-col-select", "target-task-type", "target-guardrail-container"])

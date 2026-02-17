@@ -73,6 +73,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 26.2: ユースケース駆動UI改善（ヘルプUI基盤 + 画面別ガイド強化）
 - Phase 26.3: ユースケース詳細化（diagnostics ライブラリ + observation_table + Notebook 完全版 + 実行証跡）← **完了**
 - Phase 26.4: Notebook 教育化 & テスト品質強化 ← **計画策定済み**
+- Phase 26.5: 13.3 A/B Notebook適用 + gui_e2e安定化 ← **完了**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -1156,6 +1157,117 @@ uv run pytest tests -x --tb=short
 5. tutorial 8本が教育セクション（Concept primer など）を含む。
 6. `phase26_3_execution_manifest.json` の `notebook` パスが canonical を指し、対象 UC は `passed` で outputs が実在する。
 7. Part B の新規テストがパスし、`veldra.api.*` の公開シグネチャ互換を維持している。
+
+## 13.5 Phase26.5: 13.3 A/B Notebook適用 + gui_e2e 安定化
+
+### 背景
+
+- 13.3 で定義した A（固定学習パラメーター）/B（tuning search space と objective）が、Phase26.4 後の canonical Notebook（`quick_reference` / `tutorials`）へ十分に反映されていなかった。
+- `tests/e2e_playwright` は hidden input を `visible` 前提で待機/操作する実装が残り、`gui_e2e` 実行で不安定な失敗が発生していた。
+
+### 目的
+
+- 13.3 A/B 契約を canonical Notebook に再適用し、Notebook と設計書の乖離を解消する。
+- tuning の `standard` 既定探索空間を 13.3 B に揃える（公開 API シグネチャは変更しない）。
+- Playwright E2E を UI 実装に依存しすぎない待機/操作へ修正し、`gui_e2e` の安定性を回復する。
+
+### 適用範囲
+
+- Notebook: `notebooks/quick_reference/*`（UC-1〜8,11,12）と `notebooks/tutorials/tutorial_01..06.ipynb`
+- 生成スクリプト: `scripts/generate_phase263_notebooks.py`
+- tuning 既定探索空間: `src/veldra/modeling/tuning.py`
+- E2E テスト: `tests/e2e_playwright/_helpers.py`, `tests/e2e_playwright/test_uc01_*`, `test_uc02_*`, `test_uc04_*`, `test_uc05_*`, `test_uc09_*`
+- 契約テスト: `tests/test_notebook_phase26_5_ab_contract.py`, `tests/test_tuning_search_space.py`
+
+### 固定方針
+
+- 13.3 A の `epochs/patience/validation_ratio` は `num_boost_round/early_stopping_rounds/early_stopping_validation_fraction` へ対応付ける。
+- 13.3 A の LightGBM 値は `train.lgb_params` で明示し、`auto_num_leaves=True` と ratio パラメーターを併用する。
+- Frontier は `train.metrics=['quantile']` を維持し、A の固定値のみ適用する。
+- E2E 修正は GUI 側を変更せず、テスト側の待機/操作を堅牢化する。
+- legacy stub Notebook は互換目的で維持し、Phase26.5 の適用対象外とする。
+
+### 実装ステップ
+
+#### Step 1: 設計・履歴の先行記録
+
+- `DESIGN_BLUEPRINT.md` に本節（13.5）を追加する。
+- `HISTORY.md` に Phase26.5 の provisional / confirmed Decision を記録する。
+
+#### Step 2: quick_reference 生成ロジックの A/B 適用
+
+- `scripts/generate_phase263_notebooks.py` で UC-1/2/3/4/5/6/11/12 の config を A 準拠へ更新。
+- UC-2 と UC-6 の tuning を B 準拠へ更新。
+  - `learning_rate(0.01-0.1, log)`
+  - `train.num_leaves_ratio(0.5-1.0)`
+  - `train.early_stopping_validation_fraction(0.1-0.3)`
+  - `max_bin(127-255)`
+  - `train.min_data_in_leaf_ratio(0.01-0.1)`
+  - `train.min_data_in_bin_ratio(0.01-0.1)`
+  - `max_depth(3-15)`
+  - `feature_fraction(0.5-1.0)`
+  - `bagging_fraction=1.0`, `bagging_freq=0`, `lambda_l1=0`
+  - `lambda_l2(0.000001-0.1)`
+- UC-2 objective は `brier`、UC-6 objective は `dr_balance_priority` を維持する。
+
+#### Step 3: tutorials（01..06）の config セル再整合
+
+- `tutorial_01..06` の config セルに A 固定値を明示する。
+- `tutorial_02` は objective を `brier` へ更新し、B search space を明示する。
+- `tutorial_02` の tuned fit は `train.*` と LightGBM パラメーターを分離して best_params を反映する。
+
+#### Step 4: tuning 既定探索空間の B 準拠化
+
+- `src/veldra/modeling/tuning.py` の `_default_search_space(..., "standard")` を B に合わせて更新する。
+- `fast` preset は維持する。
+- 旧 `path_smooth` / `min_gain_to_split` は custom `tuning.search_space` 明示指定時のみ利用可能とする。
+
+#### Step 5: gui_e2e テストの堅牢化
+
+- `tests/e2e_playwright/_helpers.py`
+  - `goto()` に `#page-content` 待機を追加
+  - `assert_ids()` を `state="attached"` / `state="visible"` 切替可能に変更
+- 対象 E2E を hidden 要素依存から脱却するよう更新。
+  - `test_uc01_*`: heading 文字列断定から主要 selector 待機へ変更
+  - `test_uc02_*`: task type 選択の locator を container scope 化
+  - `test_uc04_*`, `test_uc05_*`: causal switch を label 経由で操作
+  - `test_uc09_*`: manual mode 切替後に visible state を待機して select を操作
+
+#### Step 6: 契約テスト追加・更新
+
+- 新規: `tests/test_notebook_phase26_5_ab_contract.py`
+  - canonical Notebook の A/B キーと値を正規表現で検証
+- 更新: `tests/test_tuning_search_space.py`
+  - `standard` preset の探索空間契約を 13.3 B に合わせる
+
+### テスト計画
+
+```bash
+uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py
+uv run pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_3_uc_structure.py
+uv run pytest -q tests/e2e_playwright -m gui_e2e
+uv run pytest -q -m "not gui_e2e"
+```
+
+### 完了条件
+
+1. canonical Notebook（`quick_reference` + `tutorials 01..06`）が 13.3 A/B 契約を満たすこと。
+2. `standard` preset の search space が 13.3 B と一致すること。
+3. `gui_e2e` が hidden input 待機起因のタイムアウトなしで通過すること。
+4. `veldra.api.*` の公開シグネチャ互換が維持されること。
+5. 実行証跡（`phase26_3_execution_manifest.json`）が canonical notebook path と整合すること。
+
+### Decision（provisional）
+
+- 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）とし、legacy stub は対象外とする。
+- 理由: 互換スタブの責務を維持しつつ、実利用導線の設定契約を優先して整合させるため。
+- 影響範囲: notebooks / notebook tests / generation script
+
+### Decision（confirmed）
+
+- 内容: `gui_e2e` の不安定要因は GUI 実装変更ではなく、Playwright テストの待機/操作戦略を見直して収束させる。
+- 理由: Stable API と GUI 実装互換を維持し、検証層のみで flaky 要因を除去できるため。
+- 影響範囲: tests/e2e_playwright/*
 
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム

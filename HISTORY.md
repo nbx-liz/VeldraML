@@ -1374,3 +1374,43 @@
 
 **検証結果**
 - `DESIGN_BLUEPRINT.md` の 13〜13.2 が要約形で連続し、`13.3` 以降へ接続されることを確認。
+
+### 2026-02-17（作業/PR: phase26.5-notebook-ab-alignment-and-gui-e2e-hardening）
+**背景**
+- `DESIGN_BLUEPRINT.md` 13.3 の A/B 契約（固定学習パラメーター / tuning search space）が、Phase26.4 後の canonical Notebook（`quick_reference` / `tutorials`）と不整合だった。
+- `tests/e2e_playwright` は hidden input の `visible` 待機に依存し、`gui_e2e` がタイムアウトで失敗していた。
+
+**変更内容**
+- 設計/履歴:
+  - `DESIGN_BLUEPRINT.md` に `13.5 Phase26.5` を追加（背景/目的/適用範囲/実装ステップ/テスト計画/完了条件/Decision）。
+- Notebook A/B 適用:
+  - `scripts/generate_phase263_notebooks.py` を更新し、UC-1/2/3/4/5/6/11/12 の train 設定を 13.3 A へ統一。
+  - UC-2 objective を `brier` へ更新し、UC-2/UC-6 search space を 13.3 B へ統一。
+  - `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py` を再実行し、`quick_reference` と `phase26_3_execution_manifest.json` を再生成。
+  - `notebooks/tutorials/tutorial_01..06.ipynb` の config セルを A/B 準拠へ更新（`tutorial_02` は `train.*` best_params 反映ロジックへ修正）。
+- Core/tuning:
+  - `src/veldra/modeling/tuning.py` の `standard` preset 既定探索空間を 13.3 B 契約へ更新。
+  - `tests/test_tuning_search_space.py` を新契約に合わせて更新。
+- E2E 安定化:
+  - `tests/e2e_playwright/_helpers.py` の `goto` に `#page-content` 待機を追加。
+  - `assert_ids` を `attached/visible` 切替対応へ変更。
+  - `tests/e2e_playwright/test_uc01_*`, `test_uc02_*`, `test_uc04_*`, `test_uc05_*`, `test_uc09_*` を hidden input 非依存の操作へ更新。
+- 契約テスト:
+  - `tests/test_notebook_phase26_5_ab_contract.py` を追加し、canonical Notebook の A/B キー・値を機械検証可能にした。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）とし、legacy stub は対象外とする。
+  - 理由: 互換スタブの責務を維持しつつ、実利用導線の契約整合を優先するため。
+  - 影響範囲: notebooks / notebook tests / generation script
+- Decision: confirmed（確定）
+  - 内容: `gui_e2e` の失敗は GUI 実装を変更せず、Playwright テストの待機/操作戦略の見直しで収束させる。
+  - 理由: 既存 UI 互換性を保持しながら flaky 要因を除去できるため。
+  - 影響範囲: tests/e2e_playwright/*
+
+**検証結果**
+- `uv run ruff check scripts/generate_phase263_notebooks.py src/veldra/modeling/tuning.py tests/e2e_playwright tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py` を通過。
+- `uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py` を実施（`3 passed`）。
+- `uv run pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_3_uc_structure.py` を実施（`5 passed`）。
+- `uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 passed`）。
+- `uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。

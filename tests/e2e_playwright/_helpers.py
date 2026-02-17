@@ -5,11 +5,13 @@ from pathlib import Path
 
 def goto(page, base_url: str, path: str) -> None:
     page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
+    page.wait_for_selector("#page-content", state="attached")
+    page.wait_for_timeout(250)
 
 
-def assert_ids(page, ids: list[str]) -> None:
+def assert_ids(page, ids: list[str], *, state: str = "attached") -> None:
     for id_ in ids:
-        page.wait_for_selector(f"#{id_}")
+        page.wait_for_selector(f"#{id_}", state=state)
 
 
 def set_input_value(page, selector: str, value: str) -> None:

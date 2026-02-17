@@ -103,16 +103,22 @@ def _default_search_space(task_type: str, preset: str) -> dict[str, Any]:
         }
     if preset == "standard":
         return {
-            "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
-            "num_leaves": {"type": "int", "low": 16, "high": 128},
-            "feature_fraction": {"type": "float", "low": 0.6, "high": 1.0},
-            "min_data_in_leaf": {"type": "int", "low": 10, "high": 120},
-            "bagging_fraction": {"type": "float", "low": 0.6, "high": 1.0},
-            "bagging_freq": {"type": "int", "low": 1, "high": 7},
-            "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},
-            "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},
-            "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},
-            "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "train.num_leaves_ratio": {"type": "float", "low": 0.5, "high": 1.0},
+            "train.early_stopping_validation_fraction": {
+                "type": "float",
+                "low": 0.1,
+                "high": 0.3,
+            },
+            "max_bin": {"type": "int", "low": 127, "high": 255},
+            "train.min_data_in_leaf_ratio": {"type": "float", "low": 0.01, "high": 0.1},
+            "train.min_data_in_bin_ratio": {"type": "float", "low": 0.01, "high": 0.1},
+            "max_depth": {"type": "int", "low": 3, "high": 15},
+            "feature_fraction": {"type": "float", "low": 0.5, "high": 1.0},
+            "bagging_fraction": 1.0,
+            "bagging_freq": 0,
+            "lambda_l1": 0.0,
+            "lambda_l2": {"type": "float", "low": 0.000001, "high": 0.1},
         }
     raise VeldraValidationError(f"Unsupported tuning preset '{preset}' for task '{task_type}'.")
 

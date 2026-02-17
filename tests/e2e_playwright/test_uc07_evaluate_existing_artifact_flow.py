@@ -39,5 +39,8 @@ def test_uc07_evaluate_existing_artifact(
     page.click("#artifact-evaluate-btn")
 
     page.wait_for_selector("#artifact-eval-result")
+    page.wait_for_function(
+        "() => (document.querySelector('#artifact-eval-result')?.innerText || '').trim().length > 0"
+    )
     result_text = page.locator("#artifact-eval-result").inner_text()
     assert result_text.strip() != ""
