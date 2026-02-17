@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import lightgbm as lgb
@@ -10,6 +10,14 @@ import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    brier_score_loss,
+    log_loss,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import GroupKFold, KFold
 
 from veldra.api.exceptions import VeldraValidationError
@@ -28,6 +36,7 @@ class DREstimationOutput:
     metrics: dict[str, float]
     observation_table: pd.DataFrame
     summary: dict[str, Any]
+    nuisance_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -36,6 +45,33 @@ class _ConstantModel:
 
     def predict(self, x: pd.DataFrame) -> np.ndarray:
         return np.full(len(x), self.value, dtype=float)
+
+
+def _feature_importance_from_model(
+    model: lgb.LGBMClassifier | lgb.LGBMRegressor | _ConstantModel,
+    feature_names: list[str],
+) -> dict[str, float]:
+    if isinstance(model, _ConstantModel) or not hasattr(model, "feature_importances_"):
+        return {}
+    values = np.asarray(model.feature_importances_, dtype=float)
+    if values.size != len(feature_names):
+        return {}
+    return {name: float(value) for name, value in zip(feature_names, values, strict=False)}
+
+
+def _merge_importance_maps(
+    snapshots: list[dict[str, float]],
+    feature_names: list[str],
+) -> list[dict[str, float | str]]:
+    if not snapshots:
+        return []
+    merged = {name: 0.0 for name in feature_names}
+    for snap in snapshots:
+        for name, value in snap.items():
+            merged[name] = merged.get(name, 0.0) + float(value)
+    scale = float(len(snapshots))
+    rows = [{"feature": name, "importance": merged[name] / scale} for name in feature_names]
+    return sorted(rows, key=lambda row: float(row["importance"]), reverse=True)
 
 
 def _feature_frame(
@@ -243,6 +279,9 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
     e_raw = np.full(n_rows, np.nan, dtype=float)
     m1_hat = np.full(n_rows, np.nan, dtype=float)
     m0_hat = np.full(n_rows, np.nan, dtype=float)
+    propensity_importance_snapshots: list[dict[str, float]] = []
+    outcome_importance_snapshots: list[dict[str, float]] = []
+    feature_names = x.columns.tolist()
 
     if config.causal.cross_fit:
         n_splits = min(max(2, config.split.n_splits), n_rows)
@@ -286,6 +325,9 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
                 x_train, t_train, config.train.seed, propensity_params
             )
             e_raw[valid_idx] = _predict_propensity(prop_model, x_valid)
+            propensity_importance_snapshots.append(
+                _feature_importance_from_model(prop_model, feature_names)
+            )
 
             treated_mask = t_train == 1
             control_mask = t_train == 0
@@ -305,9 +347,18 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
             )
             m1_hat[valid_idx] = _predict_outcome(m1_model, x_valid)
             m0_hat[valid_idx] = _predict_outcome(m0_model, x_valid)
+            outcome_importance_snapshots.append(
+                _feature_importance_from_model(m1_model, feature_names)
+            )
+            outcome_importance_snapshots.append(
+                _feature_importance_from_model(m0_model, feature_names)
+            )
     else:
         prop_model = _fit_propensity_model(x, t, config.train.seed, propensity_params)
         e_raw[:] = _predict_propensity(prop_model, x)
+        propensity_importance_snapshots.append(
+            _feature_importance_from_model(prop_model, feature_names)
+        )
         m1_model = _fit_outcome_model(
             x.loc[t == 1], y.loc[t == 1], config.train.seed, outcome_params
         )
@@ -316,6 +367,8 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
         )
         m1_hat[:] = _predict_outcome(m1_model, x)
         m0_hat[:] = _predict_outcome(m0_model, x)
+        outcome_importance_snapshots.append(_feature_importance_from_model(m1_model, feature_names))
+        outcome_importance_snapshots.append(_feature_importance_from_model(m0_model, feature_names))
 
     if np.isnan(e_raw).any() or np.isnan(m1_hat).any() or np.isnan(m0_hat).any():
         raise VeldraValidationError("Failed to produce complete nuisance predictions for DR.")
@@ -414,6 +467,21 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
         "smd_max_unweighted": smd_max_unweighted,
         "smd_max_weighted": smd_max_weighted,
     }
+    y_hat_obs = t_np * m1_np + (1.0 - t_np) * m0_np
+    nuisance_diagnostics: dict[str, Any] = {
+        "propensity_importance": _merge_importance_maps(
+            propensity_importance_snapshots, feature_names
+        ),
+        "outcome_importance": _merge_importance_maps(outcome_importance_snapshots, feature_names),
+        "oof_metrics": {
+            "propensity_auc": float(roc_auc_score(t_np.astype(int), e_hat)),
+            "propensity_logloss": float(log_loss(t_np.astype(int), e_hat, labels=[0, 1])),
+            "propensity_brier": float(brier_score_loss(t_np.astype(int), e_hat)),
+            "outcome_mae": float(mean_absolute_error(y_np, y_hat_obs)),
+            "outcome_rmse": float(np.sqrt(mean_squared_error(y_np, y_hat_obs))),
+            "outcome_r2": float(r2_score(y_np, y_hat_obs)),
+        },
+    }
 
     return DREstimationOutput(
         method=config.causal.method,
@@ -425,4 +493,5 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
         metrics=metrics,
         observation_table=observation,
         summary=summary,
+        nuisance_diagnostics=nuisance_diagnostics,
     )

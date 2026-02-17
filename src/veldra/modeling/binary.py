@@ -42,6 +42,7 @@ class BinaryTrainingOutput:
     threshold: dict[str, Any]
     threshold_curve: pd.DataFrame | None = None
     training_history: dict[str, Any] | None = None
+    observation_table: pd.DataFrame | None = None
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
@@ -105,9 +106,10 @@ def _train_single_booster(
     config: RunConfig,
     evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
+    metric_value: str | list[str] = config.train.metrics or "binary_logloss"
     params = {
         "objective": "binary",
-        "metric": "binary_logloss",
+        "metric": metric_value,
         "verbosity": -1,
         "seed": config.train.seed,
         **config.train.lgb_params,
@@ -265,6 +267,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
     splits = iter_cv_splits(config, data, x, y)
 
     oof_raw = np.full(len(x), np.nan, dtype=float)
+    fold_ids = np.full(len(x), -1, dtype=int)
     fold_records: list[dict[str, float | int]] = []
     history_folds: list[dict[str, Any]] = []
 
@@ -291,6 +294,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         )
         pred_raw = np.clip(pred_raw, 1e-7, 1 - 1e-7)
         oof_raw[valid_idx] = pred_raw
+        fold_ids[valid_idx] = fold_idx
 
         fold_metrics = _binary_metrics(y.iloc[valid_idx].to_numpy(), pred_raw)
         best_iteration, num_iterations = _booster_iteration_stats(
@@ -407,6 +411,16 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         "mean": mean_all,
         "mean_raw": mean_raw,
     }
+    observation_table = pd.DataFrame(
+        {
+            "fold_id": fold_ids,
+            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+            "y_true": y_true.astype(int),
+            "score_raw": oof_raw,
+            "score": oof_cal,
+            "label_pred": (oof_cal >= float(threshold["value"])).astype(int),
+        }
+    )
 
     return BinaryTrainingOutput(
         model_text=final_model.model_to_string(),
@@ -418,4 +432,5 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         threshold=threshold,
         threshold_curve=threshold_curve,
         training_history=training_history,
+        observation_table=observation_table,
     )

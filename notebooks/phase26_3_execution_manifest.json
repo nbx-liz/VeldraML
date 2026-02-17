@@ -1,0 +1,337 @@
+{
+  "phase": "26.3",
+  "parity_criterion": "reachability_and_artifact_outputs",
+  "entries": [
+    {
+      "uc": "UC-1",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/diagnostics/residual_hist.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/diagnostics/importance_gain.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/diagnostics/shap_summary.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/regression_scores.csv"
+      ],
+      "metrics": [
+        {
+          "label": "in_sample",
+          "rmse": 1.531932,
+          "mae": 1.09478,
+          "mape": 0.825605,
+          "r2": 0.724013
+        },
+        {
+          "label": "out_of_sample",
+          "rmse": 1.626819,
+          "mae": 1.081627,
+          "mape": 0.790093,
+          "r2": 0.629792
+        }
+      ]
+    },
+    {
+      "uc": "UC-2",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/artifacts_fit/e13aafedb4a448cab53e1a6f248a1c12",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/diagnostics/roc_in_out.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/diagnostics/lift.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/diagnostics/importance_gain.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/diagnostics/shap_summary.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/binary_scores.csv"
+      ],
+      "metrics": [
+        {
+          "label": "in_sample",
+          "auc": 0.991402,
+          "logloss": 0.421964,
+          "brier": 0.125319,
+          "average_precision": 0.994235,
+          "accuracy": 0.910798,
+          "f1": 0.933566
+        },
+        {
+          "label": "out_of_sample",
+          "auc": 0.991509,
+          "logloss": 0.423015,
+          "brier": 0.125718,
+          "average_precision": 0.994358,
+          "accuracy": 0.916084,
+          "f1": 0.9375
+        }
+      ]
+    },
+    {
+      "uc": "UC-3",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/artifacts/02fcf683212e45d098f89e510a258829",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/diagnostics/pinball_hist.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/diagnostics/frontier_scatter.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/diagnostics/importance_gain.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/diagnostics/shap_summary.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/frontier_scores.csv"
+      ],
+      "metrics": [
+        {
+          "label": "in_sample",
+          "pinball": 0.127309,
+          "mae": 1.153612,
+          "coverage": 0.90625
+        },
+        {
+          "label": "out_of_sample",
+          "pinball": 0.170275,
+          "mae": 1.225914,
+          "coverage": 0.85
+        }
+      ]
+    },
+    {
+      "uc": "UC-4",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc04_causal_dr_estimate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/artifacts/causal/656a563ef8774d4f929713ff0da65927",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/dr_table.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/balance_smd.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/diagnostics/if_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/diagnostics/propensity_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/diagnostics/weight_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/diagnostics/love_plot.png"
+      ],
+      "metrics": [
+        {
+          "label": "dr_att",
+          "estimate": 1.600355,
+          "std_error": 0.172037,
+          "ci_lower": 1.263162,
+          "ci_upper": 1.937547,
+          "overlap_metric": 1.0,
+          "smd_max_unweighted": 0.467935,
+          "smd_max_weighted": 0.370839,
+          "min": 0.378432,
+          "max": 0.575451,
+          "p01": 0.385156,
+          "p99": 0.568338,
+          "extreme_ratio": 0.0
+        }
+      ]
+    },
+    {
+      "uc": "UC-5",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/artifacts/causal/6db808634c0f4f8f86ddfaf9d0020648",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/drdid_table.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/balance_smd.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/diagnostics/if_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/diagnostics/parallel_trends.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/diagnostics/propensity_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/diagnostics/weight_distribution.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/diagnostics/love_plot.png"
+      ],
+      "metrics": [
+        {
+          "label": "drdid_att",
+          "estimate": 1778.867167,
+          "std_error": 306.422345,
+          "ci_lower": 1178.27937,
+          "ci_upper": 2379.454963,
+          "overlap_metric": 1.0,
+          "smd_max_unweighted": 0.665617,
+          "smd_max_weighted": 0.44155
+        }
+      ]
+    },
+    {
+      "uc": "UC-6",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc06_causal_dr_tune.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/artifacts/tuning/regression_tune_8ca7bd7cd87c",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/tuning_trials.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/diagnostics/overlap.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/best_params.json"
+      ],
+      "metrics": [
+        {
+          "label": "dr_tuning",
+          "best_score": 1000000.270839,
+          "best_param_count": 3,
+          "balance_threshold": 0.1,
+          "balance_violation": 0.270839,
+          "estimate": 1.600355,
+          "objective_stage": "violated",
+          "objective_value": 1000000.270839,
+          "overlap_metric": 1.0,
+          "penalty": 0.270839,
+          "penalty_weight": 1.0,
+          "smd_max_unweighted": 0.467935,
+          "smd_max_weighted": 0.370839,
+          "std_error": 0.172037
+        }
+      ]
+    },
+    {
+      "uc": "UC-7",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc07_artifact_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc07_artifact_evaluate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc07_artifact_evaluate/eval_table.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc07_artifact_evaluate/diagnostics/eval_residual_hist.png"
+      ],
+      "metrics": [
+        {
+          "label": "artifact_evaluate",
+          "rmse": 1.556196,
+          "mae": 1.091491,
+          "r2": 0.707193,
+          "mape": NaN
+        },
+        {
+          "label": "artifact_recomputed",
+          "rmse": 1.556196,
+          "mae": 1.091491,
+          "r2": 0.707193,
+          "mape": 0.816727
+        }
+      ]
+    },
+    {
+      "uc": "UC-8",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc08_artifact_reevaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/reeval_compare.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/precheck.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/diagnostics/reeval_hist.png"
+      ],
+      "metrics": [
+        {
+          "label": "rmse",
+          "train_value": 2.272685,
+          "reeval_value": 1.556196,
+          "delta": -0.716489
+        },
+        {
+          "label": "mae",
+          "train_value": 1.85105,
+          "reeval_value": 1.091491,
+          "delta": -0.759558
+        },
+        {
+          "label": "r2",
+          "train_value": 0.39258,
+          "reeval_value": 0.707193,
+          "delta": 0.314612
+        }
+      ]
+    },
+    {
+      "uc": "UC-11",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/artifacts/b0feaca9a2324374bc283ff69ede3bdc",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/metrics.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/diagnostics/nll_hist.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/diagnostics/true_class_prob_hist.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/diagnostics/importance_gain.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/diagnostics/shap_summary.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/multiclass_scores.csv"
+      ],
+      "metrics": [
+        {
+          "label": "in_sample",
+          "accuracy": 0.982143,
+          "macro_f1": 0.981982,
+          "multi_logloss": 0.237239,
+          "multi_error": 0.017857
+        },
+        {
+          "label": "out_of_sample",
+          "accuracy": 0.921053,
+          "macro_f1": 0.922963,
+          "multi_logloss": 0.329472,
+          "multi_error": 0.078947
+        }
+      ]
+    },
+    {
+      "uc": "UC-12",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/artifacts/10b9a3342cfe48bd9eed6faa894dfc23",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/timeseries_scores.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/diagnostics/timeseries_prediction.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/diagnostics/timeseries_residual.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/diagnostics/importance_gain.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/diagnostics/shap_summary.png",
+        "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/timeseries_detail.csv"
+      ],
+      "metrics": [
+        {
+          "label": "in_sample",
+          "rmse": 0.279616,
+          "mae": 0.17669,
+          "mape": 0.095433,
+          "r2": 0.898117
+        },
+        {
+          "label": "out_of_sample",
+          "rmse": 0.218833,
+          "mae": 0.137657,
+          "mape": 0.113955,
+          "r2": 0.937652
+        }
+      ]
+    },
+    {
+      "uc": "UC-9",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc09_export_python_onnx.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc09_export_python_onnx/exports",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc09_export_python_onnx/exports/python",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc09_export_python_onnx/exports/onnx"
+      ],
+      "metrics": []
+    },
+    {
+      "uc": "UC-10",
+      "status": "passed",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc10_export_html_excel.ipynb",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc10_export_html_excel/reports",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc10_export_html_excel/reports/report.html",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc10_export_html_excel/reports/report.xlsx"
+      ],
+      "metrics": []
+    }
+  ]
+}

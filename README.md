@@ -552,6 +552,11 @@ Notebook includes:
 - Propensity diagnostics (`e_raw` and `e_hat`) and overlap summary
 - Balance diagnostics via SMD (unweighted vs ATT-weighted)
 
+Phase26.3 notebook execution policy:
+- `notebooks/phase26_2_uc01`〜`uc08` と `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` / `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
+- 実行証跡は `notebooks/phase26_3_execution_manifest.json` で管理します。
+- 構造契約は通常テストで検証し、重い証跡検証は `pytest -m notebook_e2e` で実行します。
+
 Export demo:
 
 ```bash
@@ -657,6 +662,7 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `split.train_size` | `int | None` | no | `None` | - | - | Fixed train window size in blocked mode. |
 | `train` | `TrainConfig` | no | `<factory>` | - | - | Model training settings. |
 | `train.lgb_params` | `dict[str, Any]` | no | `{}` | - | - | LightGBM parameter overrides. |
+| `train.metrics` | `list[str] | None` | no | `None` | - | - | Training metric list passed to LightGBM. |
 | `train.early_stopping_rounds` | `int | None` | no | `100` | - | - | Early stopping rounds. |
 | `train.early_stopping_validation_fraction` | `float` | no | `0.1` | - | - | Train-row fraction used for ES validation split. |
 | `train.num_boost_round` | `int` | no | `300` | - | - | Maximum boosting iterations. |
@@ -673,6 +679,7 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `tuning.enabled` | `bool` | no | `false` | - | - | Enable/disable tuning path. |
 | `tuning.n_trials` | `int` | no | `30` | - | - | Optuna trial count. |
 | `tuning.search_space` | `dict[str, Any]` | no | `{}` | - | - | Explicit search space spec. |
+| `tuning.metrics_candidates` | `list[str] | None` | no | `None` | - | - | Candidate metrics list for tuning diagnostics/reporting. |
 | `tuning.preset` | ``fast` | `standard`` | no | `standard` | `fast`, `standard` | - | Default search space preset. |
 | `tuning.objective` | `str | None` | no | `None` | - | - | Objective metric name. |
 | `tuning.resume` | `bool` | no | `false` | - | - | Resume an existing study. |
@@ -716,9 +723,9 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 
 | task.type | allowed objectives | default |
 | --- | --- | --- |
-| regression | `rmse`, `mae`, `r2` | `rmse` |
+| regression | `rmse`, `mae`, `r2`, `mape` | `rmse` |
 | binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, `precision_at_k` | `auc` |
-| multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |
+| multiclass | `accuracy`, `macro_f1`, `logloss`, `multi_logloss`, `multi_error` | `macro_f1` |
 | frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |
 
 #### Causal
@@ -825,6 +832,16 @@ causal:
 export: {artifact_dir: artifacts}
 ```
 <!-- RUNCONFIG_REF:END -->
+
+### Phase26.3 Config Notes
+
+`tuning.metrics_candidates` は objective とは独立した候補セットです。task ごとの許可値は以下です。
+
+| task.type | allowed `tuning.metrics_candidates` |
+| --- | --- |
+| regression | `rmse`, `huber`, `mae` |
+| binary | `logloss`, `auc` |
+| multiclass | `multi_logloss`, `multi_error` |
 
 ## Config Migration
 

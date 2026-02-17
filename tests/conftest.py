@@ -26,6 +26,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "gui: GUI adapter related tests.")
     config.addinivalue_line("markers", "gui_e2e: Playwright GUI end-to-end tests.")
     config.addinivalue_line("markers", "gui_smoke: CI smoke subset of Playwright GUI tests.")
+    config.addinivalue_line(
+        "markers",
+        "notebook_e2e: Notebook execution evidence and output contract tests.",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

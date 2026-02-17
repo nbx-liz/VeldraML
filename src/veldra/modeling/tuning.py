@@ -34,6 +34,12 @@ class TuningOutput:
     best_components: dict[str, Any]
 
 
+_OBJECTIVE_METRIC_ALIASES: dict[str, str] = {
+    "multi_logloss": "logloss",
+    "multi_error": "error_rate",
+}
+
+
 def _objective_spec(
     task_type: str,
     objective: str | None,
@@ -51,6 +57,7 @@ def _objective_spec(
     direction_by_metric = {
         "rmse": "minimize",
         "mae": "minimize",
+        "mape": "minimize",
         "r2": "maximize",
         "pinball": "minimize",
         "pinball_coverage_penalty": "minimize",
@@ -63,6 +70,8 @@ def _objective_spec(
         "recall": "maximize",
         "precision_at_k": "maximize",
         "macro_f1": "maximize",
+        "multi_logloss": "minimize",
+        "multi_error": "minimize",
         "dr_std_error": "minimize",
         "dr_overlap_penalty": "minimize",
         "dr_balance_priority": "minimize",
@@ -145,10 +154,23 @@ def _suggest_from_spec(trial: optuna.Trial, name: str, spec: Any) -> Any:
 
 def _build_trial_config(config: RunConfig, trial_params: dict[str, Any]) -> RunConfig:
     trial_cfg = config.model_copy(deep=True)
+    lgb_trial_params: dict[str, Any] = {}
+    for name, value in trial_params.items():
+        if name.startswith("train."):
+            train_field = name.split(".", 1)[1]
+            if not hasattr(trial_cfg.train, train_field):
+                raise VeldraValidationError(
+                    f"search_space parameter '{name}' targets unknown TrainConfig field."
+                )
+            setattr(trial_cfg.train, train_field, value)
+            continue
+        lgb_trial_params[name] = value
+
     trial_cfg.train.lgb_params = {
         **trial_cfg.train.lgb_params,
-        **trial_params,
+        **lgb_trial_params,
     }
+    trial_cfg = RunConfig.model_validate(trial_cfg.model_dump(mode="json", exclude_none=True))
     if trial_cfg.task.type == "binary" and trial_cfg.postprocess.threshold_optimization is not None:
         trial_cfg.postprocess.threshold_optimization.enabled = False
     return trial_cfg
@@ -267,7 +289,7 @@ def _score_for_task_with_components(
     if config.task.type == "frontier" and metric_name in {"pinball", "pinball_coverage_penalty"}:
         return _frontier_objective_from_metrics(config, metric_name, mean_metrics)
 
-    resolved_metric_name = metric_name
+    resolved_metric_name = _OBJECTIVE_METRIC_ALIASES.get(metric_name, metric_name)
     if metric_name == "precision_at_k":
         if config.train.top_k is None:
             raise VeldraValidationError(

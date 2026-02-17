@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-16
+最終更新: 2026-02-17
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -1713,221 +1713,579 @@ HELP_TEXTS: dict[str, dict[str, str]] = {
   - Optional 依存の graceful degradation を manifest と parity report に明示（例: `openpyxl` 未導入時の Excel export）。
 
 ## 13.3 Phase26.3: ユースケース詳細化
-### 目的: Phase 26.2 で作成したNotebookユースケースを完成させる
-### 要件:
-#### LightGBMのパラメーターは以下の数値で設定する
-  - 'epochs': 2000,
-  - 'patience': 200,
-  - learning_rate: 0.01
-  - validation_ratio: 0.2
-  - max_bin: 255
-  - auto_num_leaves: True
-  - num_leaves_ratio: 1
-  - min_data_in_leaf_ratio: 0.01
-  - min_data_in_bin_ratio: 0.01
-  - max_depth: 10
-  - feature_fraction: 1
-  - bagging_fraction: 1
-  - bagging_freq: 0
-  - lambda_l1: 0
-  - lambda_l2: 0.000001
-  - min_child_samples: 20
-  - metrics: [rmse, mae]  (Regressionの場合)
-   - metrics: [logloss, auc]  (Binaryの場合)
-   - metrics: [multi_logloss, multi_error]  (Multiclassの場合)
-  - first_metric_only: True
+
+### 目的
+
+Phase 26.2 で作成した骨格 Notebook（UC-1〜UC-10）を、実務レベルの診断・可視化・CSV 出力を含む完全版ユースケースに仕上げる。併せて、各 Notebook が依存する **診断計算ライブラリ** (`veldra.diagnostics`) を新設し、Notebook セルから 1 行で呼べる高レベル API を提供する。
+
+### 前提
+
+- SHAP 算出は LightGBM の **内蔵 SHAP**（`booster.predict(data, pred_contrib=True)`）を使用する。外部 `shap` ライブラリに依存しない。
+- Feature Importance は `booster.feature_importance(importance_type='split' | 'gain')` で取得。
+- Notebook はすべて **ヘッドレス実行可能**（`matplotlib.use('Agg')` + `plt.savefig`）とする。
+- 可視化は `matplotlib` のみ。追加描画ライブラリに依存しない。
+
 ---
-#### パラメーター最適化のSpaceは以下の数値で設定する
-  - objective: [mape] (Regressionの場合)
-   - objective: [brier]  (Binaryの場合)
-   - objective: [multi_logloss]  (Multiclassの場合)
-   - objective: [dr_balance_priority, dr_std_error, dr_overlap_penalty] (Causal DRの場合)
-   - objective: [drdid_balance_priority, drdid_std_error, drdid_overlap_penalty] (Causal DR-DiDの場合)
-  - learning_rate: 0.01〜0.1 (log uniform)
-  - num_leaves_ratio: 0.5〜1.0 (float)
-  - validation_ratio: 0.1〜0.3 (float)
-  - max_bin: 127〜255 (int)
-  - num_leaves_ratio: 0.5〜1.0 (float)
-  - min_data_in_leaf_ratio: 0.01〜0.1 (float)
-  - min_data_in_bin_ratio: 0.01〜0.1 (float)
-  - max_depth: 3〜15 (int)
-  - feature_fraction: 0.5〜1.0 (float)
-  - bagging_fraction: 1.0 (float)
-  - bagging_freq: 0 (int)
-  - lambda_l1: 0 (float)
-  - lambda_l2: 0.000001〜0.1 (float)
-  - metrics: [rmse], [huber], [mae]  (Regressionの場合)
-   - metrics: [logloss], [auc]  (Binaryの場合)
-   - metrics: [multi_logloss], [multi_error]  (Multiclassの場合)
+
+### 要件仕様
+
+#### A. LightGBM 固定パラメーター
+
+Notebook 内の学習設定は以下の値を使用する:
+
+| パラメーター | 値 |
+|---|---|
+| `epochs` | 2000 |
+| `patience` | 200 |
+| `learning_rate` | 0.01 |
+| `validation_ratio` | 0.2 |
+| `max_bin` | 255 |
+| `auto_num_leaves` | True |
+| `num_leaves_ratio` | 1 |
+| `min_data_in_leaf_ratio` | 0.01 |
+| `min_data_in_bin_ratio` | 0.01 |
+| `max_depth` | 10 |
+| `feature_fraction` | 1 |
+| `bagging_fraction` | 1 |
+| `bagging_freq` | 0 |
+| `lambda_l1` | 0 |
+| `lambda_l2` | 0.000001 |
+| `min_child_samples` | 20 |
+| `first_metric_only` | True |
+
+タスクタイプ別 metrics:
+
+| タスクタイプ | metrics |
+|---|---|
+| Regression | `[rmse, mae]` |
+| Binary | `[logloss, auc]` |
+| Multiclass | `[multi_logloss, multi_error]` |
+
 ---
-- SHAPの算出はLightGBMの内臓機能を使用する
+
+#### B. パラメーター最適化 Search Space
+
+| パラメーター | 範囲 | 型 |
+|---|---|---|
+| `learning_rate` | 0.01〜0.1 | log uniform |
+| `num_leaves_ratio` | 0.5〜1.0 | float |
+| `validation_ratio` | 0.1〜0.3 | float |
+| `max_bin` | 127〜255 | int |
+| `min_data_in_leaf_ratio` | 0.01〜0.1 | float |
+| `min_data_in_bin_ratio` | 0.01〜0.1 | float |
+| `max_depth` | 3〜15 | int |
+| `feature_fraction` | 0.5〜1.0 | float |
+| `bagging_fraction` | 1.0（固定） | float |
+| `bagging_freq` | 0（固定） | int |
+| `lambda_l1` | 0（固定） | float |
+| `lambda_l2` | 0.000001〜0.1 | float |
+
+タスクタイプ別 tuning objective:
+
+| タスクタイプ | objective |
+|---|---|
+| Regression | `[mape]` |
+| Binary | `[brier]` |
+| Multiclass | `[multi_logloss]` |
+| Causal DR | `[dr_balance_priority, dr_std_error, dr_overlap_penalty]` |
+| Causal DR-DiD | `[drdid_balance_priority, drdid_std_error, drdid_overlap_penalty]` |
+
+タスクタイプ別 tuning metrics:
+
+| タスクタイプ | metrics 候補 |
+|---|---|
+| Regression | `[rmse]`, `[huber]`, `[mae]` |
+| Binary | `[logloss]`, `[auc]` |
+| Multiclass | `[multi_logloss]`, `[multi_error]` |
+
 ---
-#### Regression予測モデルの期待アウトプット・評価項目
- * In sampleの誤差分布とOut of sampleの誤差分布のヒストグラム（比較して過学習の程度を確認したい）
-  * MAE, MAPE, RMSE、R²などの指標も併記して数値面からも比較したい
- * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
- * SHAP（全特徴量）
- * 元データ＋In/Outラベル＋予測値・残差のテーブル（CSV)
+
+#### C. タスクタイプ別 期待アウトプット
+
+##### C-1. Regression 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 誤差分布ヒストグラム | In-sample / Out-of-sample の残差分布を重ねて表示。過学習度合いの比較 |
+| 2 | 評価指標テーブル | MAE, MAPE, RMSE, R² を In/Out 別に併記 |
+| 3 | Feature Importance | Split / Gain の棒グラフ（上位 20 特徴量） |
+| 4 | SHAP（全特徴量） | LightGBM 内蔵 SHAP。bee swarm 風の散布図 |
+| 5 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `prediction` + `residual` |
+
+##### C-2. Binary 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | ROC Chart | In-sample / Out-of-sample 別の ROC 曲線。過学習比較 |
+| 2 | 評価指標テーブル | AUC, Brier, Average Precision, Logloss を In/Out 別に併記 |
+| 3 | Lift Chart | OOF 予測のリフトカーブ（全体の予測力確認） |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `score` |
+
+##### C-3. Multiclass 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | NLL ヒストグラム | サンプル別 Negative Log Likelihood を In/Out 別に比較 |
+| 2 | 正解クラス確率ヒストグラム | p(true_class) を In/Out 別に比較 |
+| 3 | 評価指標テーブル | 多クラスAUC, 多クラスBrier, Multi-logloss, Multi-error を In/Out 別に併記 |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP | 最大確率ラベルについての SHAP（全特徴量） |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + クラス別スコア列 |
+
+##### C-4. 時系列予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 時系列プロット（実測 vs 予測） | X軸: 時系列、Y軸: 目的変数 + 予測値。In/Out 境界を垂直線で明示 |
+| 2 | 残差時系列プロット | X軸: 時系列、Y軸: 残差。In/Out 境界を明示 |
+| 3 | 評価指標テーブル | MAE, MAPE, RMSE, R² を In/Out 別に併記 |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `prediction` + `residual` |
+
+##### C-5. Frontier（分位点回帰）
+
+前提:
+- 分位点はユーザーで変更可能
+- 特徴量に対して単調制約を設定できる
+- Group CV ですべてのデータに対して OOF としての予測値が得られている
+- Output Oriented の効率を算出: **相対到達度** `eff = y / q_hat_tau(x)`（1 に近いほど良い。1 超えはフロンティア超え扱い）
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | Pinball loss ヒストグラム | サンプル別 Pinball loss を In/Out 別に比較 |
+| 2 | 評価指標テーブル | Pinball Loss, coverage, exceedance rate を In/Out 別に併記 |
+| 3 | フロンティア散布図 | 予測値 vs 実測の散布図（45 度線 + フロンティア線） |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `prediction` + `efficiency` |
+
+##### C-6. DR（Doubly Robust: ATE/ATT 推定）
+
+前提:
+- 推定対象: ATE / ATT（どちらか明示。両方出すなら両方）
+- Cross-fitting（group K-fold）で nuisance を学習し、全データで OOF 予測を保持
+- nuisance 構成: Propensity model `e(x) = P(D=1|X=x)`（キャリブレーション付き）、Outcome model `μ1(x), μ0(x)`
+- 推定量: AIPW / DR（標準誤差は influence function ベース or ブートストラップ）
+
+**最終推定（因果効果）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 推定サマリ | 推定値（ATE/ATT）、標準誤差、95%CI、p 値 |
+| 2 | IF 分布ヒストグラム | Influence function / pseudo-outcome の分布（全体） |
+| 3 | IF 外れ値一覧 | 上位 1% の IF 値を持つサンプルと、それらに多い特徴 |
+
+**Overlap / 傾向スコア診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 4 | 傾向スコア分布 | Treated / Control 別ヒストグラム |
+| 5 | IPW 重み分布 | ATE/ATT 定義に応じた重み w のヒストグラム |
+| 6 | Overlap 指標 | e(x) の min/max/分位点、極端値比率（<0.01, >0.99）、有効標本サイズ（ESS） |
+
+**バランスチェック:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 7 | Love plot | Unweighted vs Weighted の SMD（標準化差）比較 |
+| 8 | SMD 要約 | 中央値/最大値、\|SMD\|>0.1 の割合 |
+
+**nuisance モデル健全性:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 9 | Propensity 診断 | InFold / OOF の ROC, AUC, Logloss, Brier, Average Precision |
+| 10 | Outcome 診断 | InFold / OOF の誤差分布ヒストグラム + MAE, RMSE, R² |
+| 11 | Feature Importance / SHAP | Propensity・Outcome 各モデルの Split/Gain + SHAP（全特徴量） |
+| 12 | Overlap 崩壊警告 | AUC が極端に高い場合の注意喚起メッセージ |
+
+**ロバストネス:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 13 | トリミング比較 | 重みの 1%/99% クリッピングごとの推定結果比較表 |
+
+**詳細テーブル（CSV）:**
+
+| 列 | 説明 |
+|---|---|
+| 元データ全列 | 入力特徴量 |
+| `fold_id` | CV fold 番号 |
+| `D` | 処置フラグ |
+| `Y` | アウトカム |
+| `e_x` | OOF 傾向スコア |
+| `mu1_x`, `mu0_x` | OOF outcome 予測 |
+| `weight` | ATE/ATT 定義に応じた重み |
+| `pseudo_outcome` | pseudo-outcome / IF 成分 |
+| `trimmed` | トリミング適用フラグ |
+
+##### C-7. DR-DiD（Doubly Robust Difference-in-Differences: ATT）
+
+前提:
+- 推定対象: ATT（Average Treatment effect on the Treated）
+- データ構造: Panel / Repeated cross-section を明示
+- 時点: Pre / Post を明示
+- Cross-fitting（Group K-fold）で nuisance を学習し、全データで OOF 予測を保持
+- nuisance: 傾向スコア `e(x) = P(D=1|X)`（キャリブレーション付き）、結果モデル `E[Y_t | D, X]` or `E[ΔY | D, X]`
+- 標準誤差: クラスタロバスト（panel なら個体 ID）or ブートストラップ
+
+**最終推定（ATT）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 推定サマリ | ATT 推定値、標準誤差、95%CI、p 値 |
+| 2 | IF 分布ヒストグラム | DR-DiD の IF / pseudo-outcome 分布 |
+| 3 | IF 外れ値一覧 | 上位 1% |
+
+**DiD 前提（並行トレンド）診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 4 | Placebo DID | Pre 期間のみの placebo DID（効果=0 を期待）。リードがゼロ付近か確認 |
+| 5 | 平均推移プロット | Treated vs Control の平均アウトカム推移（Unweighted + Weighted） |
+
+**Overlap / 傾向スコア診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 6 | 傾向スコア分布 | Treated / Control 別ヒストグラム |
+| 7 | 重み分布 | DR-DiD 定義に合わせた w のヒストグラム |
+| 8 | Overlap 指標 | e(x) の min/max/分位点、極端値比率、ESS、極端重み比率（p99 超） |
+
+**バランスチェック（Pre の X に対して）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 9 | Love plot | Unweighted vs Weighted の SMD 比較 |
+| 10 | SMD 要約 | 中央値/最大値、\|SMD\|>0.1 の割合 |
+
+**nuisance モデル健全性:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 11 | Propensity 診断 | InFold / OOF の ROC, AUC, Logloss, Brier, Average Precision |
+| 12 | Outcome 診断 | Pre/Post 別（or ΔY）の InFold / OOF 誤差分布 + MAE, RMSE, R² |
+| 13 | Feature Importance / SHAP | Propensity・Outcome 各モデルの Split/Gain + SHAP |
+| 14 | Overlap 崩壊警告 | AUC 極端時の注意喚起 |
+
+**ロバストネス:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 15 | トリミング比較 | 重みの 1%/99% クリッピングごとの ATT 比較表 |
+| 16 | Placebo outcome（任意） | 影響しないはずの目的変数で効果ゼロ確認 |
+
+**詳細テーブル（CSV）:**
+
+| 列 | 説明 |
+|---|---|
+| 元データ全列 | 入力特徴量 |
+| `fold_id` | CV fold 番号 |
+| `unit_id`（Panel のみ） | 個体 ID |
+| `time`, `pre_post` | 時点、Pre/Post フラグ |
+| `D` | treated indicator |
+| `Y` | アウトカム |
+| `e_x` | OOF 傾向スコア |
+| `mu_d_pre_x`, `mu_d_post_x` or `delta_mu_d_x` | OOF outcome nuisance |
+| `weight` | DR-DiD 定義に応じた重み |
+| `pseudo_outcome` | pseudo-outcome / IF 成分 |
+| `trimmed` | トリミング適用フラグ |
+
 ---
-#### Binary予測モデルの期待アウトプット・評価項目
- * InSample/OutOfSampleそれぞれのROC Chart（比較して過学習の程度を確認したい）
-  * AUC、Brier, Average Precision, Loglossなどの指標も併記して数値面からも比較したい
- * Lift Chart（全体の予測力の確認）
- * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
- * SHAP（全特徴量）
- * 元データ＋In/Outラベル＋予測値(スコア)のテーブル（CSV)
+
+### 実装ステップ
+
+#### Step 1: 診断計算ライブラリ新設 (`veldra.diagnostics`)
+
+**目的**: Notebook セルから 1 行で呼べる高レベル診断 API を提供する。
+
+**新規ファイル**:
+
+| ファイル | 内容 |
+|---|---|
+| `src/veldra/diagnostics/__init__.py` | 公開 API の re-export |
+| `src/veldra/diagnostics/importance.py` | Feature importance（Split/Gain）取得ユーティリティ |
+| `src/veldra/diagnostics/shap_native.py` | LightGBM 内蔵 SHAP の算出・整形 |
+| `src/veldra/diagnostics/metrics.py` | In/Out 別メトリクス算出（Regression, Binary, Multiclass, Frontier, TimeSeries） |
+| `src/veldra/diagnostics/plots.py` | matplotlib ベースの可視化関数群 |
+| `src/veldra/diagnostics/tables.py` | 詳細テーブル（CSV）生成ユーティリティ |
+| `src/veldra/diagnostics/causal_diag.py` | 因果推定固有の診断（IF 分布、Overlap、Balance、Love plot、トリミング比較） |
+
+**主要 API**:
+
+```python
+# importance.py
+def compute_importance(booster, importance_type='gain', top_n=20) -> pd.DataFrame
+
+# shap_native.py
+def compute_shap(booster, X: pd.DataFrame) -> pd.DataFrame
+# Multiclass の場合: 最大確率ラベルの SHAP を返す
+def compute_shap_multiclass(booster, X, predictions, n_classes) -> pd.DataFrame
+
+# metrics.py
+def regression_metrics(y_true, y_pred, label='overall') -> dict
+def binary_metrics(y_true, y_score, label='overall') -> dict
+def multiclass_metrics(y_true, y_proba, label='overall') -> dict
+def frontier_metrics(y_true, y_pred, alpha, label='overall') -> dict
+def split_in_out_metrics(metric_fn, y_true, y_pred, fold_ids, eval_fold_ids) -> pd.DataFrame
+
+# plots.py
+def plot_error_histogram(residuals_in, residuals_out, metrics_in, metrics_out, save_path)
+def plot_roc_comparison(y_true_in, y_score_in, y_true_out, y_score_out, save_path)
+def plot_lift_chart(y_true, y_score, save_path)
+def plot_nll_histogram(nll_in, nll_out, save_path)
+def plot_true_class_prob_histogram(prob_in, prob_out, save_path)
+def plot_timeseries_prediction(time_index, y_true, y_pred, split_point, save_path)
+def plot_timeseries_residual(time_index, residuals, split_point, save_path)
+def plot_pinball_histogram(pinball_in, pinball_out, save_path)
+def plot_frontier_scatter(y_true, y_pred, save_path)
+def plot_feature_importance(importance_df, importance_type, save_path)
+def plot_shap_summary(shap_df, X, save_path)
+
+# causal_diag.py
+def plot_propensity_distribution(propensity, treatment, save_path)
+def plot_weight_distribution(weights, save_path)
+def compute_overlap_stats(propensity, treatment) -> dict
+def compute_balance_smd(covariates, treatment, weights=None) -> pd.DataFrame
+def plot_love_plot(smd_unweighted, smd_weighted, save_path)
+def compute_trimming_comparison(estimate_fn, observation_table, trim_levels=[0.01, 0.05]) -> pd.DataFrame
+def plot_if_distribution(if_values, save_path)
+def get_if_outliers(if_values, observation_table, percentile=99) -> pd.DataFrame
+def plot_parallel_trends(means_treated, means_control, time_labels, save_path)
+
+# tables.py
+def build_regression_table(X, y, fold_ids, predictions, in_out_labels) -> pd.DataFrame
+def build_binary_table(X, y, fold_ids, scores, in_out_labels) -> pd.DataFrame
+def build_multiclass_table(X, y, fold_ids, class_probas, in_out_labels) -> pd.DataFrame
+def build_frontier_table(X, y, fold_ids, predictions, efficiency) -> pd.DataFrame
+def build_dr_table(observation_table) -> pd.DataFrame
+def build_drdid_table(observation_table) -> pd.DataFrame
+```
+
+**テスト**: `tests/test_diagnostics_importance.py`, `tests/test_diagnostics_shap.py`, `tests/test_diagnostics_metrics.py`, `tests/test_diagnostics_plots.py`, `tests/test_diagnostics_tables.py`, `tests/test_diagnostics_causal.py`
+
 ---
-#### Multiclass予測モデルの期待アウトプット・評価項目
- * InSample/OutOfSampleそれぞれの**Negative Log Likelihood（= logloss のサンプル別寄与）**のヒストグラム（比較して過学習の程度を確認したい）
- * InSample/OutOfSampleそれぞれの正解クラス確率 p(true_class) のヒストグラム（比較して過学習の程度を確認したい）
-  * 多クラスAUC、多クラスBrier、Multi-logloss, Multi-errorなどの指標も併記して数値面からも比較したい
- * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
- * SHAP（Probaが最大ラベルについてのSHAP、全特徴量）
- * 元データ＋In/Outラベル＋予測値(クラスごとのスコア)のテーブル（CSV)
+
+#### Step 2: 既存モデリング層の拡張（CV 結果に In/Out 情報を保持）
+
+**目的**: 各 `train_*_with_cv()` の返り値に、サンプル別の fold_id・in/out ラベル・予測値を含める。
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/veldra/modeling/regression.py` | `RegressionTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, prediction, residual） |
+| `src/veldra/modeling/binary.py` | `BinaryTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, score） |
+| `src/veldra/modeling/multiclass.py` | `MulticlassTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, class 別 proba） |
+| `src/veldra/modeling/frontier.py` | `FrontierTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, prediction, efficiency） |
+| `src/veldra/api/artifact.py` | `Artifact` に `observation_table` を保持（persist/load 対応） |
+
+**制約**: 既存の `RunResult`, `EvalResult` の公開シグネチャは変更しない（後方互換維持）。
+
+**テスト**: 既存テスト群の拡張 + `tests/test_observation_table.py`（新規: observation_table の列・行数・型の検証）
+
 ---
-- 時系列予測モデルの期待アウトプット・評価項目
- * X軸：時系列 Y軸：目的変数・予測値のプロット（In sample/Out of sampleの区切りが分かるように）
- * X軸：時系列 Y軸：残差のプロット（In sample/Out of sampleの区切りが分かるように）
-  * MAE, MAPE, RMSE、R²などの指標も併記して数値面からも比較したい
- * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
- * SHAP（全特徴量）
- * 元データ＋In/Outラベル＋予測値・残差のテーブル（CSV)
+
+#### Step 3: 因果推定層の拡張（nuisance 診断情報の充実）
+
+**目的**: `DREstimationOutput` に nuisance モデルの Feature Importance / SHAP / InFold メトリクスを追加。
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/veldra/causal/dr.py` | nuisance 学習ループで InFold 予測を保持。`DREstimationOutput` に `nuisance_diagnostics: dict` を追加（propensity_importance, outcome_importance, infold_metrics） |
+| `src/veldra/causal/dr_did.py` | 同上。加えて `parallel_trends: dict` に placebo DID 推定値と平均推移データを追加 |
+| `src/veldra/causal/diagnostics.py` | `compute_ess()`, `extreme_weight_ratio()`, `overlap_summary()` を追加 |
+
+**テスト**: `tests/test_causal_dr.py`, `tests/test_causal_drdid.py` の拡張（新規フィールドの存在と型の検証）
+
 ---
-#### Frontierの期待アウトプット・評価項目
- - 前提
-  - 分位点はユーザーで変更可能
-  - 特徴量に対して単調制約を設定できる
-  - Group CVですべてのデータに対してOOFとしての予測値が得られている
-  - Output Orientedの効率を算出
-   - **相対到達度**：  
-  \[
-  \text{eff} = \frac{y}{\hat{q}_{\tau}(x)}
-  \]
-  （1に近いほど良い。1を超える場合は“フロンティア超え”扱い）
- * InSample/Out of sampleのPinball loss（サンプル別）ヒストグラム（比較して過学習の程度を確認したい）
-  * Pinball Loss、coverage、exceedance rateを併記して数値面からも比較したい
- * フロンティア予測 vs 実測の散布図
- * Feature Importance(モデルが変な学習をしていないか確認 Split/Gain)
- * SHAP（全特徴量）
- * 元データ＋予測値・効率値のテーブル（CSV)
+
+#### Step 4: Notebook 詳細化（UC-1〜UC-6）
+
+**目的**: Phase26.2 の骨格 Notebook を完全版に差し替える。
+
+**対象 Notebook と内容**:
+
+| Notebook | 内容 |
+|---|---|
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | Setup → fit（固定パラメーター） → 誤差ヒストグラム → 指標テーブル → Feature Importance → SHAP → CSV 出力 |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | Setup → tune（Search Space 適用） → fit → ROC 比較 → Lift → 指標テーブル → Importance → SHAP → CSV |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | Setup → fit → Pinball ヒストグラム → 指標テーブル → 散布図 → Importance → SHAP → CSV |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | Setup → estimate_dr → 推定サマリ → IF 分布 → Overlap 診断 → Balance → nuisance 診断 → Importance/SHAP → トリミング比較 → CSV |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | Setup → estimate_dr_did → 推定サマリ → IF 分布 → 並行トレンド → Overlap → Balance → nuisance 診断 → Importance/SHAP → トリミング比較 → CSV |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | Setup → tune（Causal objective） → estimate_dr → 診断一式 |
+
+**追加 Notebook**:
+
+| Notebook | 内容 |
+|---|---|
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | 新規: Multiclass fit → NLL ヒストグラム → 正解クラス確率 → 指標テーブル → Importance → SHAP → CSV |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | 新規: TimeSeries fit → 時系列プロット → 残差プロット → 指標テーブル → Importance → SHAP → CSV |
+
+**各 Notebook の共通構造**:
+
+```
+1. Setup（import, OUT_DIR, matplotlib.use('Agg')）
+2. データ読み込み + config 定義（固定パラメーター使用）
+3. fit / tune / estimate 実行
+4. 診断セクション（diagnostics API 呼び出し）
+   - 可視化: plt.savefig(OUT_DIR / 'plot_name.png')
+   - 指標: pd.DataFrame 表示 + CSV 保存
+5. 詳細テーブル CSV 出力
+6. SUMMARY dict（status, artifact_path, outputs リスト, metrics）
+```
+
+**テスト**: `tests/test_notebook_phase26_3_uc_structure.py`（Notebook セル構造・import・SUMMARY 形式の検証）
+
 ---
-#### DR（Doubly Robust：ATE/ATT 推定）の期待アウトプット・評価項目
 
-##### 前提
- - 推定対象：ATE / ATT（どちらか明示。両方出すなら両方）
- - Cross-fitting（group K-fold）で nuisance を学習し、全データで OOF（out-of-fold）予測を保持
- - nuisance 構成  
-  - Propensity model：e(x) = P(D=1|X=x)  
-   - 予測確率キャリブレーション
-  - Outcome model：μ1(x) = E[Y|D=1,X], μ0(x) = E[Y|D=0,X]
-- 推定量：AIPW / DR（標準誤差は influence function ベース or ブートストラップ）
+#### Step 5: Notebook 詳細化（UC-7〜UC-10: 既存アーティファクト評価・エクスポート）
 
-##### 最終推定（因果効果）のアウトプット
-- 推定値（ATE/ATT）、標準誤差、95%CI、p値
-- サブグループ別推定（任意）：主要セグメント（例：地域/業種/規模）で ATT を並べる
-- 推定への寄与（サンプル別）
-  - Influence function（IF）または pseudo-outcome の分布ヒストグラム（全体）
-  - IF の外れ値一覧（上位1%など）と、どの特徴が多いか
+**目的**: 評価・エクスポート系 Notebook にも診断出力を追加。
 
-##### Overlap / 重み・傾向スコア診断（重要）
-- 傾向スコア e(x) の分布
-  - Treated / Control 別ヒストグラム（または密度）
-- IPW 重みの分布ヒストグラム（ATE/ATT の定義に応じた w を出す）
-- Overlap 指標
-  - e(x) の最小/最大、分位点、極端値比率（例：<0.01, >0.99 など）
-  - 有効標本サイズ（ESS）
+| Notebook | 追加内容 |
+|---|---|
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | artifact.load → evaluate → タスクタイプに応じた診断一式（Step 4 と同じ可視化セット） |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | 別データでの evaluate → In/Out 比較（学習時 vs 再評価時）の指標並置 |
+| `notebooks/phase26_2_uc09_export_python_onnx.ipynb` | 変更なし（エクスポートは診断対象外） |
+| `notebooks/phase26_2_uc10_export_html_excel.ipynb` | 変更なし（エクスポートは診断対象外） |
 
-##### バランスチェック（DRでも必須）
-- Covariate balance：SMD（標準化差）
-  - Unweighted vs Weighted（IPW後）で Love plot
-  - SMD の要約（中央値/最大値、|SMD|>0.1 の割合）
+**テスト**: Step 4 のテストで併せて検証
 
-##### nuisance モデルの健全性チェック（変な学習をしていないか）
-- Propensity model（分類）
-  - InFold / OOF それぞれの ROC、AUC、Logloss、Brier、Average Precision
-- Outcome model（回帰）
-  - InFold / OOF の誤差分布ヒストグラム（残差 or サンプル別誤差）
-  - MAE、RMSE、R²（補助指標）
-- Feature Importance / SHAP（nuisance に対して）
-  - Propensity：Feature importance（Split/Gain）＋ SHAP（全特徴量）
-  - Outcome：Feature importance（Split/Gain）＋ SHAP（全特徴量）
-  - 注意：処置割当を当てすぎる（AUCが極端に高い等）＝ overlap 崩壊の兆候になり得るため併記して注意喚起
-
-##### ロバストネス（あると実務で強い）
-- 重みのトリミング/クリッピング（例：1%/99%）ごとの推定結果比較
-
-##### 元データ＋推定に必要な付帯情報テーブル（CSV）
-- 元データ + fold_id
-- D（処置フラグ） + Y（アウトカム）
-- e(x)、μ1(x)、μ0(x)（すべて OOF 予測）
-- 重み w（ATE/ATT の定義に応じて）
-- pseudo-outcome / IF 成分（可能なら）
-- トリミング適用フラグ（適用した場合）
 ---
-#### DR-DiD（Doubly Robust Difference-in-Differences：ATT）の期待アウトプット・評価項目
 
-##### 前提
-- 推定対象：基本は ATT（Average Treatment effect on the Treated）
-- データ構造：Panel（同一個体の追跡）/ Repeated cross-section（別個体）を明示
-- 時点：Pre / Post（DiDの前後）を明示
-- Cross-fitting（Group K-fold）で nuisance を学習し、全データで OOF（out-of-fold）予測を保持
-- nuisance（代表例。実装により多少変わる）
-  - 傾向スコア：e(x) = P(D=1|X)
-   - 予測確率キャリブレーション
-  - 結果モデル：E[Y_t | D, X]（t=pre,post）または差分 E[ΔY | D, X]
-- 標準誤差：クラスタロバスト（panelなら個体ID、必要ならグループ/時点も）or ブートストラップ
+#### Step 6: 実行証跡の更新と契約テスト
 
-##### 最終推定（ATT）のアウトプット
-- ATT 推定値、標準誤差、95%CI、p値
-- サンプル別寄与
-  - DR-DiD の influence function（IF）/ pseudo-outcome の分布ヒストグラム
-  - IF の外れ値一覧（上位1%など）
+**目的**: 全 Notebook のヘッドレス実行で出力ファイルが生成されることを確認し、execution manifest を更新。
 
-##### DiD前提（並行トレンド）診断（可能なら必須）
-- Pre期間のみの placebo DID（効果=0 を期待）
-  - リード（介入前）がゼロ付近か（統計的に有意でないことを確認）
-- 平均推移プロット
-  - Treated vs Control の平均アウトカム推移（Unweighted と Weighted の両方が望ましい）
+**成果物**:
 
-##### Overlap / 重み・傾向スコア診断
-- 傾向スコア e(x) の分布
-  - Treated / Control 別ヒストグラム（または密度）
-- 重みの分布ヒストグラム（DR-DiDで使う定義に合わせた w を出す）
-- Overlap 指標
-  - e(x) の最小/最大、分位点、極端値比率（例：<0.01, >0.99）
-  - 有効標本サイズ（ESS）
-  - 極端重み比率（例：p99超の割合）
+| ファイル | 内容 |
+|---|---|
+| `notebooks/phase26_3_execution_manifest.json` | 各 Notebook の実行結果（status, outputs リスト, 出力ファイルのハッシュ） |
+| `tests/test_notebook_phase26_3_execution_evidence.py` | manifest の整合性テスト（全 UC が passed、outputs が存在） |
+| `tests/test_notebook_phase26_3_outputs.py` | 各 Notebook の出力ファイル検証（PNG 画像の存在、CSV の列名・行数、指標の妥当範囲） |
 
-##### バランスチェック（PreのXに対して）
-- Covariate balance：SMD（標準化差）
-  - Unweighted vs Weighted（重み付け後）で Love plot
-  - SMD の要約（中央値/最大値、|SMD|>0.1 の割合）
+---
 
-##### nuisance モデルの健全性チェック（変な学習をしていないか）
-- Propensity model（分類）
-  - InFold / OOF それぞれの ROC、AUC、Logloss、Brier、Average Precision
-- Outcome model（回帰）
-  - Pre / Post それぞれ、または ΔY の InFold / OOF 誤差分布ヒストグラム
-  - MAE、RMSE、R²（補助指標）
-- Feature Importance / SHAP（nuisance に対して）
-  - Propensity：Feature importance（Split/Gain）＋ SHAP（全特徴量）
-  - Outcome：Feature importance（Split/Gain）＋ SHAP（全特徴量）
-  - 注意：処置割当を当てすぎる（AUCが極端に高い等）＝ overlap 崩壊の兆候になり得るため併記して注意喚起
+### 対象ファイル一覧
 
-##### ロバストネス（あると実務で強い）
-- 重みのトリミング/クリッピング（例：1%/99%）ごとのATT比較
-- Placebo outcome（影響しないはずの目的変数があれば）で効果ゼロ確認（任意）
+| ファイル | Step | 変更種別 |
+|---|---|---|
+| `src/veldra/diagnostics/__init__.py` | 1 | 新規 |
+| `src/veldra/diagnostics/importance.py` | 1 | 新規 |
+| `src/veldra/diagnostics/shap_native.py` | 1 | 新規 |
+| `src/veldra/diagnostics/metrics.py` | 1 | 新規 |
+| `src/veldra/diagnostics/plots.py` | 1 | 新規 |
+| `src/veldra/diagnostics/tables.py` | 1 | 新規 |
+| `src/veldra/diagnostics/causal_diag.py` | 1 | 新規 |
+| `src/veldra/modeling/regression.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/binary.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/multiclass.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/frontier.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/api/artifact.py` | 2 | 変更: observation_table persist/load |
+| `src/veldra/causal/dr.py` | 3 | 変更: nuisance_diagnostics 追加 |
+| `src/veldra/causal/dr_did.py` | 3 | 変更: nuisance_diagnostics + parallel_trends 追加 |
+| `src/veldra/causal/diagnostics.py` | 3 | 変更: ESS, extreme_weight_ratio 追加 |
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | 4 | 新規 |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | 4 | 新規 |
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | 5 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | 5 | 変更: 比較指標追加 |
+| `notebooks/phase26_3_execution_manifest.json` | 6 | 新規 |
+| `tests/test_diagnostics_importance.py` | 1 | 新規 |
+| `tests/test_diagnostics_shap.py` | 1 | 新規 |
+| `tests/test_diagnostics_metrics.py` | 1 | 新規 |
+| `tests/test_diagnostics_plots.py` | 1 | 新規 |
+| `tests/test_diagnostics_tables.py` | 1 | 新規 |
+| `tests/test_diagnostics_causal.py` | 1 | 新規 |
+| `tests/test_observation_table.py` | 2 | 新規 |
+| `tests/test_notebook_phase26_3_uc_structure.py` | 4 | 新規 |
+| `tests/test_notebook_phase26_3_execution_evidence.py` | 6 | 新規 |
+| `tests/test_notebook_phase26_3_outputs.py` | 6 | 新規 |
 
-##### 元データ＋推定に必要な付帯情報テーブル（CSV）
-- 元データ + fold_id
-- （Panelなら）個体ID + 時点 t + Pre/Post フラグ
-- D（treated indicator） + Y（アウトカム）
-- e(x)（OOF 予測）
-- Outcome nuisance（実装に応じて）
-  - μ_{d,pre}(x), μ_{d,post}(x) または Δμ_d(x)（すべて OOF 予測）
-- 重み w（DR-DiDの定義に応じて）
-- pseudo-outcome / IF 成分（可能なら）
-- トリミング適用フラグ（適用した場合）
+---
+
+### テスト計画
+
+| テスト | 内容 | ファイル |
+|---|---|---|
+| Feature Importance | `compute_importance` が正しい shape の DataFrame を返すこと | `tests/test_diagnostics_importance.py` |
+| SHAP 算出 | `compute_shap` が feature 数と一致する列を返すこと、合計が予測値と一致すること | `tests/test_diagnostics_shap.py` |
+| メトリクス計算 | 各タスクタイプの In/Out 別メトリクスが正しい範囲の値を返すこと | `tests/test_diagnostics_metrics.py` |
+| 可視化 | 各 plot 関数が PNG ファイルを生成し、サイズ > 0 であること | `tests/test_diagnostics_plots.py` |
+| テーブル生成 | 各 `build_*_table` が期待列を含む DataFrame を返すこと | `tests/test_diagnostics_tables.py` |
+| 因果診断 | ESS、SMD、トリミング比較が正しい型・範囲で返ること | `tests/test_diagnostics_causal.py` |
+| Observation table | 各 TrainingOutput の observation_table が fold_id, in_out 列を含むこと | `tests/test_observation_table.py` |
+| Notebook 構造 | 全 Notebook が SUMMARY セル、diagnostics import、savefig 呼び出しを含むこと | `tests/test_notebook_phase26_3_uc_structure.py` |
+| 実行証跡 | manifest の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_phase26_3_execution_evidence.py` |
+| 出力ファイル検証 | PNG の存在、CSV の列名一致、指標値の妥当範囲（例: 0 ≤ AUC ≤ 1） | `tests/test_notebook_phase26_3_outputs.py` |
+| 後方互換 | 既存テスト群（`tests/test_*.py`）が全パス | 既存テスト群 |
+
+### 検証コマンド
+
+```bash
+# Step 1: 診断ライブラリ
+uv run pytest tests/test_diagnostics_*.py -v
+
+# Step 2: observation table
+uv run pytest tests/test_observation_table.py -v
+
+# Step 3: 因果拡張
+uv run pytest tests/test_causal_dr.py tests/test_causal_drdid.py -v
+
+# Step 4-5: Notebook 構造
+uv run pytest tests/test_notebook_phase26_3_uc_structure.py -v
+
+# Step 6: 実行証跡 + 出力検証
+uv run pytest tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -v
+
+# 全体回帰テスト
+uv run pytest tests -x --tb=short
+```
+
+---
+
+### 完了条件
+
+1. **Step 1**: `veldra.diagnostics` パッケージが作成され、全 API のユニットテストがパスすること。
+2. **Step 2**: 各 `*TrainingOutput` に `observation_table` が追加され、既存テストが全パスすること（後方互換維持）。
+3. **Step 3**: `DREstimationOutput` に `nuisance_diagnostics` が追加され、因果テストがパスすること。
+4. **Step 4**: UC-1〜UC-6 の Notebook が完全版に更新され、Multiclass / TimeSeries の新規 Notebook が追加されていること。
+5. **Step 5**: UC-7, UC-8 の Notebook に診断出力が追加されていること。
+6. **Step 6**: `phase26_3_execution_manifest.json` が生成され、全 Notebook の出力ファイルが検証済みであること。
+7. **後方互換**: `veldra.api.*` の公開シグネチャが未変更であること。`RunResult`, `EvalResult`, `CausalResult` の既存フィールドが維持されていること。
+8. **依存制約**: 外部ライブラリの追加なし（matplotlib は既存依存）。SHAP は LightGBM 内蔵のみ使用。
+
+### Decision（provisional）
+- 内容: Phase26.3 は `config_version=1` を維持し、`train.metrics` / `tuning.metrics_candidates` を optional 追加で拡張する。
+- 理由: Stable API と既存 Config 運用の互換性を保持しつつ、Notebook 詳細化に必要な設定表現力を増やすため。
+- 影響範囲: `src/veldra/config/models.py` / tuning objective validation / GUI-config serialization
+
+### Decision（confirmed）
+- 内容: Notebook 証跡はハイブリッド運用とし、構造契約テストは常時実行、重い証跡検証は `notebook_e2e` marker で分離する。
+- 理由: CI 負荷と実行時間を抑制しつつ、Phase26.3 の成果物検証を維持するため。
+- 影響範囲: `pyproject.toml` marker / `tests/test_notebook_phase26_3_*` / execution manifest 運用
+
+### Decision（confirmed）
+- 内容: Phase26.3 の Notebook は `UC-1〜UC-8 + UC-11/12` を実行済み状態でコミットし、placeholder 出力を撤廃する。`UC-9/10` は export 中心の最小更新を維持する。
+- 理由: Notebook を開いた時点で図表・表・指標を確認可能にし、実行証跡の再現性を担保するため。
+- 影響範囲: `notebooks/phase26_2_uc0*.ipynb` / `notebooks/phase26_3_uc_*.ipynb` / `notebooks/phase26_3_execution_manifest.json`
+
+### Decision（confirmed）
+- 内容: `tuning.metrics_candidates` は tuning objective 許可セットとは独立した task 別許可セットで検証する（regression: `rmse/huber/mae`, binary: `logloss/auc`, multiclass: `multi_logloss/multi_error`）。
+- 理由: モニタリング/診断用 metrics 候補と最適化 objective の責務を分離し、設計意図と実装契約を一致させるため。
+- 影響範囲: `src/veldra/config/models.py` / `tests/test_phase263_config_extensions.py` / `tests/test_runconfig_validation.py`
 
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム

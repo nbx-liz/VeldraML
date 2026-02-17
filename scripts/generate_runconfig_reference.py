@@ -39,6 +39,7 @@ DESCRIPTION: dict[str, str] = {
     "split.train_size": "Fixed train window size in blocked mode.",
     "train": "Model training settings.",
     "train.lgb_params": "LightGBM parameter overrides.",
+    "train.metrics": "Training metric list passed to LightGBM.",
     "train.early_stopping_rounds": "Early stopping rounds.",
     "train.early_stopping_validation_fraction": "Train-row fraction used for ES validation split.",
     "train.num_boost_round": "Maximum boosting iterations.",
@@ -55,6 +56,7 @@ DESCRIPTION: dict[str, str] = {
     "tuning.enabled": "Enable/disable tuning path.",
     "tuning.n_trials": "Optuna trial count.",
     "tuning.search_space": "Explicit search space spec.",
+    "tuning.metrics_candidates": "Candidate metrics list for tuning diagnostics/reporting.",
     "tuning.preset": "Default search space preset.",
     "tuning.objective": "Objective metric name.",
     "tuning.resume": "Resume an existing study.",
@@ -108,11 +110,13 @@ SCOPE: dict[str, str] = {
     "train.class_weight": "task.type in {binary,multiclass}",
     "train.auto_class_weight": "task.type in {binary,multiclass}",
     "train.top_k": "task.type=binary",
+    "train.metrics": "-",
     "tuning.coverage_target": "task.type=frontier",
     "tuning.coverage_tolerance": "task.type=frontier",
     "tuning.penalty_weight": "task.type=frontier",
     "tuning.causal_penalty_weight": "causal configured",
     "tuning.causal_balance_threshold": "causal configured",
+    "tuning.metrics_candidates": "-",
     "causal": "task.type in {regression,binary}",
     "causal.design": "causal.method=dr_did",
     "causal.time_col": "causal.method=dr_did",
@@ -234,10 +238,11 @@ def _objective_matrix() -> str:
     regular = (
         "| task.type | allowed objectives | default |\n"
         "| --- | --- | --- |\n"
-        "| regression | `rmse`, `mae`, `r2` | `rmse` |\n"
+        "| regression | `rmse`, `mae`, `r2`, `mape` | `rmse` |\n"
         "| binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, "
         "`precision_at_k` | `auc` |\n"
-        "| multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |\n"
+        "| multiclass | `accuracy`, `macro_f1`, `logloss`, `multi_logloss`, "
+        "`multi_error` | `macro_f1` |\n"
         "| frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |\n"
     )
     causal = (

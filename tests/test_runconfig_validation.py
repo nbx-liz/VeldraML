@@ -329,3 +329,20 @@ def test_causal_balance_threshold_validation() -> None:
     payload["tuning"]["causal_balance_threshold"] = 0.0
     with pytest.raises(ValidationError):
         RunConfig.model_validate(payload)
+
+
+def test_tuning_metrics_candidates_stays_independent_from_objective() -> None:
+    payload = _minimal_payload()
+    payload["tuning"] = {
+        "enabled": True,
+        "n_trials": 1,
+        "objective": "rmse",
+        "metrics_candidates": ["rmse", "huber", "mae"],
+    }
+    cfg = RunConfig.model_validate(payload)
+    assert cfg.tuning.metrics_candidates == ["rmse", "huber", "mae"]
+
+    payload["tuning"]["objective"] = "mape"
+    payload["tuning"]["metrics_candidates"] = ["mape"]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(payload)

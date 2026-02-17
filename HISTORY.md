@@ -1237,3 +1237,79 @@
 - `.venv/bin/pytest -q -m "gui"` を実施（`146 passed, 418 deselected`）。
 - `.venv/bin/pytest -q -m "gui_e2e and gui_smoke"` を実施（`3 skipped, 561 deselected`）。
 - `.venv/bin/pytest -q -m "gui_e2e"` を実施（`10 skipped, 554 deselected`）。
+
+### 2026-02-17（作業/PR: phase26.3-core-diagnostics-and-notebook-delivery）
+**背景**
+- Phase26.3 で定義したユースケース詳細化（Core拡張 + Notebook完全版 + 証跡運用）を、既存 Stable API 互換を維持したまま実装する必要があった。
+- Notebook の重実行を常時CIに載せるとコストが高いため、証跡検証を marker 分離する運用方針を固定する必要があった。
+
+**変更内容**
+- Core/Config拡張:
+  - `train.metrics` / `tuning.metrics_candidates` を RunConfig に追加し、task/causal method 別バリデーションを実装。
+  - tuning objective に `mape` / `multi_logloss` / `multi_error` を追加し、`multi_logloss -> logloss`, `multi_error -> error_rate` の alias 解決を導入。
+  - tuning search space で `train.*` プレフィックス指定を解釈し、`TrainConfig` フィールドへ直接注入できるよう拡張。
+- Modeling/Artifact拡張:
+  - `RegressionTrainingOutput` / `BinaryTrainingOutput` / `MulticlassTrainingOutput` / `FrontierTrainingOutput` に `observation_table` を追加。
+  - Artifact save/load に `observation_table.parquet` の optional 永続化を追加（後方互換維持）。
+- Causal拡張:
+  - `DREstimationOutput` に `nuisance_diagnostics` を追加。
+  - DR で nuisance importance と OOF diagnostics を生成し、DR-DiD で `parallel_trends` を summary/diagnostics に追加。
+  - `causal.diagnostics` に `compute_ess` / `extreme_weight_ratio` / `overlap_summary` を追加。
+- Diagnosticsパッケージ新設:
+  - `src/veldra/diagnostics/`（importance/shap_native/metrics/plots/tables/causal_diag）を追加。
+- Notebook/証跡:
+  - UC-1〜UC-10 Notebook を Phase26.3 契約（`matplotlib.use('Agg')`, `savefig`, `SUMMARY`）へ更新。
+  - `phase26_3_uc_multiclass_fit_evaluate.ipynb` / `phase26_3_uc_timeseries_fit_evaluate.ipynb` を追加。
+  - `notebooks/phase26_3_execution_manifest.json` を追加。
+- テスト追加:
+  - diagnostics系: `tests/test_diagnostics_*.py`
+  - config/tuning拡張: `tests/test_phase263_config_extensions.py`, `tests/test_phase263_tuning_aliases.py`
+  - observation/causal: `tests/test_observation_table.py`, `tests/test_causal_dr.py`, `tests/test_causal_drdid.py`
+  - notebook契約: `tests/test_notebook_phase26_3_*.py`（`notebook_e2e` marker 運用）
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: `config_version` は 1 を維持し、Phase26.3 の設定拡張は optional フィールド追加で収める。
+  - 理由: Config migration の破壊的変更を回避し、既存運用への影響を最小化するため。
+  - 影響範囲: config / tuning / GUI-config 互換
+- Decision: confirmed（確定）
+  - 内容: Notebook 証跡は「常時構造テスト + `notebook_e2e` で重証跡検証」のハイブリッド運用とする。
+  - 理由: 検証強度と CI 実行コストを両立するため。
+  - 影響範囲: pyproject markers / notebook tests / release gate
+
+**検証結果**
+- `uv run ruff check`（Phase26.3 対象ファイル群）を通過。
+- 主要新規テスト（config/tuning/modeling/causal/diagnostics/notebook構造）を実行対象として追加済み。
+
+### 2026-02-17（作業/PR: phase26.3-residual-notebook-visibility-closure）
+**背景**
+- Phase26.3 の骨組み実装後、Notebook が placeholder 出力中心で、図表/表/指標の可視性と証跡契約が不足していた。
+- `tuning.metrics_candidates` の許可ルールが objective 制約と同一化され、設計テーブル（task別候補）と不整合が残っていた。
+
+**変更内容**
+- Config 契約:
+  - `tuning.metrics_candidates` を objective 許可セットから分離し、task別許可セットで検証する実装へ修正。
+  - 関連テストを拡張（許可/拒否・causal時の既存契約維持）。
+- Notebook 実体化:
+  - `UC-1〜UC-8` と `UC-11/12` を実データ実行セルへ更新し、実行済み出力（グラフ・表・指標）をコミット。
+  - 生成ファイルを `examples/out/phase26_2_*` / `examples/out/phase26_3_*` に再生成し、PNG 実体ファイル化を確認。
+  - `notebooks/phase26_3_execution_manifest.json` を実実行値（artifact_path / outputs / metrics）で更新。
+- Notebook テスト強化:
+  - 構造テストに `placeholder` 禁止、diagnostics import、実行済みセル契約を追加。
+  - evidence テストに対象 UC 固定（`UC-1〜8,11,12`）と `artifact_path/metrics/outputs` 契約を追加。
+  - outputs テストに PNG signature 検証、CSV列契約、主要指標レンジ検証を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.3 Notebook は「実行済みで可視化済み」を完了条件にし、placeholder 出力を残さない。
+  - 理由: 利用者が Notebook を開いた瞬間に診断結果を確認できる状態を保証するため。
+  - 影響範囲: notebooks / execution manifest / notebook_e2e tests
+- Decision: confirmed（確定）
+  - 内容: `metrics_candidates` は objective と独立した task別候補セットで検証し、causal時は causal objective セットを流用する。
+  - 理由: 設計テーブルと実装契約を一致させ、運用時の誤設定を早期検出するため。
+  - 影響範囲: config validation / tuning diagnostics
+
+**検証結果**
+- `uv run pytest -q tests/test_phase263_config_extensions.py tests/test_runconfig_validation.py tests/test_notebook_phase26_3_uc_structure.py` を通過（`37 passed`）。
+- `uv run pytest -q tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を通過（`2 passed`）。
+- `uv run pytest -q tests -m "not gui_e2e"` を通過（`584 passed, 10 deselected`）。
