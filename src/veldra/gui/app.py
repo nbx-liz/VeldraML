@@ -26,6 +26,8 @@ from veldra.gui.components.charts import (
     plot_metrics_bar,
 )
 from veldra.gui.components.guardrail import render_guardrails
+from veldra.gui.components.help_texts import HELP_TEXTS
+from veldra.gui.components.help_ui import context_card, guide_alert, recommendation_badge
 from veldra.gui.components.kpi_cards import kpi_card
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.toast import make_toast, toast_container
@@ -42,6 +44,7 @@ from veldra.gui.pages import (
 )
 from veldra.gui.services import (
     GuardRailChecker,
+    GuardRailResult,
     cancel_run_job,
     compare_artifacts,
     delete_run_jobs,
@@ -233,6 +236,8 @@ def _ensure_workflow_state_defaults(state: dict[str, Any] | None) -> dict[str, A
     current.setdefault("artifact_dir", "artifacts")
     current.setdefault("config_yaml", "")
     current.setdefault("last_job_succeeded", False)
+    current.setdefault("results_shortcut_focus", None)
+    current.setdefault("run_action_override", {"mode": "auto", "action": None})
     return current
 
 
@@ -887,10 +892,27 @@ def create_app() -> dash.Dash:
     )(_cb_save_target_state)
 
     app.callback(
+        Output("target-task-context", "children"),
+        Output("target-frontier-alpha-guide", "children"),
+        Input("target-task-type", "value"),
+    )(_cb_target_task_guides)
+
+    app.callback(
+        Output("target-causal-method-hint", "children"),
+        Output("target-causal-context", "children"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+    )(_cb_target_causal_guides)
+
+    app.callback(
         Output("target-guardrail-container", "children"),
         Input("target-col-select", "value"),
         Input("target-task-type", "value"),
         Input("target-exclude-cols", "value"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+        Input("target-treatment-col", "value"),
+        Input("target-unit-id-col", "value"),
         State("workflow-state", "data"),
     )(_cb_target_guardrails)
 
@@ -932,9 +954,36 @@ def create_app() -> dash.Dash:
     )(_cb_validation_guardrails)
 
     app.callback(
+        Output("validation-split-context", "children"),
+        Input("validation-split-type", "value"),
+    )(_cb_validation_split_context)
+
+    app.callback(
+        Output("validation-recommendation", "children"),
+        Input("workflow-state", "data"),
+    )(_cb_validation_recommendation)
+
+    app.callback(
         Output("train-tune-objective", "options"),
         Input("workflow-state", "data"),
     )(_cb_update_train_tune_objectives)
+
+    app.callback(
+        Output("train-learning-rate", "value"),
+        Output("train-num-leaves", "value"),
+        Output("train-min-child", "value"),
+        Input("train-preset-conservative-btn", "n_clicks"),
+        Input("train-preset-balanced-btn", "n_clicks"),
+        State("train-learning-rate", "value"),
+        State("train-num-leaves", "value"),
+        State("train-min-child", "value"),
+        prevent_initial_call=True,
+    )(_cb_apply_train_preset)
+
+    app.callback(
+        Output("train-objective-help", "children"),
+        Input("train-tune-objective", "value"),
+    )(_cb_train_objective_help)
 
     app.callback(
         Output("workflow-state", "data", allow_duplicate=True),
@@ -992,13 +1041,52 @@ def create_app() -> dash.Dash:
         prevent_initial_call=True,
     )(_cb_sync_run_inputs_from_state)
 
+    app.callback(
+        Output("run-action-override-mode", "value"),
+        Output("run-action-manual", "value"),
+        Input("url", "pathname"),
+        Input("workflow-state", "data"),
+    )(_cb_sync_run_override_from_state)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("run-action-override-mode", "value"),
+        Input("run-action-manual", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_run_action_override)
+
+    app.callback(
+        Output("run-action-manual-container", "style"),
+        Input("run-action-override-mode", "value"),
+    )(_cb_run_action_manual_visibility)
+
     # --- Run Page Auto-Action ---
     app.callback(
         Output("run-action", "value"),
         Output("run-action-display", "children"),
         Output("run-action-display", "className"),
         Input("run-config-yaml", "value"),
+        Input("run-action-override-mode", "value"),
+        Input("run-action-manual", "value"),
     )(_cb_detect_run_action)
+
+    app.callback(
+        Output("run-action-description", "children"),
+        Input("run-action", "value"),
+        Input("run-action-override-mode", "value"),
+    )(_cb_run_action_description)
+
+    app.callback(
+        Output("run-guardrail-container", "children"),
+        Output("run-guardrail-has-error", "data"),
+        Input("run-action", "value"),
+        Input("run-data-path", "value"),
+        Input("run-config-yaml", "value"),
+        Input("run-config-path", "value"),
+        Input("run-artifact-path", "value"),
+        Input("run-scenarios-path", "value"),
+    )(_cb_run_guardrails)
 
     app.callback(
         Output("run-execute-btn", "disabled"),
@@ -1011,6 +1099,7 @@ def create_app() -> dash.Dash:
         Input("run-config-path", "value"),
         Input("run-artifact-path", "value"),
         Input("run-scenarios-path", "value"),
+        Input("run-guardrail-has-error", "data"),
     )(_cb_update_run_launch_state)
 
     # --- Run Page Callbacks ---
@@ -1108,6 +1197,25 @@ def create_app() -> dash.Dash:
     )(_cb_update_result_extras)
 
     app.callback(
+        Output("result-export-help", "children"),
+        Input("artifact-select", "value"),
+    )(_cb_result_export_help_for_artifact)
+
+    app.callback(
+        Output("artifact-eval-precheck", "children"),
+        Input("artifact-select", "value"),
+        Input("artifact-eval-data-path", "value"),
+    )(_cb_result_eval_precheck)
+
+    app.callback(
+        Output("artifact-evaluate-btn", "className"),
+        Output("result-export-excel-btn", "className"),
+        Output("result-export-html-btn", "className"),
+        Input("workflow-state", "data"),
+        Input("url", "pathname"),
+    )(_cb_result_shortcut_highlight)
+
+    app.callback(
         Output("result-export-status", "children"),
         Output("result-export-job-store", "data"),
         Output("result-export-poll-interval", "disabled"),
@@ -1162,8 +1270,10 @@ def create_app() -> dash.Dash:
         Input("runs-delete-btn", "n_clicks"),
         Input("runs-view-results-btn", "n_clicks"),
         Input("runs-migrate-btn", "n_clicks"),
+        Input("runs-table", "active_cell"),
         State("runs-selection-store", "data"),
         State("workflow-state", "data"),
+        State("runs-table", "data"),
         prevent_initial_call=True,
     )(_cb_runs_actions)
 
@@ -1475,8 +1585,35 @@ def _cb_update_tune_visibility(enabled: bool) -> dict:
     return {"display": "block"} if enabled else {"display": "none"}
 
 
-def _cb_detect_run_action(yaml_text: str) -> tuple[str, str, str]:
+_RUN_ACTION_DISPLAY = {
+    "fit": ("Ready: TRAIN", "badge bg-primary fs-6 p-2 mb-3"),
+    "tune": ("Ready: TUNE", "badge bg-warning text-dark fs-6 p-2 mb-3"),
+    "evaluate": ("Ready: EVALUATE", "badge bg-info fs-6 p-2 mb-3"),
+    "simulate": ("Ready: SIMULATE", "badge bg-secondary fs-6 p-2 mb-3"),
+    "export": ("Ready: EXPORT", "badge bg-secondary fs-6 p-2 mb-3"),
+    "estimate_dr": ("Ready: CAUSAL ANALYSIS", "badge bg-info text-dark fs-6 p-2 mb-3"),
+}
+
+_RUN_ACTION_DESCRIPTIONS = {
+    "fit": "Train model with cross-validation.",
+    "tune": "Run Optuna optimization, then train with best parameters.",
+    "evaluate": "Evaluate predictions using an existing artifact or config.",
+    "simulate": "Run counterfactual simulation with scenarios.",
+    "export": "Export trained model in Python/ONNX package format.",
+    "estimate_dr": "Estimate causal effects with Doubly Robust methods.",
+}
+
+
+def _cb_detect_run_action(
+    yaml_text: str,
+    override_mode: str | None = None,
+    manual_action: str | None = None,
+) -> tuple[str, str, str]:
     default_vals = ("fit", "Ready: TRAIN", "badge bg-primary fs-6 p-2 mb-3")
+    if (override_mode or "auto") == "manual" and manual_action in _RUN_ACTION_DISPLAY:
+        text, klass = _RUN_ACTION_DISPLAY[str(manual_action)]
+        return str(manual_action), text, klass
+
     if not yaml_text:
         return default_vals
 
@@ -1487,18 +1624,44 @@ def _cb_detect_run_action(yaml_text: str) -> tuple[str, str, str]:
 
         # Check Tuning
         if cfg.get("tuning", {}).get("enabled", False):
-            return "tune", "Ready: TUNE", "badge bg-warning text-dark fs-6 p-2 mb-3"
+            text, klass = _RUN_ACTION_DISPLAY["tune"]
+            return "tune", text, klass
 
         # Check Causal
         if "causal_method" in cfg.get("task", {}):
-            return "fit", "Ready: CAUSAL ANALYSIS", "badge bg-info text-dark fs-6 p-2 mb-3"
+            text, klass = _RUN_ACTION_DISPLAY["estimate_dr"]
+            return "fit", text, klass
 
         return default_vals
     except Exception:
         return default_vals
 
 
-def _cb_update_tune_objectives(task_type: str) -> list[dict]:
+def _cb_run_action_manual_visibility(override_mode: str | None) -> dict[str, str]:
+    if (override_mode or "auto") == "manual":
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+def _cb_run_action_description(action: str | None, override_mode: str | None) -> str:
+    mode = "MANUAL" if (override_mode or "auto") == "manual" else "AUTO"
+    description = _RUN_ACTION_DESCRIPTIONS.get(str(action), "Run action is selected.")
+    return f"{mode} mode: {description}"
+
+
+def _cb_update_tune_objectives(
+    task_type: str,
+    *,
+    causal_enabled: bool = False,
+    causal_method: str | None = None,
+) -> list[dict]:
+    if causal_enabled:
+        if str(causal_method or "") == "dr_did":
+            opts = ["drdid_balance_priority", "drdid_std_error", "drdid_overlap_penalty"]
+            return [{"label": o.upper(), "value": o} for o in opts]
+        opts = ["dr_balance_priority", "dr_std_error", "dr_overlap_penalty"]
+        return [{"label": o.upper(), "value": o} for o in opts]
+
     objectives = {
         "regression": ["rmse", "mae", "r2"],
         "binary": [
@@ -1572,6 +1735,73 @@ def _cb_populate_target_page(pathname: str, state: dict | None) -> tuple[Any, ..
     )
 
 
+def _help_text(topic_key: str, field: str) -> str:
+    entry = HELP_TEXTS.get(topic_key, {})
+    if not isinstance(entry, dict):
+        return ""
+    return str(entry.get(field, ""))
+
+
+def _cb_target_task_guides(task_type: str | None) -> tuple[Any, Any]:
+    task = str(task_type or "regression")
+    if task == "binary":
+        card = context_card(
+            "Binary classification",
+            _help_text("task_type_binary", "detail"),
+            variant="info",
+        )
+        return card, ""
+    if task == "multiclass":
+        card = context_card(
+            "Multiclass classification",
+            _help_text("task_type_multiclass", "detail"),
+            variant="info",
+        )
+        return card, ""
+    if task == "frontier":
+        card = context_card(
+            "Frontier analysis",
+            _help_text("task_type_frontier", "detail"),
+            variant="info",
+        )
+        alpha = context_card(
+            "Frontier alpha guidance",
+            _help_text("frontier_alpha", "detail"),
+            variant="warning",
+        )
+        return card, alpha
+    card = context_card(
+        "Regression",
+        _help_text("task_type_regression", "detail"),
+        variant="info",
+    )
+    return card, ""
+
+
+def _cb_target_causal_guides(
+    causal_enabled: bool | None,
+    causal_method: str | None,
+) -> tuple[str, Any]:
+    if not causal_enabled:
+        return "", ""
+    method = str(causal_method or "dr")
+    if method == "dr_did":
+        hint = "DR-DiD selected."
+        card = context_card(
+            "DR-DiD guidance",
+            _help_text("causal_drdid", "detail"),
+            variant="warning",
+        )
+        return hint, card
+    hint = "DR selected."
+    card = context_card(
+        "DR guidance",
+        _help_text("causal_dr", "detail"),
+        variant="info",
+    )
+    return hint, card
+
+
 def _cb_save_target_state(
     target_col: str | None,
     task_type: str | None,
@@ -1606,6 +1836,10 @@ def _cb_target_guardrails(
     target_col: str | None,
     task_type: str | None,
     exclude_cols: list[str] | None,
+    causal_enabled: bool | None,
+    causal_method: str | None,
+    treatment_col: str | None,
+    unit_id_col: str | None,
     state: dict | None,
 ) -> Any:
     frame = _load_data_from_state(state)
@@ -1619,6 +1853,22 @@ def _cb_target_guardrails(
         exclude_cols=list(exclude_cols or []),
     )
     payload = [asdict(item) for item in findings]
+    if causal_enabled and not (treatment_col or "").strip():
+        payload.append(
+            {
+                "level": "warning",
+                "message": "Causal mode requires a binary treatment column.",
+                "suggestion": "Select Treatment column in Target page.",
+            }
+        )
+    if causal_enabled and str(causal_method or "") == "dr_did" and not (unit_id_col or "").strip():
+        payload.append(
+            {
+                "level": "info",
+                "message": "DR-DiD is more stable with Unit ID column.",
+                "suggestion": "Select Unit ID when panel-style data is available.",
+            }
+        )
     return render_guardrails(payload)
 
 
@@ -1686,12 +1936,105 @@ def _cb_validation_guardrails(
         task_type=current.get("task_type"),
         exclude_cols=list(current.get("exclude_cols") or []),
     )
+    task_type = str(current.get("task_type") or "regression")
+    causal_cfg = current.get("causal_config") or {}
+    if task_type in {"binary", "multiclass"} and split_config["type"] != "stratified":
+        findings.append(
+            GuardRailResult(
+                "warning",
+                "Classification tasks are recommended to use stratified split.",
+                "Switch split type to stratified.",
+            )
+        )
+    if bool(causal_cfg.get("enabled")) and split_config["type"] == "stratified":
+        findings.append(
+            GuardRailResult(
+                "info",
+                "Causal workflows often use kfold/group over stratified split.",
+                "Review split strategy in Validation page.",
+            )
+        )
     return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_validation_split_context(split_type: str | None) -> Any:
+    split = str(split_type or "kfold")
+    key = {
+        "kfold": "split_kfold",
+        "stratified": "split_stratified",
+        "group": "split_group",
+        "timeseries": "split_timeseries",
+    }.get(split, "split_kfold")
+    title = split.title() if split != "timeseries" else "TimeSeries"
+    return context_card(f"{title} split", _help_text(key, "detail"), variant="info")
+
+
+def _cb_validation_recommendation(state: dict | None) -> Any:
+    current = _ensure_workflow_state_defaults(state)
+    task_type = str(current.get("task_type") or "regression")
+    split_cfg = current.get("split_config") or {}
+    split_type = str(split_cfg.get("type") or "kfold")
+    badges: list[Any] = []
+    if task_type in {"binary", "multiclass"}:
+        badges.append(recommendation_badge("Recommended: Stratified split", "info"))
+    if bool((current.get("causal_config") or {}).get("enabled")):
+        badges.append(recommendation_badge("Recommended: KFold/Group split for causal", "warning"))
+    if split_type == "timeseries":
+        badges.append(recommendation_badge("TimeSeries split selected", "ok"))
+    return html.Div(badges) if badges else ""
 
 
 def _cb_update_train_tune_objectives(state: dict | None) -> list[dict]:
     current = _ensure_workflow_state_defaults(state)
-    return _cb_update_tune_objectives(str(current.get("task_type") or "regression"))
+    causal_cfg = current.get("causal_config") or {}
+    return _cb_update_tune_objectives(
+        str(current.get("task_type") or "regression"),
+        causal_enabled=bool(causal_cfg.get("enabled")),
+        causal_method=causal_cfg.get("method"),
+    )
+
+
+def _cb_apply_train_preset(
+    _conservative_clicks: int,
+    _balanced_clicks: int,
+    current_lr: float | None,
+    current_leaves: int | None,
+    current_child: int | None,
+) -> tuple[float, int, int]:
+    try:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "train-preset-conservative-btn":
+        return 0.01, 31, 50
+    if triggered == "train-preset-balanced-btn":
+        return 0.05, 63, 20
+    return float(current_lr or 0.05), int(current_leaves or 31), int(current_child or 20)
+
+
+def _cb_train_objective_help(objective: str | None) -> Any:
+    objective_key = str(objective or "").strip().lower()
+    if not objective_key:
+        return ""
+    mapping = {
+        "rmse": ("RMSE objective", "objective_rmse"),
+        "mae": ("MAE objective", "objective_mae"),
+        "auc": ("AUC objective", "objective_auc"),
+        "f1": ("F1 objective", "objective_f1"),
+        "logloss": ("Logloss objective", "objective_logloss"),
+        "pinball": ("Pinball objective", "objective_pinball"),
+        "dr_balance_priority": ("DR balance priority", "objective_dr_balance_priority"),
+        "dr_std_error": ("DR standard error", "objective_dr_std_error"),
+        "dr_overlap_penalty": ("DR overlap penalty", "objective_dr_overlap_penalty"),
+        "drdid_balance_priority": ("DR-DiD balance priority", "objective_dr_balance_priority"),
+        "drdid_std_error": ("DR-DiD standard error", "objective_dr_std_error"),
+        "drdid_overlap_penalty": ("DR-DiD overlap penalty", "objective_dr_overlap_penalty"),
+    }
+    title, help_key = mapping.get(
+        objective_key,
+        (f"{objective_key.upper()} objective", "objective_logloss"),
+    )
+    return context_card(title, _help_text(help_key, "detail"), variant="info")
 
 
 def _cb_save_train_state(
@@ -1830,6 +2173,18 @@ def _cb_train_guardrails(
     return render_guardrails([asdict(item) for item in findings])
 
 
+def _cb_save_run_action_override(
+    override_mode: str | None,
+    manual_action: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    mode = "manual" if (override_mode or "auto") == "manual" else "auto"
+    action = str(manual_action) if mode == "manual" else None
+    current["run_action_override"] = {"mode": mode, "action": action}
+    return current
+
+
 def _cb_sync_run_inputs_from_state(
     pathname: str | None, state: dict | None
 ) -> tuple[Any, Any, Any, Any]:
@@ -1844,6 +2199,14 @@ def _cb_sync_run_inputs_from_state(
         "configs/gui_run.yaml",
         artifact_dir,
     )
+
+
+def _cb_sync_run_override_from_state(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
+    if pathname != "/run":
+        return dash.no_update, dash.no_update
+    current = _ensure_workflow_state_defaults(state)
+    override = current.get("run_action_override") or {}
+    return override.get("mode", "auto"), override.get("action") or "fit"
 
 
 class _PopulateBuilderLegacyResult:
@@ -2109,6 +2472,64 @@ def _cb_update_top_k_visibility(task_type: str | None) -> dict[str, str]:
     return {"display": "block"} if task_type == "binary" else {"display": "none"}
 
 
+def _cb_run_guardrails(
+    action: str | None,
+    data_path: str | None,
+    config_yaml: str | None,
+    config_path: str | None,
+    artifact_path: str | None,
+    scenarios_path: str | None,
+) -> tuple[Any, bool]:
+    checker = GuardRailChecker()
+    act = (action or "fit").strip().lower()
+    payload: list[dict[str, Any]] = []
+
+    if act in {"fit", "tune", "estimate_dr", "evaluate"}:
+        yaml_text = (config_yaml or "").strip()
+        if not yaml_text and (config_path or "").strip():
+            try:
+                yaml_text = load_config_yaml(config_path or "")
+            except Exception:
+                yaml_text = ""
+        if yaml_text:
+            payload.extend(
+                [
+                    asdict(item)
+                    for item in checker.check_pre_run(yaml_text, data_path or None)
+                    if item.level in {"error", "warning", "info"}
+                ]
+            )
+    if act in {"evaluate", "simulate"} and not (data_path or "").strip():
+        payload.append(
+            {
+                "level": "error",
+                "message": "Data Source is required for evaluate/simulate action.",
+                "suggestion": "Set Data Source in Data page.",
+            }
+        )
+    if act in {"evaluate", "simulate", "export"} and not (artifact_path or "").strip():
+        payload.append(
+            {
+                "level": "warning" if act == "evaluate" else "error",
+                "message": "Artifact Path is required.",
+                "suggestion": "Select artifact from Results or Runs page.",
+            }
+        )
+    if act == "simulate" and not (scenarios_path or "").strip():
+        payload.append(
+            {
+                "level": "error",
+                "message": "Scenarios Path is required for simulate action.",
+                "suggestion": "Set scenario file path before launch.",
+            }
+        )
+
+    has_error = any(str(item.get("level")) == "error" for item in payload)
+    if not payload:
+        payload = [{"level": "ok", "message": "Pre-run checks passed."}]
+    return render_guardrails(payload, sort_by_severity=True), has_error
+
+
 def _cb_update_run_launch_state(
     action: str | None,
     data_path: str | None,
@@ -2116,6 +2537,7 @@ def _cb_update_run_launch_state(
     config_path: str | None,
     artifact_path: str | None,
     scenarios_path: str | None,
+    run_guardrail_has_error: bool | None = None,
 ) -> tuple[bool, str, str, str]:
     act = (action or "fit").strip().lower()
     has_data = bool((data_path or "").strip())
@@ -2154,6 +2576,13 @@ def _cb_update_run_launch_state(
             f"Missing required inputs: {req}",
             f"Not ready ({act.upper()}): {req}",
             "warning",
+        )
+    if bool(run_guardrail_has_error):
+        return (
+            True,
+            "Guardrail error detected. Resolve errors before launch.",
+            f"Not ready ({act.upper()}): guardrail errors exist.",
+            "danger",
         )
 
     return (
@@ -2610,6 +3039,66 @@ def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
         return go.Figure(), f"Error: {exc}", f"Error: {exc}"
 
 
+def _cb_result_export_help() -> str:
+    return (
+        "Excel: feature importance, predictions, residual views by sheets. "
+        "HTML: self-contained shareable report."
+    )
+
+
+def _cb_result_export_help_for_artifact(_artifact_path: str | None) -> str:
+    return _cb_result_export_help()
+
+
+def _cb_result_eval_precheck(artifact_path: str | None, data_path: str | None) -> Any:
+    if not artifact_path:
+        return guide_alert(["Select an artifact first."], severity="info")
+    if not (data_path or "").strip():
+        return guide_alert(["Set Evaluation Data Path to run feature compatibility check."], "info")
+    try:
+        art = Artifact.load(artifact_path)
+        schema = getattr(art, "feature_schema", {}) or {}
+        expected = set(schema.get("feature_names") or [])
+        frame = _get_load_tabular_data()(str(data_path))
+        actual = set(frame.columns)
+        if not expected:
+            return guide_alert(["Feature schema is not available in this artifact."], "warning")
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        if not missing and not extra:
+            return guide_alert(["Feature schema check passed."], "ok")
+        messages: list[str] = []
+        severity = "warning"
+        if missing:
+            severity = "error"
+            messages.append(f"Missing features: {', '.join(missing[:8])}")
+        if extra:
+            messages.append(f"Extra columns: {', '.join(extra[:8])}")
+        messages.append("Align columns before running re-evaluate.")
+        return guide_alert(messages, severity=severity)
+    except Exception as exc:
+        return guide_alert([f"Precheck failed: {exc}"], severity="warning")
+
+
+def _cb_result_shortcut_highlight(
+    state: dict[str, Any] | None,
+    pathname: str | None,
+) -> tuple[str, str, str]:
+    if pathname != "/results":
+        return "w-100 mb-3", "me-2 result-export-btn", "me-2 result-export-btn"
+    current = _ensure_workflow_state_defaults(state)
+    focus = current.get("results_shortcut_focus")
+    eval_class = "w-100 mb-3"
+    excel_class = "me-2 result-export-btn"
+    html_class = "me-2 result-export-btn"
+    if focus == "evaluate":
+        eval_class += " border border-warning"
+    if focus == "export":
+        excel_class += " border border-warning"
+        html_class += " border border-warning"
+    return eval_class, excel_class, html_class
+
+
 def _cb_result_export_actions(
     _excel_clicks: int,
     _html_clicks: int,
@@ -2717,6 +3206,8 @@ def _cb_refresh_runs_table(
                 "started_at_utc": _format_jst_timestamp(job.started_at_utc),
                 "finished_at_utc": _format_jst_timestamp(job.finished_at_utc),
                 "artifact_path": artifact_path,
+                "export_shortcut": "Export",
+                "reeval_shortcut": "Re-evaluate",
             }
         )
     return rows
@@ -2758,15 +3249,38 @@ def _cb_runs_actions(
     _delete_clicks: int,
     _view_results_clicks: int,
     _migrate_clicks: int,
+    active_cell: dict[str, Any] | None,
     selected_job_ids: list[str] | None,
     state: dict | None,
+    table_data: list[dict[str, Any]] | None,
 ) -> tuple[dict[str, Any], Any, str]:
     current = _ensure_workflow_state_defaults(state)
     job_ids = list(selected_job_ids or [])
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+
+    if triggered == "runs-table":
+        if not active_cell or not table_data:
+            return current, dash.no_update, "Select a run row first."
+        row = active_cell.get("row")
+        col = active_cell.get("column_id")
+        if row is None or row >= len(table_data):
+            return current, dash.no_update, "Invalid run row selected."
+        row_data = table_data[row]
+        artifact_path = str(row_data.get("artifact_path") or "")
+        if not artifact_path:
+            return current, dash.no_update, "No artifact path available for selected run."
+        current["last_run_artifact"] = artifact_path
+        if col == "export_shortcut":
+            current["results_shortcut_focus"] = "export"
+            return current, "/results", "Moved to Results (Export shortcut)."
+        if col == "reeval_shortcut":
+            current["results_shortcut_focus"] = "evaluate"
+            return current, "/results", "Moved to Results (Re-evaluate shortcut)."
+        return current, dash.no_update, "No shortcut action."
+
     if not job_ids:
         return current, dash.no_update, "Select one or more runs."
 
-    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
     try:
         if triggered == "runs-delete-btn":
             count = delete_run_jobs(job_ids)
@@ -2800,7 +3314,11 @@ def _cb_runs_actions(
             if not isinstance(payload, dict):
                 return current, dash.no_update, "Invalid config payload."
             current = _state_from_config_payload(payload, current)
-            return current, "/train", "Config cloned to Train."
+            return (
+                current,
+                "/train",
+                "Config cloned. Review settings in Train page, then re-run.",
+            )
 
         if triggered == "runs-view-results-btn":
             path = primary.invocation.artifact_path or ""
@@ -2809,6 +3327,7 @@ def _cb_runs_actions(
             if not path:
                 return current, dash.no_update, "No artifact path available."
             current["last_run_artifact"] = path
+            current["results_shortcut_focus"] = None
             return current, "/results", "Moved to Results."
 
         if triggered == "runs-migrate-btn":

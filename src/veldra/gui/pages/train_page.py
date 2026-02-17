@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from veldra.gui.components.config_summary import render_config_summary
+from veldra.gui.components.help_ui import help_icon
 
 
 def layout(state: dict | None = None) -> html.Div:
@@ -20,7 +21,13 @@ def layout(state: dict | None = None) -> html.Div:
                 [
                     dbc.Col(
                         [
-                            html.Label("Learning Rate", className="fw-bold"),
+                            html.Div(
+                                [
+                                    html.Label("Learning Rate", className="fw-bold mb-0"),
+                                    help_icon("train_learning_rate"),
+                                ],
+                                className="d-flex align-items-center gap-1 mb-1",
+                            ),
                             dcc.Slider(
                                 id="train-learning-rate",
                                 min=0.001,
@@ -45,7 +52,13 @@ def layout(state: dict | None = None) -> html.Div:
                     ),
                     dbc.Col(
                         [
-                            html.Label("Num Leaves", className="fw-bold"),
+                            html.Div(
+                                [
+                                    html.Label("Num Leaves", className="fw-bold mb-0"),
+                                    help_icon("train_num_leaves"),
+                                ],
+                                className="d-flex align-items-center gap-1 mb-1",
+                            ),
                             dbc.Input(
                                 id="train-num-leaves",
                                 type="number",
@@ -53,6 +66,31 @@ def layout(state: dict | None = None) -> html.Div:
                             ),
                         ],
                         width=4,
+                    ),
+                ],
+                className="mb-3",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.ButtonGroup(
+                            [
+                                dbc.Button(
+                                    "Conservative",
+                                    id="train-preset-conservative-btn",
+                                    color="secondary",
+                                    outline=True,
+                                ),
+                                dbc.Button(
+                                    "Balanced",
+                                    id="train-preset-balanced-btn",
+                                    color="secondary",
+                                    outline=True,
+                                ),
+                            ],
+                            size="sm",
+                        ),
+                        width="auto",
                     ),
                 ],
                 className="mb-3",
@@ -65,7 +103,13 @@ def layout(state: dict | None = None) -> html.Div:
                                 [
                                     dbc.Col(
                                         [
-                                            html.Label("Max Depth"),
+                                            html.Div(
+                                                [
+                                                    html.Label("Max Depth", className="mb-0"),
+                                                    help_icon("train_max_depth"),
+                                                ],
+                                                className="d-flex align-items-center gap-1 mb-1",
+                                            ),
                                             dbc.Input(
                                                 id="train-max-depth",
                                                 type="number",
@@ -76,7 +120,15 @@ def layout(state: dict | None = None) -> html.Div:
                                     ),
                                     dbc.Col(
                                         [
-                                            html.Label("Min Child Samples"),
+                                            html.Div(
+                                                [
+                                                    html.Label(
+                                                        "Min Child Samples", className="mb-0"
+                                                    ),
+                                                    help_icon("train_min_child_samples"),
+                                                ],
+                                                className="d-flex align-items-center gap-1 mb-1",
+                                            ),
                                             dbc.Input(
                                                 id="train-min-child",
                                                 type="number",
@@ -87,7 +139,16 @@ def layout(state: dict | None = None) -> html.Div:
                                     ),
                                     dbc.Col(
                                         [
-                                            html.Label("Early Stopping Rounds"),
+                                            html.Div(
+                                                [
+                                                    html.Label(
+                                                        "Early Stopping Rounds",
+                                                        className="mb-0",
+                                                    ),
+                                                    help_icon("train_early_stopping"),
+                                                ],
+                                                className="d-flex align-items-center gap-1 mb-1",
+                                            ),
                                             dbc.Input(
                                                 id="train-early-stopping",
                                                 type="number",
@@ -151,6 +212,7 @@ def layout(state: dict | None = None) -> html.Div:
                                 ],
                                 className="mt-2",
                             ),
+                            html.Div(id="train-objective-help", className="mt-2"),
                         ],
                         title="Tuning",
                     ),

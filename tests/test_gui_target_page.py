@@ -36,6 +36,8 @@ def test_target_layout_has_core_ids() -> None:
     assert "target-task-type" in ids
     assert "target-exclude-cols" in ids
     assert "target-guardrail-container" in ids
+    assert "target-task-context" in ids
+    assert "target-causal-context" in ids
 
 
 def test_populate_target_page_infers_task(monkeypatch) -> None:
@@ -44,7 +46,7 @@ def test_populate_target_page_infers_task(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module,
         "_get_load_tabular_data",
-        lambda: (lambda _p: pd.DataFrame({"x": [1, 2, 3], "y": [0, 1, 0]})),
+        lambda: lambda _p: pd.DataFrame({"x": [1, 2, 3], "y": [0, 1, 0]}),
     )
     out = app_module._cb_populate_target_page("/target", {"data_path": "x.csv", "target_col": "y"})
     assert out[2] == "y"
@@ -64,3 +66,36 @@ def test_save_target_state_updates_yaml() -> None:
     )
     assert state["target_col"] == "target"
     assert "config_yaml" in state
+
+
+def test_target_task_guides_frontier() -> None:
+    task_card, alpha_card = app_module._cb_target_task_guides("frontier")
+    assert "Frontier" in str(task_card)
+    assert "alpha" in str(alpha_card).lower()
+
+
+def test_target_causal_guides() -> None:
+    hint, card = app_module._cb_target_causal_guides(True, "dr_did")
+    assert "DR-DiD" in hint
+    assert "before/after" in str(card).lower() or "dr-did" in str(card).lower()
+
+
+def test_target_guardrails_warn_for_missing_treatment(monkeypatch) -> None:
+    import pandas as pd
+
+    monkeypatch.setattr(
+        app_module,
+        "_get_load_tabular_data",
+        lambda: lambda _p: pd.DataFrame({"x": [1, 2, 3], "y": [0, 1, 0]}),
+    )
+    rendered = app_module._cb_target_guardrails(
+        "y",
+        "binary",
+        [],
+        True,
+        "dr",
+        None,
+        None,
+        {"data_path": "x.csv"},
+    )
+    assert "Treatment" in str(rendered)

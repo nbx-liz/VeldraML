@@ -61,6 +61,8 @@ def layout() -> html.Div:
                     {"name": "started", "id": "started_at_utc"},
                     {"name": "finished", "id": "finished_at_utc"},
                     {"name": "artifact", "id": "artifact_path"},
+                    {"name": "export", "id": "export_shortcut", "presentation": "markdown"},
+                    {"name": "re-evaluate", "id": "reeval_shortcut", "presentation": "markdown"},
                 ],
                 data=[],
                 row_selectable="multi",
@@ -71,14 +73,31 @@ def layout() -> html.Div:
             dbc.Row(
                 [
                     dbc.Col(
-                        dbc.Button("Compare Selected", id="runs-compare-btn", color="primary"),
+                        dbc.Button(
+                            "Compare Selected",
+                            id="runs-compare-btn",
+                            color="primary",
+                            title="Select exactly two runs to compare metrics and config.",
+                        ),
                         width="auto",
                     ),
                     dbc.Col(
-                        dbc.Button("Clone", id="runs-clone-btn", color="secondary"), width="auto"
+                        dbc.Button(
+                            "Clone",
+                            id="runs-clone-btn",
+                            color="secondary",
+                            title="Copy selected run config to Train page.",
+                        ),
+                        width="auto",
                     ),
                     dbc.Col(
-                        dbc.Button("Delete", id="runs-delete-btn", color="danger", outline=True),
+                        dbc.Button(
+                            "Delete",
+                            id="runs-delete-btn",
+                            color="danger",
+                            outline=True,
+                            title="Delete selected run records (artifact files remain).",
+                        ),
                         width="auto",
                     ),
                     dbc.Col(

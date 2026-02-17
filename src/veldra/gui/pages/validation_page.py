@@ -5,6 +5,8 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import html
 
+from veldra.gui.components.help_ui import help_icon
+
 
 def layout(state: dict | None = None) -> html.Div:
     state = state or {}
@@ -15,6 +17,8 @@ def layout(state: dict | None = None) -> html.Div:
             dbc.Card(
                 dbc.CardBody(
                     [
+                        html.Div(id="validation-split-context", className="mb-2"),
+                        html.Div(id="validation-recommendation", className="mb-2"),
                         dbc.Row(
                             [
                                 dbc.Col(
@@ -88,7 +92,15 @@ def layout(state: dict | None = None) -> html.Div:
                                         ),
                                         dbc.Col(
                                             [
-                                                html.Label("Mode"),
+                                                html.Div(
+                                                    [
+                                                        html.Label("Mode", className="mb-0"),
+                                                        help_icon("timeseries_mode"),
+                                                    ],
+                                                    className=(
+                                                        "d-flex align-items-center gap-1 mb-1"
+                                                    ),
+                                                ),
                                                 dbc.Select(
                                                     id="validation-ts-mode",
                                                     options=[
@@ -122,6 +134,9 @@ def layout(state: dict | None = None) -> html.Div:
                                         dbc.Col(
                                             [
                                                 html.Label("Gap"),
+                                                html.Div(
+                                                    help_icon("timeseries_gap"), className="mb-1"
+                                                ),
                                                 dbc.Input(
                                                     id="validation-gap",
                                                     type="number",
@@ -133,6 +148,10 @@ def layout(state: dict | None = None) -> html.Div:
                                         dbc.Col(
                                             [
                                                 html.Label("Embargo"),
+                                                html.Div(
+                                                    help_icon("timeseries_embargo"),
+                                                    className="mb-1",
+                                                ),
                                                 dbc.Input(
                                                     id="validation-embargo",
                                                     type="number",

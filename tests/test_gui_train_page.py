@@ -35,6 +35,8 @@ def test_train_layout_has_builder_and_yaml() -> None:
     assert "train-learning-rate" in ids
     assert "train-config-yaml-preview" in ids
     assert "train-config-validate-btn" in ids
+    assert "train-preset-conservative-btn" in ids
+    assert "train-objective-help" in ids
 
 
 def test_save_train_state_and_preview() -> None:
@@ -57,3 +59,18 @@ def test_save_train_state_and_preview() -> None:
     yaml_text, summary = app_module._cb_update_train_yaml_preview(state)
     assert "num_boost_round" in yaml_text
     assert "Task:" in str(summary)
+
+
+def test_apply_train_presets(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "callback_context",
+        type("Ctx", (), {"triggered": [{"prop_id": "train-preset-conservative-btn.n_clicks"}]})(),
+    )
+    out = app_module._cb_apply_train_preset(1, 0, 0.05, 63, 20)
+    assert out == (0.01, 31, 50)
+
+
+def test_train_objective_help() -> None:
+    card = app_module._cb_train_objective_help("dr_balance_priority")
+    assert "balance" in str(card).lower()

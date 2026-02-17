@@ -48,6 +48,7 @@ def test_runs_layout_has_controls() -> None:
     assert "runs-table" in ids
     assert "runs-compare-btn" in ids
     assert "runs-delete-btn" in ids
+    assert "runs-feedback" in ids
 
 
 def test_refresh_runs_table(monkeypatch) -> None:
@@ -58,6 +59,8 @@ def test_refresh_runs_table(monkeypatch) -> None:
     assert rows[0]["created_at_utc"].endswith("JST")
     assert rows[0]["started_at_utc"] == "n/a"
     assert rows[0]["finished_at_utc"] == "n/a"
+    assert rows[0]["export_shortcut"] == "Export"
+    assert rows[0]["reeval_shortcut"] == "Re-evaluate"
 
 
 def test_runs_selection_detail(monkeypatch) -> None:
@@ -65,3 +68,25 @@ def test_runs_selection_detail(monkeypatch) -> None:
     detail, selected = app_module._cb_runs_selection_detail([0], [{"job_id": "a1"}])
     assert "Job ID" in detail
     assert selected == ["a1"]
+
+
+def test_runs_shortcut_to_results(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "callback_context",
+        type("Ctx", (), {"triggered": [{"prop_id": "runs-table.active_cell"}]})(),
+    )
+    state, path, message = app_module._cb_runs_actions(
+        0,
+        0,
+        0,
+        0,
+        0,
+        {"row": 0, "column_id": "export_shortcut"},
+        [],
+        {},
+        [{"artifact_path": "artifacts/a1"}],
+    )
+    assert path == "/results"
+    assert state["results_shortcut_focus"] == "export"
+    assert "Export shortcut" in message

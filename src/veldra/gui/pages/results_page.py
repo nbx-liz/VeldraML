@@ -17,7 +17,7 @@ def layout() -> html.Div:
                             "Export Excel",
                             id="result-export-excel-btn",
                             color="secondary",
-                            className="me-2",
+                            className="me-2 result-export-btn",
                         ),
                         width="auto",
                     ),
@@ -26,7 +26,7 @@ def layout() -> html.Div:
                             "Export HTML Report",
                             id="result-export-html-btn",
                             color="secondary",
-                            className="me-2",
+                            className="me-2 result-export-btn",
                         ),
                         width="auto",
                     ),
@@ -43,6 +43,7 @@ def layout() -> html.Div:
                 className="mb-3 g-2",
             ),
             html.Div(id="result-export-status", className="small text-info mb-3"),
+            html.Div(id="result-export-help", className="small text-muted mb-3"),
             dcc.Download(id="result-config-download"),
             dcc.Download(id="result-report-download"),
             dcc.Store(id="result-export-job-store"),
@@ -195,6 +196,13 @@ def layout() -> html.Div:
                                             color="primary",
                                             className="w-100 mb-3",
                                         ),
+                                        html.Div(
+                                            (
+                                                "Re-evaluate checks model performance "
+                                                "on another dataset."
+                                            ),
+                                            className="small text-muted mb-2",
+                                        ),
                                         html.Label(
                                             "Evaluation Data Path", className="small text-muted"
                                         ),
@@ -203,6 +211,7 @@ def layout() -> html.Div:
                                             placeholder="path/to/data.csv",
                                             className="mb-3",
                                         ),
+                                        html.Div(id="artifact-eval-precheck", className="mb-3"),
                                         html.Hr(),
                                         html.H5("Overview", className="mb-2"),
                                         html.Div(id="result-overview-summary", className="mb-3"),

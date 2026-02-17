@@ -70,6 +70,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 25: GUI運用強化（async job queue + config migrate統合）
 - Phase 26: UX/UI改善（7画面再構成 + Export + Learning Curves）
 - Phase 26.1: UI改善（バグ修正3件 + ユースケース駆動UI再構成設計）← **実装中**
+- Phase 26.2: ユースケース駆動UI改善（ヘルプUI基盤 + 画面別ガイド強化）
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -1342,6 +1343,374 @@ curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
 | `src/veldra/gui/pages/results_page.py` | 1-B: `dcc.Download` + ダウンロードボタン追加 |
 | `src/veldra/gui/services.py` | 1-A: Export ファイル名タイムスタンプ JST 化 |
 | `tests/test_gui_phase26_1.py` | 新規: Stage 1 の3件に対するユニットテスト |
+
+## 13.2 Phase 26.2: ユースケース駆動UI改善
+
+### 目的
+
+Phase 26.1 Stage 2 で特定されたギャップ（P0〜P2 の 7 件）を解消し、
+初学者が**各ユースケースで迷わず操作を完遂**できる GUI を実現する。
+バックエンド（Core/API）は変更せず、GUI adapter 層のみ更新する。
+
+### 前提
+
+- Phase 26.1 Stage 1 完了（JST / Export DL / Learning Curves 修正済み）
+- Core/API 非変更。GUI adapter 層のみ更新
+
+---
+
+### 実装固定方針（2026-02-17）
+
+Phase 26.2 は **6 ステップ**で実施する。
+**Step 0（Notebook 課題洗い出し）** → Step 1〜5（GUI 改修）の順に進める。
+
+---
+
+### Step 0: Notebook による課題洗い出し
+
+**目的**: GUI を変更する前に、全ユースケースを Notebook 上で実際に操作し、
+課題を体系的に洗い出す。設計判断の根拠を記録し、Step 1〜5 の優先度を確定する。
+
+**成果物**: `notebooks/phase26_2_ux_audit.ipynb`
+
+**Notebook セル構成**:
+
+1. **セットアップ** — GUI ページモジュールの import、テスト用データ生成
+2. **ユースケース別ウォークスルー** — 下記の各ユースケースについて:
+   - 現行レイアウト関数を呼び出してコンポーネントツリーを出力
+   - 初学者が迷うポイントをマークダウンセルで記録
+   - 必須入力項目 vs 実際の UI 要素のマッピング確認
+   - ガードレール発火条件の確認（`GuardRailChecker` を直接呼び出し）
+3. **ギャップ分類** — 発見した課題を以下のカテゴリに分類:
+   - (A) ヘルプテキスト不足（説明がない）
+   - (B) 動的ガイド不足（タスクタイプ別の条件表示がない）
+   - (C) 推奨値・プリセット不足（デフォルト値の根拠が不明）
+   - (D) 導線不足（次のアクションが分からない）
+4. **優先度確定** — Phase 26.1 Stage 2 のギャップ一覧（P0〜P2）と Notebook 発見を統合し、
+   Step 1〜5 の実装優先度を最終確定
+5. **ヘルプテキスト素案** — 各画面に追加するテキスト・ツールチップの原文を下書き
+
+**対象ユースケース（Notebook で検証）**:
+
+| # | ユースケース | 検証観点 |
+|---|---|---|
+| UC-1 | Regression 学習・評価 | 基本フロー完遂、最低限入力で動作するか |
+| UC-2 | Binary チューニング学習・評価 | tuning 設定の到達容易性、objective 説明 |
+| UC-3 | Frontier 学習・評価 | Alpha 設定の意味理解、frontier 固有の導線 |
+| UC-4 | DR 因果推論（効果推定） | estimand/treatment/unit_id の入力ガイド |
+| UC-5 | DR-DiD 因果推論 | panel/repeated_cs 条件、time_col/post_col 設定 |
+| UC-6 | DR 因果推論 + パラメータ最適化 | balance_priority 等の objective 選択基準 |
+| UC-7 | 学習済みモデルの予測値算出 | evaluate action への到達、データ指定方法 |
+| UC-8 | 学習済みモデルの別データ再評価 | 特徴量一致チェックの可視化 |
+| UC-9 | モデルエクスポート（Python/ONNX） | export action 導線、Runs/Results からのショートカット |
+| UC-10 | HTML/Excel レポート出力 | ダウンロード導線（26.1 修正後の動作確認） |
+
+**完了条件**:
+- Notebook が実行可能（エラーなし）であること
+- 各ユースケースのギャップが (A)〜(D) カテゴリで分類されていること
+- Step 1〜5 の実装優先度が確定し、ヘルプテキスト素案が記録されていること
+
+---
+
+### Step 1: 共通ヘルプUIコンポーネント基盤
+
+**目的**: 全画面で再利用する UI パーツを整備し、Step 2〜5 の実装を効率化する。
+
+**新規ファイル**: `src/veldra/gui/components/help_ui.py`
+
+**コンポーネント一覧**:
+
+| コンポーネント | 用途 | 実装 |
+|---|---|---|
+| `help_icon(topic_key)` | パラメータ横の ℹ️ アイコン + ツールチップ | `dbc.Badge` + `dbc.Tooltip` |
+| `context_card(title, body, variant)` | ユースケース別の説明カード | `dbc.Card(color=variant)` |
+| `recommendation_badge(text, level)` | 推奨値バッジ（info/warning） | `dbc.Badge` |
+| `guide_alert(messages, severity)` | 複数メッセージをまとめるガイドアラート | `dbc.Alert` with list |
+
+**ヘルプテキスト定義**: `src/veldra/gui/components/help_texts.py`
+
+```python
+HELP_TEXTS: dict[str, dict[str, str]] = {
+    # Target page
+    "task_type_regression": {
+        "short": "連続値（売上、気温等）を予測",
+        "detail": "目的変数が連続値の場合に選択します。評価指標: RMSE, MAE, R²",
+    },
+    "task_type_binary": {
+        "short": "2値（購入/非購入等）を分類",
+        "detail": "目的変数が0/1の2値の場合に選択します。評価指標: AUC, F1, Precision, Recall",
+    },
+    # ... 全パラメータ分を定義
+}
+```
+
+**テスト**: `tests/test_gui_help_ui.py`
+- 各コンポーネントがレンダリング可能であること
+- `HELP_TEXTS` の全キーが `short` と `detail` を持つこと
+
+---
+
+### Step 2: Target ページ — タスクタイプ別ガイド強化
+
+**対象ファイル**: `src/veldra/gui/pages/target_page.py`, `src/veldra/gui/app.py`
+
+**変更内容**:
+
+1. **タスクタイプ説明の追加**
+   - RadioItems の各選択肢の右側に `help_icon()` を配置
+   - 選択中のタスクタイプに応じた `context_card()` を動的表示
+   - Frontier 選択時: Alpha パラメータの意味と推奨値（0.90, 0.50）を表示
+
+2. **Causal モード専用ガイド**
+   - Causal Switch ON 時に DR vs DR-DiD の使い分け `context_card` を表示:
+     - DR: 「クロスセクションデータで処置効果を推定する場合」
+     - DR-DiD: 「前後比較（パネル/繰り返しクロスセクション）で処置効果を推定する場合」
+   - Treatment 列ドロップダウン横に「バイナリ変数（0/1）が必要」のバリデーションヒント
+   - Unit ID 列ドロップダウン横に「パネルデータの場合に個体を識別する列」の説明
+
+3. **除外列ガイド**
+   - 「目的変数と直接的な因果関係がなく、リーク原因になりうる列を除外します」の説明追加
+
+**コールバック変更**（`app.py`）:
+- `_cb_target_guardrails` にタスクタイプ別のガイドメッセージ生成を追加
+- Causal 有効時の必須入力チェック強化（treatment 列未選択で warning）
+
+**テスト追加**: `tests/test_gui_target_page.py`
+- Frontier 選択時に Alpha ガイドが表示されること
+- Causal ON 時に DR/DR-DiD ガイドが表示されること
+- Treatment 列未選択でガードレール warning が発火すること
+
+---
+
+### Step 3: Validation ページ — 分割方式ガイド + 必須条件ガード
+
+**対象ファイル**: `src/veldra/gui/pages/validation_page.py`, `src/veldra/gui/app.py`
+
+**変更内容**:
+
+1. **分割方式比較ガイド**
+   - 分割タイプ選択の上部に折りたたみ式 `context_card` を配置:
+     - KFold: 「標準的な交差検証。データの順序に意味がない場合に使用」
+     - Stratified: 「分類タスクでクラス比率を維持する交差検証。Binary/Multiclass 推奨」
+     - Group: 「同一グループのデータが学習・検証に分かれないようにする分割」
+     - TimeSeries: 「時系列データで未来のデータが学習に混入しないようにする分割」
+
+2. **TimeSeries パラメータ説明**
+   - `gap`: 「学習データと検証データの間に設ける空白期間（リーク防止）」+ `help_icon`
+   - `embargo`: 「検証データ後の一定期間を次の学習に使わない（自己相関対策）」+ `help_icon`
+   - `expanding` vs `blocked`: 「expanding: 学習データが累積 / blocked: 固定長ウィンドウ」
+
+3. **タスクタイプ連動の推奨表示**
+   - Binary/Multiclass → 「Stratified KFold を推奨します」の `recommendation_badge`
+   - Causal → 「KFold を推奨します（Stratified は処置変数の分布を歪める可能性）」
+   - TimeSeries タスク → TimeSeries 分割が自動選択 + 説明表示
+
+**コールバック変更**（`app.py`）:
+- `_cb_validation_guardrails` にタスクタイプ別推奨分割との不一致 warning を追加
+- Causal + Stratified の組み合わせで info レベル注意喚起
+
+**テスト追加**: `tests/test_gui_validation_page.py`
+- Binary タスクで Stratified 推奨バッジが表示されること
+- TimeSeries 選択時に gap/embargo 説明が表示されること
+- Causal + Stratified で注意喚起が表示されること
+
+---
+
+### Step 4: Train ページ — パラメータ説明 + Objective テンプレート
+
+**対象ファイル**: `src/veldra/gui/pages/train_page.py`, `src/veldra/gui/app.py`
+
+**変更内容**:
+
+1. **LightGBM パラメータ説明**
+   - 各パラメータ入力の横に `help_icon()` を配置:
+     - `learning_rate`: 「学習率。小さいほど精度向上の可能性があるが学習が遅くなる。推奨: 0.01〜0.1」
+     - `num_leaves`: 「木の葉数。大きいほど表現力が上がるが過学習リスク増。推奨: 31〜127」
+     - `max_depth`: 「木の最大深さ。-1で無制限。num_leaves と併用で過学習制御」
+     - `min_child_samples`: 「葉ノードの最小サンプル数。大きいほど過学習防止。推奨: 20〜100」
+     - `early_stopping_rounds`: 「検証指標が改善しない連続ラウンド数で学習を打ち切る」
+
+2. **パラメータプリセットボタン**
+   - `dbc.ButtonGroup` で「Conservative（過学習防止優先）」「Balanced（バランス）」を配置
+   - Conservative: `learning_rate=0.01, num_leaves=31, min_child_samples=50`
+   - Balanced: `learning_rate=0.05, num_leaves=63, min_child_samples=20`
+   - ボタン押下で各入力フィールドに値を反映するコールバック
+
+3. **Tuning Objective 説明**
+   - Objective ドロップダウンの各選択肢に説明を付与（`dcc.Dropdown` の `title` 属性または下部表示）:
+     - Regression: `rmse`（二乗誤差、外れ値に敏感）, `mae`（絶対誤差、外れ値に頑健）
+     - Binary: `auc`（識別力）, `f1`（精度と再現率のバランス）, `logloss`（確率精度）
+     - Frontier: `pinball`（分位点回帰の標準損失）
+     - Causal DR: `dr_balance_priority`（SMDバランス優先）, `dr_std_error`（標準誤差最小化）, `dr_overlap_penalty`（Overlap確保）
+     - Causal DR-DiD: `drdid_balance_priority` / `drdid_std_error` / `drdid_overlap_penalty`
+   - 選択中の objective に応じた `context_card` で推奨ユースケースを表示
+
+4. **Tuning プリセット説明**
+   - Fast: 「探索範囲を狭めて高速に完了（初回探索向け）」
+   - Standard: 「広い探索範囲で網羅的に探索（本番向け）」
+
+**コールバック変更**（`app.py`）:
+- パラメータプリセット適用コールバック追加
+- Objective 選択連動の説明カード更新コールバック追加
+
+**テスト追加**: `tests/test_gui_train_page.py`
+- 各パラメータに `help_icon` が存在すること
+- Conservative プリセット適用で値が正しくセットされること
+- Causal objective 選択時に説明カードが表示されること
+
+---
+
+### Step 5: Run ページ — Action プリセット導線 + Runs/Results ショートカット
+
+**対象ファイル**: `src/veldra/gui/pages/run_page.py`, `src/veldra/gui/pages/runs_page.py`, `src/veldra/gui/pages/results_page.py`, `src/veldra/gui/app.py`
+
+**変更内容**:
+
+1. **Run ページ: Action 手動オーバーライド**
+   - 現行の自動検出ロジック（`_cb_detect_run_action`）は維持
+   - 自動検出結果の横に「変更」リンクを追加し、手動切替可能にする
+   - 各 Action の説明バッジ:
+     - `fit`: 「モデル学習（交差検証）を実行」
+     - `tune`: 「Optuna によるパラメータ最適化 + 学習」
+     - `evaluate`: 「学習済みモデルで新データを予測・評価」
+     - `simulate`: 「反実仮想シミュレーションを実行」
+     - `export`: 「モデルを Python/ONNX 形式でエクスポート」
+     - `estimate_dr`: 「Doubly Robust 法で因果効果を推定」
+
+2. **Run ページ: 実行前チェック結果の視認性向上**
+   - ガードレール結果を severity 順（error → warning → info）に固定表示
+   - error がある場合は Launch ボタンを disabled にし、理由を明示
+   - 修正すべき画面へのリンク（「Target ページで修正 →」）を表示
+
+3. **Runs ページ: アクションボタン説明追加**
+   - Clone: 「選択した Run の設定を Train 画面にコピーします」のツールチップ
+   - Delete: 「選択した Run の履歴を削除します（モデルファイルは残ります）」
+   - Compare: 「2つの Run を選択して指標・設定を比較します」
+   - Migrate: 「設定ファイルを最新バージョンに変換します」
+   - Clone 実行後に `guide_alert` で「Train 画面で設定を確認して再実行してください」を表示
+
+4. **Results ページ: 再評価導線の改善**
+   - Re-evaluate ボタンの上に説明: 「別のデータセットでモデルの性能を検証します」
+   - データパス入力時に特徴量一致チェックの事前診断結果を表示
+   - Export ボタン横に形式説明: Excel（「特徴量重要度・予測値・残差をシート別に出力」）/ HTML（「自己完結型のレポートファイル」）
+
+5. **Runs/Results → Export/Re-evaluate ショートカット**
+   - Runs テーブルの各行に「Export」「Re-evaluate」アイコンボタンを追加
+   - クリックで Results ページに遷移し、対応アクションをハイライト
+
+**コールバック変更**（`app.py`）:
+- Action 手動オーバーライドコールバック追加
+- ガードレール結果の severity ソート + 修正リンク生成
+- Runs テーブルのショートカットボタンコールバック追加
+
+**テスト追加**:
+- `tests/test_gui_run_presets.py`（新規）: Action 手動切替が動作すること、説明バッジが表示されること
+- `tests/test_gui_runs_page.py`: Clone 後のガイドアラートが表示されること
+- `tests/test_gui_results_enhanced.py`: Re-evaluate 説明と Export 形式説明が表示されること
+
+---
+
+### 対象ファイル一覧
+
+| ファイル | Step | 変更内容 |
+|---|---|---|
+| `notebooks/phase26_2_ux_audit.ipynb` | 0 | 新規: 全ユースケースのウォークスルーと課題洗い出し |
+| `src/veldra/gui/components/help_ui.py` | 1 | 新規: 共通ヘルプUIコンポーネント（help_icon, context_card, recommendation_badge, guide_alert） |
+| `src/veldra/gui/components/help_texts.py` | 1 | 新規: 全パラメータのヘルプテキスト定義 |
+| `src/veldra/gui/pages/target_page.py` | 2 | タスクタイプ説明、Causal ガイド、除外列説明の追加 |
+| `src/veldra/gui/pages/validation_page.py` | 3 | 分割方式比較ガイド、TimeSeries パラメータ説明、推奨分割表示 |
+| `src/veldra/gui/pages/train_page.py` | 4 | パラメータ help_icon、プリセットボタン、Objective 説明 |
+| `src/veldra/gui/pages/run_page.py` | 5 | Action 手動オーバーライド、説明バッジ、ガードレール視認性向上 |
+| `src/veldra/gui/pages/runs_page.py` | 5 | アクションボタンツールチップ、ショートカットボタン |
+| `src/veldra/gui/pages/results_page.py` | 5 | Re-evaluate 導線改善、Export 形式説明 |
+| `src/veldra/gui/app.py` | 2-5 | 各 Step のコールバック追加・修正 |
+| `tests/test_gui_help_ui.py` | 1 | 新規: ヘルプUIコンポーネントのテスト |
+| `tests/test_gui_run_presets.py` | 5 | 新規: Action プリセット導線のテスト |
+| `tests/test_gui_target_page.py` | 2 | Causal/Frontier ガイド表示のテスト追加 |
+| `tests/test_gui_validation_page.py` | 3 | 分割推奨・条件表示のテスト追加 |
+| `tests/test_gui_train_page.py` | 4 | パラメータ help_icon・プリセットのテスト追加 |
+| `tests/test_gui_runs_page.py` | 5 | アクション説明・ショートカットのテスト追加 |
+| `tests/test_gui_results_enhanced.py` | 5 | 導線改善のテスト追加 |
+
+---
+
+### テスト計画
+
+| テスト | 内容 | ファイル |
+|---|---|---|
+| ヘルプUIコンポーネント | 各コンポーネントのレンダリング、HELP_TEXTS の網羅性 | `tests/test_gui_help_ui.py` |
+| Target ガイド | タスクタイプ別説明、Causal ガイド、除外列説明 | `tests/test_gui_target_page.py` |
+| Validation ガイド | 分割方式比較、TimeSeries 説明、推奨分割表示 | `tests/test_gui_validation_page.py` |
+| Train ガイド | パラメータ help_icon、プリセット適用、Objective 説明 | `tests/test_gui_train_page.py` |
+| Run プリセット | Action 手動切替、説明バッジ、ガードレール severity ソート | `tests/test_gui_run_presets.py` |
+| Runs ショートカット | Clone ガイド、Export/Re-evaluate ショートカット | `tests/test_gui_runs_page.py` |
+| Results 導線 | Re-evaluate 説明、Export 形式説明 | `tests/test_gui_results_enhanced.py` |
+| 後方互換 | 既存 GUI テストが全パス | 既存テスト群 |
+
+### 検証コマンド
+
+- `uv run pytest tests/test_gui_help_ui.py -v`
+- `uv run pytest tests/test_gui_target_page.py tests/test_gui_validation_page.py tests/test_gui_train_page.py -v`
+- `uv run pytest tests/test_gui_run_presets.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py -v`
+- `uv run pytest tests -x --tb=short`
+
+---
+
+### 完了条件
+
+1. **Step 0**: Notebook が実行可能で、全ユースケースのギャップが分類・記録されていること。
+2. **Step 1**: 共通ヘルプUIコンポーネントが作成され、テストがパスすること。
+3. **Step 2**: Target ページでタスクタイプ別・Causal 別のガイドが表示されること。
+4. **Step 3**: Validation ページで分割方式の比較ガイドと推奨表示が動作すること。
+5. **Step 4**: Train ページでパラメータ説明、プリセット、Objective 説明が表示されること。
+6. **Step 5**: Run/Runs/Results で Action 説明、ショートカット、導線改善が動作すること。
+7. **後方互換**: 既存 GUI テストが全パスし、Stable API の互換性が維持されること。
+8. **UX 改善**: 主要ユースケース（学習/チューニング/因果推定/再評価/エクスポート）で、手入力必須項目が現状比で減少していること。
+
+### 実装完了状況（2026-02-17）
+
+- Step 0: `notebooks/phase26_2_ux_audit.ipynb` を追加し、UC-1〜UC-10 の監査テンプレートを整備。
+- Step 1: `help_ui.py` / `help_texts.py` を追加し、ヘルプUI再利用基盤を導入。
+- Step 2: Target に task/causal/frontier ガイドと causal 必須入力ガードを追加。
+- Step 3: Validation に split 比較ガイド、timeseries 補助説明、推奨バッジ表示を追加。
+- Step 4: Train に主要パラメータ help、Conservative/Balanced プリセット、objective 説明カードを追加。
+- Step 5: Run に manual override と pre-run guardrail 表示、Runs に Export/Re-evaluate ショートカット、Results に再評価前 feature schema 診断を追加。
+- 互換性: `veldra.api.*` の公開シグネチャは未変更。RunConfig/Artifact 契約は維持。
+
+### 補正フェーズ完了状況（2026-02-17）
+
+- 補正背景: 上記 Step 0 は「監査テンプレート整備」までで止まっており、UC-1〜UC-10 の実実行証跡と GUI 同等性検証が不足していた。
+- 補正方針: Phase26.2 の完了基準を「Notebook実行証跡 + GUI parity pass（到達+成果物一致）」へ再定義した。
+- Step 0（補正版）:
+  - `notebooks/phase26_2_ux_audit.ipynb` を監査ハブに再編。
+  - UC別 Notebook を 10 冊追加。
+    - `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb`
+    - `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb`
+    - `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb`
+    - `notebooks/phase26_2_uc06_causal_dr_tune.ipynb`
+    - `notebooks/phase26_2_uc07_artifact_evaluate.ipynb`
+    - `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb`
+    - `notebooks/phase26_2_uc09_export_python_onnx.ipynb`
+    - `notebooks/phase26_2_uc10_export_html_excel.ipynb`
+  - 実行証跡を `notebooks/phase26_2_execution_manifest.json` に固定。
+- Step 2（補正版）:
+  - Notebook 実行契約テストを追加。
+    - `tests/test_notebook_phase26_2_uc_structure.py`
+    - `tests/test_notebook_phase26_2_execution_evidence.py`
+    - `tests/test_notebook_phase26_2_paths.py`
+- Step 3/4（補正版）:
+  - Playwright E2E 基盤を追加。
+    - `tests/e2e_playwright/conftest.py`
+    - `tests/e2e_playwright/test_uc01_regression_flow.py` ... `tests/e2e_playwright/test_uc10_export_html_excel_flow.py`
+  - pytest marker を追加。
+    - `gui_e2e`（全面E2E）
+    - `gui_smoke`（CIスモーク: UC-1/UC-8/UC-10）
+- Step 5（補正版）:
+  - 同等性レポートを追加。
+    - `docs/phase26_2_parity_report.md`
+  - Optional 依存の graceful degradation を manifest と parity report に明示（例: `openpyxl` 未導入時の Excel export）。
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム
 

@@ -1,0 +1,185 @@
+{
+  "phase": "26.2-correction",
+  "generated_at_utc": "2026-02-17T02:12:19.733939+00:00",
+  "parity_criterion": "reachability_and_artifact_outputs",
+  "entries": [
+    {
+      "uc": "UC-1",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/train.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/test.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a"
+      ],
+      "metrics": {
+        "rmse": 1.282374188733655,
+        "mae": 0.825028994527357,
+        "r2": 0.802467026319801
+      }
+    },
+    {
+      "uc": "UC-2",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/artifacts_fit/545a96ef99da4b599f438d955d051cc3",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/artifacts/tuning/phase26_2_uc02_20260217021219/trials.parquet",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/artifacts_fit/545a96ef99da4b599f438d955d051cc3"
+      ],
+      "tune_metric_name": "auc",
+      "best_score": 0.9337484035759898,
+      "eval_metrics": {
+        "auc": 0.9895833333333334,
+        "logloss": 0.19767602168665682,
+        "brier": 0.04137895968194719,
+        "accuracy": 0.9642857142857143,
+        "f1": 0.9565217391304348,
+        "precision": 1.0,
+        "recall": 0.9166666666666666,
+        "threshold": 0.43
+      }
+    },
+    {
+      "uc": "UC-3",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/artifacts/5ff3bf08c3a345b1ac1eef94d1f158a4",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/artifacts/5ff3bf08c3a345b1ac1eef94d1f158a4"
+      ],
+      "metrics": {
+        "pinball": 0.15298531181961111,
+        "mae": 0.9201145903609624,
+        "mean_u_hat": 0.8438972743815689,
+        "coverage": 0.875
+      }
+    },
+    {
+      "uc": "UC-4",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": null,
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/artifacts/causal/bb0bc2be03d44366bbb938e56bba9668/dr_summary.json",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/artifacts/causal/bb0bc2be03d44366bbb938e56bba9668/dr_observation_table.parquet"
+      ],
+      "method": "dr",
+      "estimand": "att",
+      "estimate": 1.6922779321622592,
+      "metrics": {
+        "naive": 2.1673687507712733,
+        "ipw": 2.0883447703157816,
+        "dr": 1.6922779321622592,
+        "treated_rate": 0.4722222222222222,
+        "coverage_treated": 0.47807947926359146,
+        "overlap_metric": 1.0,
+        "smd_max_unweighted": 0.4679346916539189,
+        "smd_max_weighted": 0.3933890656954471
+      }
+    },
+    {
+      "uc": "UC-5",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": null,
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/artifacts/causal/0877e84873d7463e8ec5409b5baa8089/dr_summary.json",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/artifacts/causal/0877e84873d7463e8ec5409b5baa8089/dr_observation_table.parquet"
+      ],
+      "method": "dr_did",
+      "design": "panel",
+      "estimate": 1652.9920093185222,
+      "metrics": {
+        "naive": 1761.918956706721,
+        "ipw": 1752.308513330445,
+        "dr": 1652.9920093185222,
+        "treated_rate": 0.31666666666666665,
+        "coverage_treated": 0.35731863131745134,
+        "overlap_metric": 1.0,
+        "smd_max_unweighted": 0.6656165686628388,
+        "smd_max_weighted": 0.3953275808466241,
+        "drdid": 1652.9920093185222
+      }
+    },
+    {
+      "uc": "UC-6",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": null,
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/artifacts/tuning/phase26_2_uc06_20260217021219/trials.parquet",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/artifacts/tuning/phase26_2_uc06_20260217021219/study_summary.json"
+      ],
+      "metric_name": "dr_balance_priority",
+      "best_score": 1000000.1278141164
+    },
+    {
+      "uc": "UC-7",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc07_artifact_evaluate/eval.csv"
+      ],
+      "metrics": {
+        "rmse": 0.9830399692399584,
+        "mae": 0.6868666389739531,
+        "r2": 0.8831589119942004
+      }
+    },
+    {
+      "uc": "UC-8",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/reeval_ok.csv",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/reeval_missing_col.csv"
+      ],
+      "precheck_ok_contains": false,
+      "precheck_bad_contains_missing": true,
+      "metrics": {
+        "rmse": 0.9830399692399584,
+        "mae": 0.6868666389739531,
+        "r2": 0.8831589119942004
+      }
+    },
+    {
+      "uc": "UC-9",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/exports/fb6d5a425ebc45ec9bb47a6d2811b18a/python",
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/exports/fb6d5a425ebc45ec9bb47a6d2811b18a/onnx"
+      ],
+      "python_export": {
+        "status": "passed",
+        "path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/exports/fb6d5a425ebc45ec9bb47a6d2811b18a/python"
+      },
+      "onnx_export": {
+        "status": "passed",
+        "path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/exports/fb6d5a425ebc45ec9bb47a6d2811b18a/onnx"
+      }
+    },
+    {
+      "uc": "UC-10",
+      "executed_at_utc": "2026-02-17T02:12:19.733939+00:00",
+      "status": "passed",
+      "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a",
+      "outputs": [
+        "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a/reports/report_20260217_111222.html"
+      ],
+      "html_report": {
+        "status": "passed",
+        "path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/fb6d5a425ebc45ec9bb47a6d2811b18a/reports/report_20260217_111222.html"
+      },
+      "excel_report": {
+        "status": "degraded",
+        "error": "Excel export requires openpyxl: No module named 'openpyxl'"
+      }
+    }
+  ]
+}

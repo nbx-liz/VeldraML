@@ -69,6 +69,8 @@ testpaths = ["tests"]
 addopts = "-p no:cacheprovider --basetemp=.pytest_tmp"
 markers = [
     "gui: GUI adapter related tests",
+    "gui_e2e: Playwright GUI end-to-end tests",
+    "gui_smoke: CI smoke subset of Playwright GUI end-to-end tests",
 ]
 
 [tool.ruff]

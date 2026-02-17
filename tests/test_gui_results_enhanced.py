@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from veldra.gui import app as app_module
@@ -39,6 +40,8 @@ def test_results_layout_has_new_tabs() -> None:
     assert "result-report-download" in ids
     assert "result-export-job-store" in ids
     assert "result-export-poll-interval" in ids
+    assert "artifact-eval-precheck" in ids
+    assert "result-export-help" in ids
 
 
 def test_update_result_extras(monkeypatch, tmp_path) -> None:
@@ -58,3 +61,23 @@ def test_update_result_extras(monkeypatch, tmp_path) -> None:
     assert hasattr(fig, "to_dict")
     assert "task" in cfg.lower()
     assert "Features" in str(summary)
+
+
+def test_result_eval_precheck_and_shortcut_highlight(monkeypatch) -> None:
+    fake_art = SimpleNamespace(
+        feature_schema={"feature_names": ["a", "b"]},
+    )
+    monkeypatch.setattr(app_module, "Artifact", SimpleNamespace(load=lambda _p: fake_art))
+    monkeypatch.setattr(
+        app_module,
+        "_get_load_tabular_data",
+        lambda: lambda _p: pd.DataFrame({"a": [1], "b": [2]}),
+    )
+    precheck = app_module._cb_result_eval_precheck("artifacts/x", "data.csv")
+    assert "passed" in str(precheck).lower()
+
+    classes = app_module._cb_result_shortcut_highlight(
+        {"results_shortcut_focus": "evaluate"},
+        "/results",
+    )
+    assert "border-warning" in classes[0]

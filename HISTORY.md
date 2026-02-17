@@ -1149,3 +1149,91 @@
 
 **検証結果**
 - 文書更新の相互参照（旧依存表注記 / 13.1 / Stage2成果物）を目視確認。
+
+### 2026-02-17（作業/PR: phase26.2-usecase-guided-ui-implementation）
+**背景**
+- Phase26.1 Stage2 で確定した P0-P2 ギャップを、Core/API 非変更のまま GUI adapter 層で解消する必要があった。
+
+**変更内容**
+- Step0: `notebooks/phase26_2_ux_audit.ipynb` を追加し、UC-1〜UC-10 の監査テンプレートと優先度固定欄を整備。
+- Step1: `src/veldra/gui/components/help_ui.py` / `src/veldra/gui/components/help_texts.py` を追加し、共通ヘルプUI基盤を導入。
+- Step2-4: `target_page` / `validation_page` / `train_page` にガイドUI、推奨表示、プリセット、objective説明を追加。
+- Step5: `run_page` に action manual override + pre-run guardrail 表示を追加。`runs_page` に Export/Re-evaluate ショートカット列を追加。`results_page` に再評価前 feature schema 診断とショートカットハイライトを追加。
+- `src/veldra/gui/app.py` の callback を拡張し、`workflow-state` に `results_shortcut_focus` / `run_action_override` を追加。
+- テスト追加/更新: `tests/test_gui_help_ui.py`, `tests/test_gui_run_presets.py`, `tests/test_gui_target_page.py`, `tests/test_gui_validation_page.py`, `tests/test_gui_train_page.py`, `tests/test_gui_runs_page.py`, `tests/test_gui_results_enhanced.py`。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.2 は 13.2 の Step0-5 を一括で実装し、ヘルプUI基盤を全画面で再利用する。
+  - 理由: 画面ごとの文言・導線を重複実装すると保守性が下がるため。
+  - 影響範囲: gui components/pages/app/tests
+- Decision: confirmed（確定）
+  - 内容: Run の実行可否は「必須入力チェック + guardrail error」で制御し、warning/info は実行をブロックしない。
+  - 理由: 過剰ブロックを避けつつ、重大な設定ミスのみ事前停止するため。
+  - 影響範囲: run page callbacks / UX
+
+**検証結果**
+- `uv run pytest -q tests/test_gui_help_ui.py tests/test_gui_target_page.py tests/test_gui_validation_page.py tests/test_gui_train_page.py tests/test_gui_run_presets.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py tests/test_gui_e2e_flow.py` を実施。
+- `uv run pytest -q -m "gui"` で GUI 回帰確認を実施。
+
+### 2026-02-17（作業/PR: phase26.2-correction-notebook-evidence-and-gui-parity）
+**背景**
+- Phase26.2 の Step0 は監査テンプレート整備までに留まり、UC-1〜UC-10 の実行証跡と GUI 同等性（到達+成果物一致）の証跡が不足していた。
+- 完了条件を補正し、Notebook 実行証跡・Playwright E2E・parity report を追加する必要があった。
+
+**変更内容**
+- Notebook 補正:
+  - `notebooks/phase26_2_ux_audit.ipynb` を監査ハブ化（UC索引・A-D分類・優先度固定）。
+  - UC別 Notebook を 10 冊追加。
+    - `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb`
+    - `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb`
+    - `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb`
+    - `notebooks/phase26_2_uc06_causal_dr_tune.ipynb`
+    - `notebooks/phase26_2_uc07_artifact_evaluate.ipynb`
+    - `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb`
+    - `notebooks/phase26_2_uc09_export_python_onnx.ipynb`
+    - `notebooks/phase26_2_uc10_export_html_excel.ipynb`
+  - 実行証跡を `notebooks/phase26_2_execution_manifest.json` に固定。
+- Notebook 契約テスト追加:
+  - `tests/test_notebook_phase26_2_uc_structure.py`
+  - `tests/test_notebook_phase26_2_execution_evidence.py`
+  - `tests/test_notebook_phase26_2_paths.py`
+- GUI parity（Playwright）追加:
+  - `tests/e2e_playwright/conftest.py`
+  - `tests/e2e_playwright/test_uc01_regression_flow.py`
+  - `tests/e2e_playwright/test_uc02_binary_tune_flow.py`
+  - `tests/e2e_playwright/test_uc03_frontier_flow.py`
+  - `tests/e2e_playwright/test_uc04_causal_dr_flow.py`
+  - `tests/e2e_playwright/test_uc05_causal_drdid_flow.py`
+  - `tests/e2e_playwright/test_uc06_causal_tune_flow.py`
+  - `tests/e2e_playwright/test_uc07_evaluate_existing_artifact_flow.py`
+  - `tests/e2e_playwright/test_uc08_reevaluate_flow.py`
+  - `tests/e2e_playwright/test_uc09_export_python_onnx_flow.py`
+  - `tests/e2e_playwright/test_uc10_export_html_excel_flow.py`
+- ドキュメント/設定更新:
+  - `docs/phase26_2_parity_report.md` を追加。
+  - `DESIGN_BLUEPRINT.md` 13.2 に補正フェーズ完了状況を追記。
+  - `pyproject.toml` / `tests/conftest.py` に `gui_e2e` / `gui_smoke` marker を追加。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26.2 の完了条件を「テンプレート整備」から「Notebook実行証跡 + GUI parity pass（到達+成果物一致）」へ再定義する。
+  - 理由: 実行証跡を欠いた状態では UX 改善の実効性を担保できないため。
+  - 影響範囲: notebooks / tests / docs / release gate
+- Decision: confirmed（確定）
+  - 内容: 同等性判定は Notebook と GUI の数値同値比較ではなく、到達導線と成果物生成一致を正とする。
+  - 理由: 実行環境差でのノイズを避けつつ、利用者導線の品質保証にフォーカスするため。
+  - 影響範囲: parity report / E2E acceptance
+
+**検証結果**
+- Notebook 実行証跡を `notebooks/phase26_2_execution_manifest.json` に記録（UC-1〜UC-10）。
+- Optional 依存の graceful degradation を記録（例: `openpyxl` 未導入時の Excel export）。
+- Playwright E2E は `gui_e2e`/`gui_smoke` marker で手動全件・CIスモーク運用を可能化。
+- `.venv/bin/ruff check tests/e2e_playwright tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_2_paths.py` を通過。
+- `.venv/bin/pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_2_paths.py` を実施（`9 passed`）。
+- `.venv/bin/pytest -q tests/e2e_playwright --collect-only` を実施（10件収集）。
+- `.venv/bin/pytest -q -m "gui"` を実施（`146 passed, 418 deselected`）。
+- `.venv/bin/pytest -q -m "gui_e2e and gui_smoke"` を実施（`3 skipped, 561 deselected`）。
+- `.venv/bin/pytest -q -m "gui_e2e"` を実施（`10 skipped, 554 deselected`）。

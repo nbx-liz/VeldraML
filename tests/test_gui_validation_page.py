@@ -36,6 +36,8 @@ def test_validation_layout_has_ids() -> None:
     assert "validation-n-splits" in ids
     assert "validation-group-container" in ids
     assert "validation-guardrail-container" in ids
+    assert "validation-split-context" in ids
+    assert "validation-recommendation" in ids
 
 
 def test_save_validation_state() -> None:
@@ -60,3 +62,21 @@ def test_validation_split_visibility() -> None:
     group_style, ts_style = app_module._cb_update_split_options("group")
     assert group_style["display"] == "block"
     assert ts_style["display"] == "none"
+
+
+def test_validation_split_context() -> None:
+    card = app_module._cb_validation_split_context("timeseries")
+    assert "TimeSeries" in str(card)
+
+
+def test_validation_recommendation_badges() -> None:
+    badges = app_module._cb_validation_recommendation(
+        {
+            "task_type": "binary",
+            "split_config": {"type": "kfold"},
+            "causal_config": {"enabled": True},
+        }
+    )
+    text = str(badges)
+    assert "Stratified" in text
+    assert "causal" in text.lower()
