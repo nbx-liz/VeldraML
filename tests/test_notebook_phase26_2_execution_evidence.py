@@ -4,16 +4,16 @@ import json
 from pathlib import Path
 
 UC_NOTEBOOKS = [
-    "phase26_2_uc01_regression_fit_evaluate.ipynb",
-    "phase26_2_uc02_binary_tune_evaluate.ipynb",
-    "phase26_2_uc03_frontier_fit_evaluate.ipynb",
-    "phase26_2_uc04_causal_dr_estimate.ipynb",
-    "phase26_2_uc05_causal_drdid_estimate.ipynb",
-    "phase26_2_uc06_causal_dr_tune.ipynb",
-    "phase26_2_uc07_artifact_evaluate.ipynb",
-    "phase26_2_uc08_artifact_reevaluate.ipynb",
-    "phase26_2_uc09_export_python_onnx.ipynb",
-    "phase26_2_uc10_export_html_excel.ipynb",
+    "quick_reference/reference_01_regression_fit_evaluate.ipynb",
+    "quick_reference/reference_02_binary_tune_evaluate.ipynb",
+    "quick_reference/reference_03_frontier_fit_evaluate.ipynb",
+    "quick_reference/reference_04_causal_dr_estimate.ipynb",
+    "quick_reference/reference_05_causal_drdid_estimate.ipynb",
+    "quick_reference/reference_06_causal_dr_tune.ipynb",
+    "quick_reference/reference_07_artifact_evaluate.ipynb",
+    "quick_reference/reference_08_artifact_reevaluate.ipynb",
+    "quick_reference/reference_09_export_python_onnx.ipynb",
+    "quick_reference/reference_10_export_html_excel.ipynb",
 ]
 
 

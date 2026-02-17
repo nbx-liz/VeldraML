@@ -4,16 +4,16 @@ import json
 from pathlib import Path
 
 NOTEBOOKS = [
-    "phase26_2_uc01_regression_fit_evaluate.ipynb",
-    "phase26_2_uc02_binary_tune_evaluate.ipynb",
-    "phase26_2_uc03_frontier_fit_evaluate.ipynb",
-    "phase26_2_uc04_causal_dr_estimate.ipynb",
-    "phase26_2_uc05_causal_drdid_estimate.ipynb",
-    "phase26_2_uc06_causal_dr_tune.ipynb",
-    "phase26_2_uc07_artifact_evaluate.ipynb",
-    "phase26_2_uc08_artifact_reevaluate.ipynb",
-    "phase26_3_uc_multiclass_fit_evaluate.ipynb",
-    "phase26_3_uc_timeseries_fit_evaluate.ipynb",
+    "quick_reference/reference_01_regression_fit_evaluate.ipynb",
+    "quick_reference/reference_02_binary_tune_evaluate.ipynb",
+    "quick_reference/reference_03_frontier_fit_evaluate.ipynb",
+    "quick_reference/reference_04_causal_dr_estimate.ipynb",
+    "quick_reference/reference_05_causal_drdid_estimate.ipynb",
+    "quick_reference/reference_06_causal_dr_tune.ipynb",
+    "quick_reference/reference_07_artifact_evaluate.ipynb",
+    "quick_reference/reference_08_artifact_reevaluate.ipynb",
+    "quick_reference/reference_11_multiclass_fit_evaluate.ipynb",
+    "quick_reference/reference_12_timeseries_fit_evaluate.ipynb",
 ]
 
 
@@ -35,8 +35,12 @@ def test_phase26_3_notebook_contract() -> None:
         path = Path("notebooks") / nb
         payload = _load(path)
         src = _source(path)
+        assert "## Overview" in src
+        assert "## Learn More" in src
         assert "## Setup" in src
+        assert "## Config Notes" in src
         assert "## Workflow" in src
+        assert "### Output Annotation" in src
         assert "## Result Summary" in src
         assert "SUMMARY =" in src
         assert "matplotlib.use('Agg')" in src

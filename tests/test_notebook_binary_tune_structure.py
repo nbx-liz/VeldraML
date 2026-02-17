@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _load_notebook() -> dict:
-    path = Path("notebooks/binary_tuning_analysis_workflow.ipynb")
+    path = Path("notebooks/tutorials/tutorial_02_binary_classification_tuning.ipynb")
     assert path.exists(), "Notebook file is missing."
     return json.loads(path.read_text(encoding="utf-8"))
 

@@ -10,6 +10,7 @@ from nbconvert.preprocessors import ExecutePreprocessor
 
 ROOT = Path(__file__).resolve().parents[1]
 NB_DIR = ROOT / "notebooks"
+QUICK_REF_DIR = NB_DIR / "quick_reference"
 
 NOTEBOOK_METADATA = {
     "kernelspec": {
@@ -39,16 +40,41 @@ SUMMARY_CELL = textwrap.dedent(
 ).strip()
 
 
-def _build_notebook(title: str, setup: str, workflow: str) -> nbformat.NotebookNode:
+def _build_notebook(
+    title: str,
+    setup: str,
+    workflow: str,
+    overview: tuple[str, str, str],
+    tutorial_notebook: str,
+) -> nbformat.NotebookNode:
     nb = nbformat.v4.new_notebook()
     nb.metadata = NOTEBOOK_METADATA
     nb.cells = [
         nbformat.v4.new_markdown_cell(
             f"# {title}\n\nPhase26.3 notebook with executed diagnostics outputs."
         ),
+        nbformat.v4.new_markdown_cell(
+            "## Overview\n"
+            f"- Purpose: {overview[0]}\n"
+            f"- API: {overview[1]}\n"
+            f"- Outputs: {overview[2]}"
+        ),
+        nbformat.v4.new_markdown_cell(
+            "## Learn More\n"
+            f"Detailed tutorial: `notebooks/tutorials/{tutorial_notebook}`"
+        ),
         nbformat.v4.new_markdown_cell("## Setup"),
         nbformat.v4.new_code_cell(textwrap.dedent(setup).strip() + "\n"),
+        nbformat.v4.new_markdown_cell(
+            "## Config Notes\n"
+            "- Keep compatibility output directories under `examples/out/phase26_*`.\n"
+            "- Keep key tuning knobs annotated with inline comments when modifying config payloads."
+        ),
         nbformat.v4.new_markdown_cell("## Workflow"),
+        nbformat.v4.new_markdown_cell(
+            "### Output Annotation\n"
+            "The following workflow cells materialize plots/tables consumed by evidence tests."
+        ),
         nbformat.v4.new_code_cell(textwrap.dedent(workflow).strip() + "\n"),
         nbformat.v4.new_markdown_cell("## Result Summary"),
         nbformat.v4.new_code_cell(SUMMARY_CELL + "\n"),
@@ -1087,64 +1113,124 @@ artifact_path_for_summary = run_result.artifact_path
 
 SPEC = [
     (
-        "phase26_2_uc01_regression_fit_evaluate.ipynb",
+        "quick_reference/reference_01_regression_fit_evaluate.ipynb",
         "UC-1 Regression Fit/Evaluate",
         _setup_block("UC-1", "phase26_2_uc01_regression_fit_evaluate"),
         _workflow_uc1(),
+        (
+            "Regression fit and evaluate quick reference.",
+            "`fit(config)`, `evaluate(artifact, data)`",
+            "metrics.csv, diagnostics png, regression_scores.csv",
+        ),
+        "tutorial_01_regression_basics.ipynb",
     ),
     (
-        "phase26_2_uc02_binary_tune_evaluate.ipynb",
+        "quick_reference/reference_02_binary_tune_evaluate.ipynb",
         "UC-2 Binary Tune/Evaluate",
         _setup_block("UC-2", "phase26_2_uc02_binary_tune_evaluate"),
         _workflow_uc2(),
+        (
+            "Binary tuning and evaluation quick reference.",
+            "`tune(config)`, `fit(config)`, `evaluate(artifact, data)`",
+            "metrics.csv, ROC/lift png, binary_scores.csv",
+        ),
+        "tutorial_02_binary_classification_tuning.ipynb",
     ),
     (
-        "phase26_2_uc03_frontier_fit_evaluate.ipynb",
+        "quick_reference/reference_03_frontier_fit_evaluate.ipynb",
         "UC-3 Frontier Fit/Evaluate",
         _setup_block("UC-3", "phase26_2_uc03_frontier_fit_evaluate"),
         _workflow_uc3(),
+        (
+            "Frontier quantile regression quick reference.",
+            "`fit(config)`",
+            "metrics.csv, frontier plots, frontier_scores.csv",
+        ),
+        "tutorial_03_frontier_quantile_regression.ipynb",
     ),
     (
-        "phase26_2_uc04_causal_dr_estimate.ipynb",
+        "quick_reference/reference_04_causal_dr_estimate.ipynb",
         "UC-4 DR Estimate",
         _setup_block("UC-4", "phase26_2_uc04_causal_dr_estimate"),
         _workflow_uc4(),
+        (
+            "Causal DR estimation quick reference.",
+            "`estimate_dr(config)`",
+            "metrics.csv, balance tables, overlap diagnostics png",
+        ),
+        "tutorial_05_causal_dr_lalonde.ipynb",
     ),
     (
-        "phase26_2_uc05_causal_drdid_estimate.ipynb",
+        "quick_reference/reference_05_causal_drdid_estimate.ipynb",
         "UC-5 DR-DiD Estimate",
         _setup_block("UC-5", "phase26_2_uc05_causal_drdid_estimate"),
         _workflow_uc5(),
+        (
+            "Causal DR-DiD estimation quick reference.",
+            "`estimate_dr(config)` with `method=dr_did`",
+            "metrics.csv, drdid tables, parallel-trends diagnostics",
+        ),
+        "tutorial_06_causal_drdid_lalonde.ipynb",
     ),
     (
-        "phase26_2_uc06_causal_dr_tune.ipynb",
+        "quick_reference/reference_06_causal_dr_tune.ipynb",
         "UC-6 DR Tune",
         _setup_block("UC-6", "phase26_2_uc06_causal_dr_tune"),
         _workflow_uc6(),
+        (
+            "Causal objective tuning quick reference.",
+            "`tune(config)` with causal objective",
+            "metrics.csv, tuning_trials.csv, overlap diagnostics",
+        ),
+        "tutorial_05_causal_dr_lalonde.ipynb",
     ),
     (
-        "phase26_2_uc07_artifact_evaluate.ipynb",
+        "quick_reference/reference_07_artifact_evaluate.ipynb",
         "UC-7 Artifact Evaluate",
         _setup_block("UC-7", "phase26_2_uc07_artifact_evaluate"),
         _workflow_uc7(),
+        (
+            "Existing artifact evaluation quick reference.",
+            "`Artifact.load(path)`, `evaluate(artifact, data)`",
+            "metrics.csv, eval table, diagnostics",
+        ),
+        "tutorial_01_regression_basics.ipynb",
     ),
     (
-        "phase26_2_uc08_artifact_reevaluate.ipynb",
+        "quick_reference/reference_08_artifact_reevaluate.ipynb",
         "UC-8 Artifact Re-evaluate",
         _setup_block("UC-8", "phase26_2_uc08_artifact_reevaluate"),
         _workflow_uc8(),
+        (
+            "Artifact re-evaluation quick reference.",
+            "`evaluate(artifact, new_data)`",
+            "reeval_compare.csv, precheck.csv, re-eval diagnostics",
+        ),
+        "tutorial_01_regression_basics.ipynb",
     ),
     (
-        "phase26_3_uc_multiclass_fit_evaluate.ipynb",
+        "quick_reference/reference_11_multiclass_fit_evaluate.ipynb",
         "UC-11 Multiclass Fit/Evaluate",
         _setup_block("UC-11", "phase26_3_uc_multiclass_fit_evaluate"),
         _workflow_uc11(),
+        (
+            "Multiclass fit/evaluate quick reference.",
+            "`fit(config)`, `evaluate(artifact, data)`",
+            "metrics.csv, class-prob diagnostics, multiclass_scores.csv",
+        ),
+        "tutorial_07_model_evaluation_guide.ipynb",
     ),
     (
-        "phase26_3_uc_timeseries_fit_evaluate.ipynb",
+        "quick_reference/reference_12_timeseries_fit_evaluate.ipynb",
         "UC-12 Timeseries Fit/Evaluate",
         _setup_block("UC-12", "phase26_3_uc_timeseries_fit_evaluate"),
         _workflow_uc12(),
+        (
+            "Timeseries regression quick reference.",
+            "`fit(config)` with timeseries split",
+            "metrics.csv, prediction/residual diagnostics, timeseries_detail.csv",
+        ),
+        "tutorial_07_model_evaluation_guide.ipynb",
     ),
 ]
 
@@ -1176,18 +1262,18 @@ def _build_manifest() -> None:
     }
 
     notebook_map = {
-        "UC-1": NB_DIR / "phase26_2_uc01_regression_fit_evaluate.ipynb",
-        "UC-2": NB_DIR / "phase26_2_uc02_binary_tune_evaluate.ipynb",
-        "UC-3": NB_DIR / "phase26_2_uc03_frontier_fit_evaluate.ipynb",
-        "UC-4": NB_DIR / "phase26_2_uc04_causal_dr_estimate.ipynb",
-        "UC-5": NB_DIR / "phase26_2_uc05_causal_drdid_estimate.ipynb",
-        "UC-6": NB_DIR / "phase26_2_uc06_causal_dr_tune.ipynb",
-        "UC-7": NB_DIR / "phase26_2_uc07_artifact_evaluate.ipynb",
-        "UC-8": NB_DIR / "phase26_2_uc08_artifact_reevaluate.ipynb",
-        "UC-9": NB_DIR / "phase26_2_uc09_export_python_onnx.ipynb",
-        "UC-10": NB_DIR / "phase26_2_uc10_export_html_excel.ipynb",
-        "UC-11": NB_DIR / "phase26_3_uc_multiclass_fit_evaluate.ipynb",
-        "UC-12": NB_DIR / "phase26_3_uc_timeseries_fit_evaluate.ipynb",
+        "UC-1": QUICK_REF_DIR / "reference_01_regression_fit_evaluate.ipynb",
+        "UC-2": QUICK_REF_DIR / "reference_02_binary_tune_evaluate.ipynb",
+        "UC-3": QUICK_REF_DIR / "reference_03_frontier_fit_evaluate.ipynb",
+        "UC-4": QUICK_REF_DIR / "reference_04_causal_dr_estimate.ipynb",
+        "UC-5": QUICK_REF_DIR / "reference_05_causal_drdid_estimate.ipynb",
+        "UC-6": QUICK_REF_DIR / "reference_06_causal_dr_tune.ipynb",
+        "UC-7": QUICK_REF_DIR / "reference_07_artifact_evaluate.ipynb",
+        "UC-8": QUICK_REF_DIR / "reference_08_artifact_reevaluate.ipynb",
+        "UC-9": QUICK_REF_DIR / "reference_09_export_python_onnx.ipynb",
+        "UC-10": QUICK_REF_DIR / "reference_10_export_html_excel.ipynb",
+        "UC-11": QUICK_REF_DIR / "reference_11_multiclass_fit_evaluate.ipynb",
+        "UC-12": QUICK_REF_DIR / "reference_12_timeseries_fit_evaluate.ipynb",
     }
 
     for uc in ["UC-1", "UC-2", "UC-3", "UC-4", "UC-5", "UC-6", "UC-7", "UC-8", "UC-11", "UC-12"]:
@@ -1244,9 +1330,11 @@ def _build_manifest() -> None:
 
 
 def main() -> None:
-    for nb_name, title, setup, workflow in SPEC:
+    QUICK_REF_DIR.mkdir(parents=True, exist_ok=True)
+    for nb_name, title, setup, workflow, overview, tutorial in SPEC:
         path = NB_DIR / nb_name
-        notebook = _build_notebook(title, setup, workflow)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        notebook = _build_notebook(title, setup, workflow, overview, tutorial)
         path.write_text(nbformat.writes(notebook), encoding="utf-8")
 
     for nb_name, *_ in SPEC:

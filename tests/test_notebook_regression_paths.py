@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _notebook_source() -> str:
-    path = Path("notebooks/regression_analysis_workflow.ipynb")
+    path = Path("notebooks/tutorials/tutorial_01_regression_basics.ipynb")
     payload = json.loads(path.read_text(encoding="utf-8"))
     chunks: list[str] = []
     for cell in payload.get("cells", []):

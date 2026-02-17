@@ -168,6 +168,81 @@ def panel_frame():
 
 
 @pytest.fixture
+def unbalanced_binary_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(2026)
+    rows = 2000
+    x1 = rng.normal(size=rows)
+    x2 = rng.normal(size=rows)
+    target = np.zeros(rows, dtype=int)
+    positives = max(1, int(rows * 0.001))
+    target[:positives] = 1
+    rng.shuffle(target)
+    return pd.DataFrame({"x1": x1, "x2": x2, "target": target})
+
+
+@pytest.fixture
+def categorical_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(77)
+    rows = 120
+    region = rng.choice(["north", "south", "east", "west"], size=rows)
+    channel = rng.choice(["web", "store", "partner"], size=rows)
+    x_num = rng.normal(size=rows)
+    target = 3.2 * x_num + (region == "north").astype(float) - (channel == "store").astype(float)
+    target += rng.normal(scale=0.15, size=rows)
+    return pd.DataFrame({"region": region, "channel": channel, "x_num": x_num, "target": target})
+
+
+@pytest.fixture
+def timeseries_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(31415)
+    rows = 180
+    t = np.arange(rows)
+    trend = 0.04 * t
+    seasonal = np.sin(2 * np.pi * t / 24.0)
+    noise = rng.normal(scale=0.12, size=rows)
+    y = 10.0 + trend + 0.8 * seasonal + noise
+    return pd.DataFrame(
+        {
+            "event_time": pd.date_range("2023-01-01", periods=rows, freq="D"),
+            "x_trend": trend,
+            "x_seasonal": seasonal,
+            "target": y,
+        }
+    )
+
+
+@pytest.fixture
+def missing_values_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(2718)
+    rows = 140
+    frame = pd.DataFrame(
+        {
+            "x1": rng.normal(size=rows),
+            "x2": rng.normal(size=rows),
+            "x3": rng.normal(size=rows),
+            "target": rng.normal(size=rows),
+        }
+    )
+    for ratio, column in [(0.05, "x1"), (0.20, "x2"), (0.50, "x3")]:
+        count = int(rows * ratio)
+        idx = rng.choice(rows, size=count, replace=False)
+        frame.loc[idx, column] = np.nan
+    return frame
+
+
+@pytest.fixture
+def outlier_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(99)
+    rows = 120
+    x1 = rng.normal(size=rows)
+    x2 = rng.normal(size=rows)
+    target = 1.5 * x1 - 0.7 * x2 + rng.normal(scale=0.2, size=rows)
+    outlier_idx = rng.choice(rows, size=5, replace=False)
+    target[outlier_idx] += rng.normal(loc=25.0, scale=2.0, size=5)
+    return pd.DataFrame({"x1": x1, "x2": x2, "target": target})
+
+
+@pytest.fixture
 def config_payload():
     def _build(task_type: str, **overrides: object) -> dict:
         base: dict = {

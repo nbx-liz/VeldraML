@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _notebook_source() -> str:
-    path = Path("notebooks/frontier_analysis_workflow.ipynb")
+    path = Path("notebooks/tutorials/tutorial_03_frontier_quantile_regression.ipynb")
     payload = json.loads(path.read_text(encoding="utf-8"))
     chunks: list[str] = []
     for cell in payload.get("cells", []):

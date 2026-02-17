@@ -473,7 +473,13 @@ uv run python examples/run_demo_simulate.py --data-path examples/data/california
 Notebook sample (regression workflow with diagnostics):
 
 ```bash
-# Open and run notebooks/regression_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_01_regression_basics.ipynb
+```
+
+Notebook index (tutorials + quick references):
+
+```bash
+# Open and run notebooks/reference_index.ipynb
 ```
 
 Notebook includes:
@@ -486,7 +492,7 @@ Notebook includes:
 Notebook sample (frontier workflow with diagnostics):
 
 ```bash
-# Open and run notebooks/frontier_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_03_frontier_quantile_regression.ipynb
 ```
 
 Notebook includes:
@@ -499,7 +505,7 @@ Notebook includes:
 Notebook sample (simulate-focused what-if analysis):
 
 ```bash
-# Open and run notebooks/simulate_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_04_scenario_simulation.ipynb
 ```
 
 Notebook includes:
@@ -512,7 +518,7 @@ Notebook includes:
 Notebook sample (binary + tune analysis):
 
 ```bash
-# Open and run notebooks/binary_tuning_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_02_binary_classification_tuning.ipynb
 ```
 
 Notebook includes:
@@ -525,7 +531,7 @@ Notebook includes:
 Notebook sample (Lalonde DR causal analysis):
 
 ```bash
-# Open and run notebooks/lalonde_dr_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_05_causal_dr_lalonde.ipynb
 ```
 
 Notebook includes:
@@ -538,7 +544,7 @@ Notebook includes:
 Notebook sample (Lalonde DR-DiD causal analysis):
 
 ```bash
-# Open and run notebooks/lalonde_drdid_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_06_causal_drdid_lalonde.ipynb
 ```
 
 Notebook includes:
@@ -553,7 +559,7 @@ Notebook includes:
 - Balance diagnostics via SMD (unweighted vs ATT-weighted)
 
 Phase26.3 notebook execution policy:
-- `notebooks/phase26_2_uc01`〜`uc08` と `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` / `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
+- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` 〜 `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` と `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` / `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
 - 実行証跡は `notebooks/phase26_3_execution_manifest.json` で管理します。
 - 構造契約は通常テストで検証し、重い証跡検証は `pytest -m notebook_e2e` で実行します。
 

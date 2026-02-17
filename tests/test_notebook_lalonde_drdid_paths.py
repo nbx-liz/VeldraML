@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _notebook_source() -> str:
-    path = Path("notebooks/lalonde_drdid_analysis_workflow.ipynb")
+    path = Path("notebooks/tutorials/tutorial_06_causal_drdid_lalonde.ipynb")
     payload = json.loads(path.read_text(encoding="utf-8"))
     chunks: list[str] = []
     for cell in payload.get("cells", []):

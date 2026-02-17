@@ -71,6 +71,8 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 26: UX/UI改善（7画面再構成 + Export + Learning Curves）
 - Phase 26.1: UI改善（バグ修正3件 + ユースケース駆動UI再構成設計）← **実装中**
 - Phase 26.2: ユースケース駆動UI改善（ヘルプUI基盤 + 画面別ガイド強化）
+- Phase 26.3: ユースケース詳細化（diagnostics ライブラリ + observation_table + Notebook 完全版 + 実行証跡）← **完了**
+- Phase 26.4: Notebook 教育化 & テスト品質強化 ← **計画策定済み**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -326,1391 +328,100 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ## 13 Phase 26: UX/UI 改善
 
 ### 目的
-初学者が指示のもと、初回で**学習→評価**まで完遂でき、結果が適切に保存され後で比較・エクスポートできる GUI を実現する。
-現行4画面（Data / Config / Run / Results）を、ユーザージャーニーに基づいた7画面＋2補助画面に再構成し、操作性とユーザー満足度を向上させる。
-
-### 実装固定方針（2026-02-16）
-- ロールアウトは 3 段階分割（Stage A/B/C）で実施する。
-- Export 機能は Phase26 で Excel + HTML を実装し、SHAP は `export-report` extra が導入済みの場合のみ有効化する。
-- `/config` 導線は 1 フェーズ互換を維持し、GUI 上は `/target` へ誘導する。
-
-### 実装状況（2026-02-16）
-- Stage A/B/C を完了し、`/target` `/validation` `/train` `/runs` `/compare` を追加済み。
-- `workflow-state` 拡張と `_build_config_from_state` 導入により、Run ページは state 駆動 YAML で実行可能。
-- Results は `Overview / Feature Importance / Learning Curves / Config` タブ構成へ拡張済み。
-- Export は非同期ジョブ（`export_excel` / `export_html_report`）として実装済み。
-- `/config` は互換経路として維持し、旧テスト契約（`cfg-*` callback）を温存している。
-
-### 対象ユーザー
-- 初学者（SQLは理解、Python/MLは初心者）
-- 利用頻度：毎日、1回あたり1時間以内で作業完了したい
-- サポート役が存在（レビューとエクスポート受領をしたい）
-- 個人専用ツール（誰が実行したかの監査は不要）
-
-### スコープ外
-- 特徴量エンジニアリング、データマート構築（データ準備は外部前提）
-- 認証・権限管理
-- 分散実行
-- ただしバックエンドで自動化できる範囲の前処理は実施可（欠損補完、カテゴリエンコード等）
-
----
-
-### 画面一覧と遷移図
-
-```
-                    ┌──────────────────────────────────────┐
-                    │          Sidebar (常設)                │
-                    │  [Data] [Target] [Validation] [Train] │
-                    │  [Run] [Results]                      │
-                    │  ──────                               │
-                    │  [Runs] [Compare]                     │
-                    └──────────────────────────────────────┘
-
-メインフロー（Wizard型、上部ステッパー連動）:
-
-  ① Data ──→ ② Target ──→ ③ Validation ──→ ④ Train ──→ ⑤ Run ──→ ⑥ Results
-     │                                                        │
-     │  サイドバーからいつでもジャンプ可能                        │
-     │                                                        ↓
-     │                                              ⑦ Runs（履歴一覧）
-     │                                                   │
-     │                                                   ↓
-     │                                              ⑧ Compare（2Run比較）
-     │
-     └── 既存 Artifact を選択して Results へ直接遷移も可能
-
-Export はフロー内の機能（Results / Compare 内の Export ボタン）として提供。
-独立画面は設けない（操作導線の複雑化を避ける）。
-```
-
-### 画面設計の基本方針
-
-| 方針 | 説明 |
-|------|------|
-| **Wizard＋Studio ハイブリッド** | メインフローは Wizard 型ステッパーでガイドするが、サイドバーから任意画面にジャンプ可能。初学者は Wizard に従い、経験者はショートカットを使う |
-| **既定値で動く** | 全画面で最低限の入力（データパス＋目的変数＋タスクタイプ）があれば、残りは全てスマートデフォルトで実行可能 |
-| **段階的開示** | 必須入力を上部に、高度オプションは Accordion/Collapse で隠す。CV種別・Optuna・時系列オプション等は「詳細設定」内 |
-| **ガードレール優先** | 各画面で実行前に自動診断を実行し、問題と修正案をインライン表示 |
-| **1画面1責務** | 現行 Config ページの50+入力を Target / Validation / Train の3画面に分割し、認知負荷を軽減 |
-
----
-
-### Step 1: 画面再構成 — Config ページの3分割
-
-**現状**: Config ページ（`config_page.py`, 1,107行）に50+入力が集中し、認知負荷が高い。
-**変更**: Config ページを廃止し、以下の3つの専用ページに分割する。
-
-#### 1a: Target ページ（新規: `src/veldra/gui/pages/target_page.py`）
-
-**目的**: 目的変数とタスクタイプの選択。データの性質に基づくタスクタイプの自動推定。
-
-**レイアウト**:
-```
-┌──────────────────────────────────────────────────┐
-│ ② Target                                         │
-├──────────────────────────────────────────────────┤
-│ [データプレビュー: 先頭5行、選択列ハイライト]       │
-│                                                  │
-│ ★ 目的変数 ────────────── [ドロップダウン]          │
-│   推定タスクタイプ: Binary (ユニーク値=2)  [自動]   │
-│                                                  │
-│ ★ タスクタイプ ─────────── (●) Regression          │
-│                           ( ) Binary              │
-│                           ( ) Multiclass          │
-│                           ( ) Frontier            │
-│                                                  │
-│ ▸ 因果推論設定（折りたたみ）                        │
-│   [ ] 因果推論を有効化                             │
-│   メソッド: DR / DR-DiD                           │
-│   Treatment列: [ドロップダウン]                    │
-│   Unit ID列: [ドロップダウン]                      │
-│                                                  │
-│ ▸ 除外列（折りたたみ）                             │
-│   [チェックリスト: 全列表示、スクロール可能]         │
-│                                                  │
-│ ⓘ ガードレール診断                                │
-│   ✅ 目的変数にNULLなし                            │
-│   ⚠️ ユニーク値=2: Binary推奨                      │
-│                                                  │
-│        [← Back: Data]  [Next: Validation →]       │
-└──────────────────────────────────────────────────┘
-```
-
-**自動推定ロジック**（`services.py` に追加）:
-- ユニーク値 = 2 → Binary 推奨
-- ユニーク値 3-20 かつ整数型 → Multiclass 推奨
-- それ以外 → Regression 推奨
-- 推定結果はラジオボタンの初期値として設定（ユーザーは上書き可能）
-
-**ガードレール**:
-- 目的変数の NULL 率チェック（> 5% で警告）
-- Binary タスクでユニーク値 ≠ 2 のとき警告
-- Multiclass タスクでクラス数 > 50 のとき警告
-- 除外列に目的変数が含まれる場合エラー
-
-#### 1b: Validation ページ（新規: `src/veldra/gui/pages/validation_page.py`）
-
-**目的**: データ分割戦略の設定。タスクタイプに基づくスマートデフォルトの適用。
-
-**レイアウト**:
-```
-┌──────────────────────────────────────────────────┐
-│ ③ Validation                                     │
-├──────────────────────────────────────────────────┤
-│ ★ 分割タイプ ─────── [ドロップダウン]               │
-│   推奨: Stratified K-Fold (Binary タスク)  [自動]  │
-│                                                  │
-│   選択肢:                                        │
-│   - K-Fold（既定: regression/frontier）            │
-│   - Stratified K-Fold（既定: binary/multiclass）   │
-│   - Group K-Fold                                 │
-│   - Time Series                                  │
-│   - Custom (fold_id 列指定)                       │
-│                                                  │
-│ ★ Fold数 ──────────── [5] (スピナー, 2-20)        │
-│                                                  │
-│ ▸ Group K-Fold 設定（split_type=Group 時のみ表示） │
-│   Group列: [ドロップダウン]                        │
-│                                                  │
-│ ▸ Time Series 設定（split_type=TimeSeries 時のみ）│
-│   Time列: [ドロップダウン]                         │
-│   モード: expanding / blocked                     │
-│   テストサイズ / ギャップ / エンバーゴ              │
-│                                                  │
-│ ▸ Custom 設定（split_type=Custom 時のみ）         │
-│   Fold ID列: [ドロップダウン]                      │
-│                                                  │
-│ ⓘ ガードレール診断                                │
-│   ✅ Stratified K-Fold: クラス分布が保たれます      │
-│   ⚠️ TimeSeries 選択時: Time列未指定 → 必須です    │
-│   ⚠️ 未来情報リーク警告（※後述）                   │
-│                                                  │
-│        [← Back: Target]  [Next: Train →]          │
-└──────────────────────────────────────────────────┘
-```
-
-**スマートデフォルト**:
-- `binary` / `multiclass` → Stratified K-Fold を自動選択
-- `regression` / `frontier` → K-Fold を自動選択
-- `causal` 有効時 → Group K-Fold を推奨（`unit_id_col` を group_col に自動設定）
-- ユーザーが明示変更した場合はそれを尊重
-
-**未来情報リークガードレール**（`services.py` に追加）:
-- Time Series 分割選択時に、除外されていない日付/時刻型列の存在を検出し警告
-- Group K-Fold 選択時に group 列の指定漏れを検出
-- Custom fold 選択時に fold_id 列の値域チェック（連番であること）
-
-#### 1c: Train ページ（新規: `src/veldra/gui/pages/train_page.py`）
-
-**目的**: LightGBM パラメーターとチューニング設定。既定値で動くことを前提に、高度設定は折りたたみ。
-
-**レイアウト**:
-```
-┌──────────────────────────────────────────────────┐
-│ ④ Train                                          │
-├──────────────────────────────────────────────────┤
-│ ★ 基本パラメーター                                │
-│   学習率: [0.05] (スライダー, 0.001-0.3)           │
-│   Num Boost Round: [300] (スピナー)               │
-│   Num Leaves: [31] (スピナー)                     │
-│                                                  │
-│ ▸ Early Stopping（折りたたみ、既定: ON）           │
-│   Early Stopping Rounds: [100]                   │
-│   Validation Fraction: [0.1] (スライダー)          │
-│                                                  │
-│ ▸ クラス不均衡対策（binary/multiclass 時のみ表示）  │
-│   [✓] Auto Class Weight (既定: ON)               │
-│   手動 Class Weight: [JSON入力]                   │
-│                                                  │
-│ ▸ 高度パラメーター（折りたたみ）                    │
-│   max_depth / min_child_samples / subsample       │
-│   colsample_bytree / reg_alpha / reg_lambda       │
-│   auto_num_leaves / num_leaves_ratio              │
-│   min_data_in_leaf_ratio / min_data_in_bin_ratio  │
-│   feature_weights / top_k (binary のみ)           │
-│   path_smooth / cat_l2 / cat_smooth 等            │
-│                                                  │
-│ ▸ ハイパラチューニング（Optuna）（折りたたみ）     │
-│   [ ] チューニングを有効化                         │
-│   プリセット: Fast / Standard                     │
-│   N Trials: [50] (スピナー)                       │
-│   Objective: [ドロップダウン]                      │
-│   ▸ カスタム探索空間（さらに折りたたみ）            │
-│                                                  │
-│ ▸ Artifact 出力先                                 │
-│   ディレクトリ: [artifacts] (プリセット選択)        │
-│                                                  │
-│ ⓘ 設定サマリー                                   │
-│   タスク: Binary | 分割: Stratified 5-Fold         │
-│   学習率: 0.05 | Rounds: 300 | Leaves: 31         │
-│   チューニング: OFF                               │
-│                                                  │
-│        [← Back: Validation]  [Next: Run →]        │
-└──────────────────────────────────────────────────┘
-```
-
-**設定サマリーカード**: Train ページ下部に、Target / Validation / Train の主要設定を1行ずつ表示。設定漏れを実行前に一覧できる。
-
----
-
-### Step 2: ステッパーの6段階化
-
-**現状**: 4段階ステッパー（Data → Config → Run → Results）
-**変更**: 6段階ステッパー（Data → Target → Validation → Train → Run → Results）
-
-**対象**: `src/veldra/gui/app.py` の `_stepper_bar()` 関数
-
-```python
-STEPPER_STEPS = [
-    {"path": "/data",       "label": "Data",       "number": 1},
-    {"path": "/target",     "label": "Target",     "number": 2},
-    {"path": "/validation", "label": "Validation", "number": 3},
-    {"path": "/train",      "label": "Train",      "number": 4},
-    {"path": "/run",        "label": "Run",        "number": 5},
-    {"path": "/results",    "label": "Results",    "number": 6},
-]
-```
-
-**ステッパー完了判定ロジック**:
-- Data: `workflow-state.data_path` が設定済み
-- Target: `workflow-state.target_col` と `workflow-state.task_type` が設定済み
-- Validation: `workflow-state.split_config` が設定済み（既定値でも可）
-- Train: `workflow-state.train_config` が設定済み（既定値でも可）
-- Run: 最後のジョブが `SUCCEEDED`
-- Results: Artifact が存在
-
----
-
-### Step 3: サイドバー拡張 — Runs / Compare の追加
-
-**現状**: サイドバーに Data / Config / Run / Results の4項目
-**変更**: メインフロー6項目 + セパレーター + 補助2項目
-
-**対象**: `src/veldra/gui/app.py` の `_sidebar()` 関数
-
-```
-── メインフロー ──
-  📊 Data
-  🎯 Target
-  ✂️ Validation
-  ⚙️ Train
-  ▶️ Run
-  📋 Results
-── 分析 ──
-  📜 Runs
-  🔀 Compare
-```
-
----
-
-### Step 4: Runs ページ（新規: `src/veldra/gui/pages/runs_page.py`）
-
-**目的**: 過去の全 Run 履歴を一覧表示し、複製・比較・削除を行う。
-
-**レイアウト**:
-```
-┌──────────────────────────────────────────────────┐
-│ Runs                                             │
-├──────────────────────────────────────────────────┤
-│ [フィルター: タスクタイプ | ステータス | 日付範囲]   │
-│ [検索: Run ID / Artifact パス]                    │
-│                                                  │
-│ ┌────────────────────────────────────────────┐   │
-│ │ ☐ │ Status │ Action │ Task │ Created │ ID  │   │
-│ ├────────────────────────────────────────────┤   │
-│ │ ☐ │ ✅     │ fit    │ bin  │ 02-16   │ a1  │   │
-│ │ ☐ │ ✅     │ tune   │ reg  │ 02-15   │ b2  │   │
-│ │ ☐ │ ❌     │ fit    │ mc   │ 02-15   │ c3  │   │
-│ └────────────────────────────────────────────┘   │
-│                                                  │
-│ [Compare Selected (2)] [Clone] [Delete] [Export]  │
-│                                                  │
-│ ▸ 選択中 Run の詳細                               │
-│   Run ID: a1b2c3                                 │
-│   Artifact: artifacts/20260216_120000_binary/     │
-│   Config YAML: (折りたたみ表示)                    │
-│   Metrics: auc=0.85, logloss=0.42                │
-│                                                  │
-│ [View Results] [Clone Config to Train]            │
-└──────────────────────────────────────────────────┘
-```
-
-**データソース**: `GuiJobStore` の既存 `list_jobs()` + Artifact メタデータ
-
-**アクション**:
-- **Compare Selected**: チェックボックスで2件選択し Compare ページへ遷移
-- **Clone**: 選択した Run の Config を Train ページにコピーして新規実行準備
-- **Delete**: 選択した Run の Job レコードを削除（Artifact は保持、確認ダイアログ付き）
-- **View Results**: Results ページへ遷移（選択 Artifact をセット）
-- **Export**: 選択 Run の Config + Metrics を JSON / YAML でダウンロード
-
----
-
-### Step 5: Compare ページ（新規: `src/veldra/gui/pages/compare_page.py`）
-
-**目的**: 2つの Run を並列比較し、指標差分・設定差分・予測差分を表示する。
-
-**レイアウト**:
-```
-┌──────────────────────────────────────────────────┐
-│ Compare                                          │
-├──────────────────────────────────────────────────┤
-│ Run A: [ドロップダウン: Artifact 一覧]              │
-│ Run B: [ドロップダウン: Artifact 一覧]              │
-│                                                  │
-│ ⓘ 比較可能性チェック                              │
-│   ✅ 同一タスクタイプ (binary)                     │
-│   ⚠️ データソースが異なります → 行単位差分は不可     │
-│                                                  │
-│ ── Metrics 差分 ──                                │
-│ ┌─────────────────────────────────────────┐      │
-│ │ Metric  │ Run A  │ Run B  │ Δ    │ 判定 │      │
-│ ├─────────────────────────────────────────┤      │
-│ │ auc     │ 0.850  │ 0.823  │+0.027│ ✅   │      │
-│ │ logloss │ 0.420  │ 0.445  │-0.025│ ✅   │      │
-│ │ f1      │ 0.780  │ 0.765  │+0.015│ ──   │      │
-│ └─────────────────────────────────────────┘      │
-│ [Grouped Bar Chart: Run A vs Run B]              │
-│                                                  │
-│ ── Config 差分 ──                                 │
-│ [Side-by-side YAML diff view]                    │
-│ 変更箇所のみハイライト表示                         │
-│                                                  │
-│ ── 予測差分 ──（同一データ時のみ表示）              │
-│ [散布図: Run A predicted vs Run B predicted]      │
-│ [残差ヒストグラム: Δ prediction]                   │
-│                                                  │
-│ [Export Comparison Report (HTML)]                 │
-└──────────────────────────────────────────────────┘
-```
-
-**比較可能性チェック**（`services.py` に追加）:
-- 同一タスクタイプか → 異なる場合は警告（メトリクス名が異なるため差分表示に制約あり）
-- 同一データソースか → 異なる場合は行単位予測差分を無効化し、集約メトリクス比較のみ
-- 同一分割戦略か → 異なる場合は情報表示（比較は許可するが注意喚起）
-
-**Config 差分**: `deepdiff` ライブラリまたは自前の dict diff で YAML 差分を生成し、変更箇所を色分け表示
-
----
-
-### Step 6: Results ページの強化
-
-**現状**: メトリクス KPI カード + 棒グラフ + 特徴量重要度の2タブ
-**変更**: 以下のタブ構成に拡張
-
-#### 6a: タブ構成
-
-| タブ | 内容 | 新規/既存 |
-|------|------|-----------|
-| Overview | KPI カード + メトリクスサマリー | 既存拡張 |
-| Feature Importance | 特徴量重要度棒グラフ（既存） | 既存 |
-| Learning Curves | フォールドごとの学習曲線（`training_history.json` を可視化） | **新規** |
-| Config | 使用した RunConfig の YAML 表示 | **新規** |
-
-#### 6b: Overview タブの拡張
-
-- 既存の KPI カード + 棒グラフに加え、以下を追加:
-  - **データスキーマ要約**: 特徴量数、行数、カテゴリ変数数、欠損率
-  - **分割戦略要約**: 分割タイプ、フォールド数
-  - **学習パラメーター要約**: 学習率、ラウンド数、早期停止設定
-
-#### 6c: Learning Curves タブ（新規）
-
-**対象**: `src/veldra/gui/components/charts.py` に追加
-
-- Artifact 内の `training_history.json` を読み込み
-- フォールドごとのメトリクス推移を折れ線グラフで表示
-- X軸: イテレーション数、Y軸: メトリクス値
-- 最終モデルの `best_iteration` をマーカーで表示
-- 複数フォールドを半透明で重ね、平均線を太線で表示
-
-#### 6d: Export ボタンの追加
-
-**Results ページ上部に Export セクションを追加**:
-
-| ボタン | 動作 | 実装 |
-|--------|------|------|
-| Export Excel | 非同期ジョブとして Excel 生成（特徴量 + 予測値 + 残差 + SHAP） | `services.py` に `export_excel()` 追加 |
-| Export HTML Report | 非同期ジョブとして HTML レポート生成 | `services.py` に `export_html_report()` 追加 |
-| Download Config | RunConfig YAML のダウンロード | クライアントサイド `dcc.Download` |
-
-**Excel Export の実装方針**:
-- 非同期ジョブキューに投入（大量データの場合数分かかるため）
-- SHAP 値の算出は `shap` ライブラリ（optional dependency として追加）
-- `openpyxl` で Excel ファイルを生成
-- 出力シート構成: データ+予測+残差 | SHAP値 | メトリクスサマリー | Config
-- 完了後 `dcc.Download` でブラウザダウンロード
-
-**HTML Report の実装方針**:
-- Jinja2 テンプレートベース
-- 内容: メトリクスサマリー + 特徴量重要度チャート（Plotly の静的画像） + 学習曲線 + Config + データスキーマ
-- 自己完結型 HTML（外部依存なし、インラインCSS + Base64画像）
-- ファイルサイズ制限: チャート画像は SVG、データ表は先頭100行まで
-
----
-
-### Step 7: ガードレール診断システム
-
-**目的**: 各画面で実行前に自動診断を実行し、問題と修正案をインライン表示する。
-
-**対象**: `src/veldra/gui/services.py` に `GuardRailChecker` クラスを新設
-
-```python
-@dataclass
-class GuardRailResult:
-    level: Literal["error", "warning", "info", "ok"]
-    message: str
-    suggestion: str | None = None
-
-class GuardRailChecker:
-    def check_target(self, data: pd.DataFrame, target_col: str, task_type: str) -> list[GuardRailResult]: ...
-    def check_validation(self, data: pd.DataFrame, split_config: dict, task_type: str) -> list[GuardRailResult]: ...
-    def check_train(self, config: dict) -> list[GuardRailResult]: ...
-    def check_pre_run(self, config: dict, data_path: str) -> list[GuardRailResult]: ...
-```
-
-**診断項目**:
-
-| 画面 | チェック | レベル | メッセージ例 |
-|------|---------|--------|-------------|
-| Target | 目的変数 NULL > 5% | warning | 「目的変数に {n}% の欠損があります。欠損行は学習時に除外されます」 |
-| Target | Binary で ユニーク値 ≠ 2 | error | 「Binary タスクですが目的変数のユニーク値が {n} です。Multiclass を検討してください」 |
-| Target | クラス不均衡 (少数クラス < 5%) | warning | 「少数クラスが {pct}% です。Auto Class Weight が有効です」 |
-| Validation | TimeSeries 時 time 列未指定 | error | 「Time Series 分割には Time 列の指定が必須です」 |
-| Validation | Group K-Fold 時 group 列未指定 | error | 「Group K-Fold には Group 列の指定が必須です」 |
-| Validation | フォールド数 > データ行数 / 10 | warning | 「フォールド数が多すぎます。各フォールドの学習データが少なくなります」 |
-| Validation | 未来情報リーク疑い | warning | 「日付型列 '{col}' が特徴量に含まれています。Time Series 分割または除外を検討してください」 |
-| Train | num_boost_round > 5000 | warning | 「学習ラウンド数が非常に多いです。Early Stopping が有効か確認してください」 |
-| Train | learning_rate > 0.3 | warning | 「学習率が高めです。過学習のリスクがあります」 |
-| Pre-Run | データファイルが存在しない | error | 「データファイルが見つかりません: {path}」 |
-| Pre-Run | Config バリデーションエラー | error | RunConfig のバリデーション結果をそのまま表示 |
-
-**表示コンポーネント**: `src/veldra/gui/components/guardrail.py`（新規）
-- `dbc.Alert` ベースでレベル別色分け（error=赤, warning=黄, info=青, ok=緑）
-- 修正案がある場合は「修正する」ボタンを表示（該当フィールドへの自動スクロール）
-
----
-
-### Step 8: workflow-state の拡張
-
-**現状**: `workflow-state` は `data_path`, `config_yaml`, `target_col`, `last_run_artifact` を保持
-**変更**: 画面分割に伴い、以下のキーを追加
-
-```python
-workflow_state = {
-    # 既存
-    "data_path": str | None,
-    "target_col": str | None,
-    "last_run_artifact": str | None,
-    # 新規
-    "task_type": str | None,          # "regression" | "binary" | "multiclass" | "frontier"
-    "exclude_cols": list[str],         # 除外列リスト
-    "causal_config": dict | None,      # 因果推論設定
-    "split_config": dict,              # 分割戦略設定（既定値含む）
-    "train_config": dict,              # 学習パラメーター（既定値含む）
-    "tuning_config": dict | None,      # チューニング設定
-    "artifact_dir": str,               # Artifact 出力先
-    # config_yaml は各 state から動的に生成（_build_config_from_state()）
-}
-```
-
-**Config YAML 生成**: `_build_config_from_state(state: dict) -> str`
-- workflow-state の各キーから RunConfig 互換の YAML を動的に生成
-- Run ページでのジョブ投入時にこの関数を呼び出し
-
----
-
-### Step 9: YAML Source タブの移設
-
-**現状**: Config ページの Tab 2 に YAML Source エディタ
-**変更**: Train ページの Tab 2 に移設
-
-- Train ページを2タブ構成にする: **Builder** | **YAML Source**
-- YAML Source は `_build_config_from_state()` の出力をリアルタイム表示
-- ユーザーが YAML を直接編集した場合は state を上書き（Import to Builder 機能）
-- Load / Save / Validate 機能は維持
-
----
-
-### Step 10: Config Migration タブの移設
-
-**現状**: Config ページの Tab 3 に Migration ツール
-**変更**: 専用モーダルまたは Runs ページ内のアクションとして提供
-
-- Runs ページで古い Config の Run を選択した場合に「Migrate Config」ボタンを表示
-- クリックでモーダル表示（Preview / Diff / Apply）
-- 機能自体は既存実装をそのまま流用
-
----
-
-### Step 11: Data ページの拡張
-
-**現状**: ファイルアップロード + 統計 KPI + 先頭10行プレビュー
-**変更**: 以下を追加
-
-- **データ品質サマリー**: 列ごとの欠損率・ユニーク値数・型の一覧表
-- **列型インジケーター**: numeric / categorical / datetime のバッジ表示
-- **データ品質警告**: 高欠損率列（> 50%）、定数列、高カーディナリティ列の検出と警告
-- **行数警告**: 100万行超のデータに対するメモリ使用量推定表示
-
----
-
-### Step 12: 既存ファイルの変更一覧
-
-| ファイル | 変更内容 |
-|---------|---------|
-| `src/veldra/gui/app.py` | ルーティング更新（6画面 + 2補助）、ステッパー6段階化、サイドバー拡張、Config 関連コールバックの Target/Validation/Train への分割、workflow-state 拡張、`_build_config_from_state()` 追加 |
-| `src/veldra/gui/pages/data_page.py` | データ品質サマリー追加、列型インジケーター追加 |
-| `src/veldra/gui/pages/config_page.py` | **廃止**（Target / Validation / Train に分割） |
-| `src/veldra/gui/pages/run_page.py` | Config YAML を `_build_config_from_state()` から取得するよう変更 |
-| `src/veldra/gui/pages/results_page.py` | Learning Curves タブ追加、Config タブ追加、Export ボタン追加 |
-| `src/veldra/gui/services.py` | `GuardRailChecker` 追加、タスクタイプ自動推定、Excel/HTML Export ロジック |
-| `src/veldra/gui/components/charts.py` | 学習曲線チャート追加、予測差分散布図追加、残差ヒストグラム追加 |
-| `src/veldra/gui/components/guardrail.py` | **新規**: ガードレール診断表示コンポーネント |
-| `src/veldra/gui/assets/style.css` | 新画面用スタイル追加、ガードレールアラートスタイル |
-
-### 新規ファイル一覧
-
-| ファイル | 内容 |
-|---------|------|
-| `src/veldra/gui/pages/target_page.py` | Target ページ |
-| `src/veldra/gui/pages/validation_page.py` | Validation ページ |
-| `src/veldra/gui/pages/train_page.py` | Train ページ |
-| `src/veldra/gui/pages/runs_page.py` | Runs ページ |
-| `src/veldra/gui/pages/compare_page.py` | Compare ページ |
-| `src/veldra/gui/components/guardrail.py` | ガードレール診断表示 |
-| `src/veldra/gui/components/config_summary.py` | 設定サマリーカード |
-| `src/veldra/gui/components/yaml_diff.py` | YAML 差分ビューア |
-
----
-
-### 依存関係の追加
-
-```toml
-[project.optional-dependencies]
-gui = [
-    # 既存
-    "dash>=2.18.2",
-    "plotly>=6.0.0",
-    "dash-bootstrap-components>=1.6.0",
-    # 新規追加
-    "openpyxl>=3.1.0",     # Excel Export
-    "jinja2>=3.1.0",       # HTML Report
-]
-export-report = [
-    "shap>=0.46.0",        # SHAP 値算出（optional、なくても Excel は生成可能）
-]
-```
-
----
-
-### 実装順序（依存関係順）
-
-| Sub-Phase | 内容 | 依存 |
-|-----------|------|------|
-| 26.1 | workflow-state 拡張 + `_build_config_from_state()` | なし |
-| 26.2 | Target ページ新設 + タスクタイプ自動推定 | 26.1 |
-| 26.3 | Validation ページ新設 + スマートデフォルト | 26.1 |
-| 26.4 | Train ページ新設（Config ページの移植） + YAML Source タブ移設 | 26.1 |
-| 26.5 | ステッパー6段階化 + サイドバー拡張 + ルーティング更新 + Config ページ廃止 | 26.2, 26.3, 26.4 |
-| 26.6 | ガードレール診断システム（`GuardRailChecker` + 表示コンポーネント） | 26.2, 26.3, 26.4 |
-| 26.7 | Data ページ拡張（品質サマリー、列型インジケーター） | なし |
-| 26.8 | Results ページ強化（Learning Curves + Config タブ） | なし |
-| 26.9 | Runs ページ新設 + Compare ページ新設 | 26.5 |
-| 26.10 | Export 機能（Excel + HTML Report） | 26.8 |
-| 26.11 | テスト + 統合検証 | 全 Sub-Phase |
-
-> 注記（2026-02-16）:
-> この依存表は Phase26 実装時の旧サブフェーズ定義を保持する履歴である。
-> **Phase26.1 の正式定義は `13.1 Phase 26.1: UI改善` を唯一の正**とし、
-> Stage 1（バグ修正）/Stage 2（UI再構成設計）の2段階で運用する。
-
----
-
-### テスト計画
-
-| テスト | 内容 | ファイル |
-|--------|------|----------|
-| Target ページレイアウト | タスクタイプ自動推定、列ドロップダウン、因果設定の条件表示 | `tests/test_gui_target_page.py` |
-| Validation ページレイアウト | スマートデフォルト、分割タイプ別条件表示 | `tests/test_gui_validation_page.py` |
-| Train ページレイアウト | パラメーター入力、YAML Source タブ、チューニング設定 | `tests/test_gui_train_page.py` |
-| Runs ページ | 履歴一覧、フィルタリング、Clone/Delete アクション | `tests/test_gui_runs_page.py` |
-| Compare ページ | 2Run 比較、Metrics 差分、Config 差分、比較可能性チェック | `tests/test_gui_compare_page.py` |
-| ガードレール | `GuardRailChecker` の各診断項目 | `tests/test_gui_guardrail.py` |
-| workflow-state | 状態管理、`_build_config_from_state()` の YAML 生成 | `tests/test_gui_workflow_state.py` |
-| Config 生成 | 分割された3画面からの Config YAML が既存 Builder と同等であること | `tests/test_gui_config_from_state.py` |
-| ステッパー | 6段階の完了判定ロジック | `tests/test_gui_stepper.py` |
-| Export Excel | Excel ファイル生成、シート構成、データ整合性 | `tests/test_gui_export_excel.py` |
-| Export HTML | HTML レポート生成、自己完結性 | `tests/test_gui_export_html.py` |
-| Results 拡張 | Learning Curves タブ、Config タブの表示 | `tests/test_gui_results_enhanced.py` |
-| Data 拡張 | データ品質サマリー、列型インジケーター | `tests/test_gui_data_enhanced.py` |
-| 後方互換 | 既存の GUI テスト（`test_gui_*`）が全パス | 既存テスト群 |
-| E2E フロー | Data → Target → Validation → Train → Run → Results の一連フロー | `tests/test_gui_e2e_flow.py` |
-
-### 検証コマンド
-- `uv run pytest tests/test_gui_target_page.py tests/test_gui_validation_page.py tests/test_gui_train_page.py -v`
-- `uv run pytest tests/test_gui_runs_page.py tests/test_gui_compare_page.py -v`
-- `uv run pytest tests/test_gui_guardrail.py tests/test_gui_workflow_state.py tests/test_gui_config_from_state.py -v`
-- `uv run pytest tests/test_gui_export_excel.py tests/test_gui_export_html.py -v`
-- `uv run pytest tests/test_gui_stepper.py tests/test_gui_results_enhanced.py tests/test_gui_data_enhanced.py -v`
-- `uv run pytest tests/test_gui_e2e_flow.py -v`
-- `uv run pytest tests -x --tb=short`
-
----
-
-### 完了条件
-
-1. **画面再構成**: 現行4画面（Data / Config / Run / Results）が7画面＋2補助画面（Data / Target / Validation / Train / Run / Results / Runs / Compare）に再構成され、Config ページが廃止されていること。
-2. **ステッパー**: 6段階ステッパーが正しく動作し、各段階の完了判定が workflow-state に基づいて行われること。
-3. **スマートデフォルト**: データパス＋目的変数＋タスクタイプの最低限入力で、残りは全てスマートデフォルトが適用され実行可能であること。
-4. **ガードレール**: 各画面で自動診断が実行され、問題と修正案がインライン表示されること。特に未来情報リーク、分割ミス、ターゲット不整合が実行前に検知されること。
-5. **Runs ページ**: 過去の全 Run 履歴が一覧表示され、Clone / Delete / Compare Selected / View Results のアクションが動作すること。
-6. **Compare ページ**: 2つの Run の指標差分・設定差分が表示されること。同一データの Run 同士では予測差分も表示されること。異なるデータの Run 同士では比較制約が明示されること。
-7. **Export**: Results ページから Excel（特徴量 + 予測値 + 残差 + SHAP）と HTML レポートが非同期生成・ダウンロード可能であること。
-8. **Learning Curves**: Results ページに学習曲線タブが追加され、`training_history.json` のフォールドごとメトリクス推移が可視化されること。
-9. **後方互換**: 既存の GUI テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。workflow-state の既存キーは維持されること。
-10. **E2E フロー**: Data → Target → Validation → Train → Run → Results の一連フローが、初学者が指示のもとで初回完遂可能であること。
+- 初学者が Data 取り込みから学習・評価・出力までを迷わず完遂できる GUI を提供する。
+- GUI を RunConfig / Artifact 中心の運用に揃え、比較・再評価・エクスポートの実務導線を強化する。
+
+### 実装固定方針（confirmed, 2026-02-16）
+- ロールアウトは Stage A/B/C の段階導入とする。
+- Export は Excel/HTML を標準導線にする（SHAP は `export-report` extra 導入時のみ有効）。
+- `/config` は 1 フェーズ互換を維持しつつ、主導線は `/target` へ移行する。
+
+### 実装結果（要約）
+- 画面構成を `Data -> Target -> Validation -> Train -> Run -> Results` + `Runs/Compare` に再編。
+- `workflow-state` 拡張 + `_build_config_from_state()` により、GUI 入力から RunConfig を再構築可能にした。
+- Results を `Overview / Feature Importance / Learning Curves / Config` に拡張した。
+- Export を非同期ジョブ（`export_excel` / `export_html_report`）化し、Results から実行可能にした。
+- ガードレール表示を各画面に統合し、実行前診断を強化した。
+- Stable API (`veldra.api.*`) と RunConfig/Artifact 契約は維持した。
+
+### 非スコープ
+- 特徴量エンジニアリング自動化、認証/権限管理、分散実行。
+
+### 完了条件（要約）
+1. 6段階メインフロー + Runs/Compare 導線が機能すること。
+2. 主要ユースケース（学習、チューニング、因果推論、再評価、export）を GUI で完遂できること。
+3. 互換性（Stable API / RunConfig / Artifact）を維持すること。
 
 ## 13.1 Phase 26.1: UI改善
 
 ### 目的
-ユーザーの使い方に合わせたUI改善。バグ修正3件 + ユースケース駆動のGUI再構成を行う。
+- Phase26 の安定化として、先行バグ修正とユースケース駆動の再構成設計を完了する。
 
----
+### 実装固定方針（confirmed, 2026-02-17）
+- Stage 1（バグ修正）と Stage 2（設計整理）の 2 段階で進める。
 
-### 実装固定方針（2026-02-17）
+### Stage 1: バグ修正（完了）
+- JST 表示統一:
+  - ユーザー向け時刻表示と export 出力名タイムスタンプを JST で統一。
+- Export ダウンロード導線:
+  - Results に `dcc.Download` ベースのブラウザダウンロードを追加（HTML/Excel）。
+- Learning Curves 取得ロジック:
+  - `training_history` を Artifact オブジェクトから直接参照する実装へ修正。
 
-Phase 26.1 は **Stage 1（バグ修正）** と **Stage 2（UI再構成設計）** の2段階で実施する。
+### Stage 2: ユースケース駆動設計（完了）
+- UC マトリクス、優先度付きギャップ（P0-P2）、26.2 実装計画を確定。
+- 重点ギャップ:
+  - task/split/objective の説明不足
+  - causal 入力ガイド不足
+  - run action 手動切替導線不足
+  - frontier alpha / results precheck / runs-results ショートカット不足
 
----
-
-### Stage 1: バグ修正（3件）
-
-#### 1-A: Queue時刻の日本時間表示
-
-**現状**: `job_store.py` は UTC ISO 形式で保存。`app.py:643` の `_format_jst_timestamp()` で JST 変換して表示している。
-ただし Runs テーブル等で JST 変換が適用されていない箇所がある可能性がある。
-
-**対応内容**:
-- Runs テーブル（`runs_page.py`）、Run ページのジョブステータス表示、Compare ページ等、全てのユーザー向けタイムスタンプ表示箇所で `_format_jst_timestamp()` が適用されていることを確認・修正する。
-- Export ファイル名に使用されるタイムスタンプ（`services.py` の `_export_output_path()`）も JST に統一する。
-
-**対象ファイル**:
-- `src/veldra/gui/app.py` — Runs テーブルデータ生成コールバック内のタイムスタンプ変換確認
-- `src/veldra/gui/services.py` — `_export_output_path()` のタイムスタンプを JST に変更
-
-#### 1-B: HTMLレポートのブラウザダウンロード対応
-
-**現状**: HTMLレポート生成は `export_html_report` アクションとしてジョブキューに投入される（`app.py:2604`）。
-ジョブ完了後、レポートファイルは `{artifact}/reports/` ディレクトリに保存されるが、
-ブラウザへの自動ダウンロードトリガーが存在しない。ユーザーはファイルシステムから手動でアクセスする必要がある。
-
-**対応内容**:
-1. Results ページに `dcc.Download(id="result-report-download")` コンポーネントを追加する。
-2. HTMLレポートジョブ完了時に、`dcc.Interval` ポーリングで完了を検知し、`dcc.send_file()` でブラウザダウンロードをトリガーする。
-3. Excel レポートも同様に `dcc.send_file()` でダウンロード可能にする。
-4. ジョブ完了前はステータス表示（「生成中...」）、完了後は「ダウンロード」ボタンに切り替える。
-
-**具体的な実装方針**:
-- `results_page.py`: `dcc.Download` コンポーネントと「ダウンロード」ボタンを追加
-- `app.py`: エクスポートジョブ投入後、ジョブIDを `dcc.Store` に保持し、`dcc.Interval` でジョブ完了をポーリング。
-  完了検知時に `GuiRunResult.result_json` からファイルパスを取得し、`dcc.send_file()` を返す新規コールバックを追加
-- `services.py`: `export_html_report()` / `export_excel_report()` の戻り値（ファイルパス）が `GuiRunResult.result_json` に格納されていることを確認
-
-**対象ファイル**:
-- `src/veldra/gui/pages/results_page.py` — `dcc.Download` + ダウンロードボタン追加
-- `src/veldra/gui/app.py` — ポーリング + ダウンロードトリガーのコールバック追加
-
-#### 1-C: 学習曲線が表示されないバグの修正
-
-**原因特定**: `app.py:2572-2578` の `_cb_update_result_extras()` にバグがある。
-
-```python
-# 現在のコード（バグあり）
-metadata = getattr(art, "metadata", {}) or {}
-history = metadata.get("training_history")  # ← Artifact に metadata 属性は存在しない → 常に None
-if history is None:
-    history_path = Path(artifact_path) / "training_history.json"  # ← ファイル fallback
-    if history_path.exists():
-        history = json.loads(history_path.read_text(encoding="utf-8"))
-```
-
-`Artifact` クラスには `metadata` 属性が存在しない（`artifact.py:34-58`）。
-`training_history` は `art.training_history` として直接保持されている。
-そのため `metadata.get("training_history")` は常に `None` となり、ファイル fallback に頼る。
-しかし `Artifact.load()` → `store.load_artifact()` で `training_history.json` は既に読み込まれ
-`art.training_history` に格納済みであるため、ファイルパスの二重読み込みは冗長であり、
-`artifact_path` がディレクトリでない場合などに失敗する可能性がある。
-
-**修正内容**:
-```python
-# 修正後
-history = art.training_history
-curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
-```
-
-**対象ファイル**:
-- `src/veldra/gui/app.py` — `_cb_update_result_extras()` の `training_history` 取得ロジック修正
-
----
-
-### Stage 2: ユースケース駆動UI再構成設計
-
-**方針**:
-- ユーザーの使い方に基づくUI改善を設計する。
-- 下記の全ユースケースパターンを分析し、現行GUI画面遷移との差分を特定する。
-- 具体的なUI変更は Stage 2 完了後に Phase 26.2 として実装する。
-
-**成果物**:
-- 各ユースケースパターンの現行GUI対応状況マトリクス
-- ギャップ一覧（現行GUIで対応できていない操作フロー）
-- Phase 26.2 実装計画のドラフト
-
-**分析対象ユースケースパターン**:
-- ユーザーがどのような順番で操作するのが自然かを考慮してGUIを再構成する
-  - Regression/Binary/Multiclassモデル学習・評価パターン
-    - データ指定
-    - 目的変数の指定
-    - タスクタイプの指定（Regression/Binary/Multiclassは自動判定、ユーザーが指定することもできる）
-    - 特徴量指定（目的変数以外全使用+除外変数指定）
-    - 分割方法の指定（KFold / StratifiedKFold / TimeSeriesSplit 等）
-    - 学習パラメーターの指定（LightGBMパラメーター）
-    - 学習実行
-    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
-    - HTMLレポートダウンロード
-
-  - Regression/Binary/Multiclassモデル学習（パラメーター最適化）・評価パターン
-    - データ指定
-    - 目的変数の指定
-    - タスクタイプの指定
-    - 特徴量指定
-    - 分割方法の指定
-    - チューニング設定の指定（探索回数、時間制限、探索空間）
-    - パラメーター最適化 & 学習実行
-    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
-    - HTMLレポートダウンロード
-
-  - 学習済みRegression/Binary/Multiclassモデルの予測値算出パターン
-    - 学習済みモデル（アーティファクト）指定
-    - 予測対象データ指定
-    - 予測実行
-    - 予測値ダウンロード
-
-  - 学習済みRegression/Binary/Multiclassモデルの別データによるモデル再評価パターン
-    - 学習済みモデル（アーティファクト）指定
-    - 評価対象データ指定（評価用Columnを含むかチェック、特徴量が一致するかチェック）
-    - 予測実行
-    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
-    - HTMLレポートダウンロード
-
-  - Frontier（分位点回帰）モデル学習・評価パターン
-    - データ指定
-    - 目的変数の指定
-    - タスクタイプの指定（frontier）
-    - **分位点（Alpha）の指定**（例: 0.90, 0.50 等）
-    - 特徴量指定
-    - 分割方法の指定
-    - 学習パラメーターの指定
-    - 学習実行
-    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
-    - HTMLレポートダウンロード
-
-  - Frontier（分位点回帰）モデル学習（パラメーター最適化）・評価パターン
-    - データ指定
-    - 目的変数の指定
-    - タスクタイプの指定（frontier）
-    - 分位点（Alpha）の指定
-    - 特徴量指定
-    - 分割方法の指定
-    - チューニング設定の指定（探索回数、時間制限、探索空間）
-    - パラメーター最適化 & 学習実行
-    - モデル評価（タスクタイプに応じて自動的に選択される、詳細は後述）
-    - HTMLレポートダウンロード
-
-  - 因果推論（Doubly Robust法）効果推定パターン
-    - データ指定
-    - 目的変数（Outcome）の指定
-    - タスクタイプの指定（causal）
-    - **推定対象（Estimand）の指定**（ATE: 平均処置効果 / ATT: 処置群平均処置効果、DefaultはATT）
-    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
-    - **個体ID変数の指定**（パネルデータの場合のCross-fitting用）
-    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
-    - 傾向スコア・Outcomeモデルの設定
-      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
-      - **傾向スコアモデルのハイパーパラメーター**（LightGBM: num_leaves, learning_rate 等）
-      - **結果モデルのハイパーパラメーター**（LightGBM: num_leaves, learning_rate 等）
-      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
-      - **傾向スコアのクリッピング閾値**（極端な重みを防ぐための下限・上限カット：例 0.01）
-    - 学習・推定実行
-    - 診断・評価（**Overlap / SMD: 標準化平均差** 等のバランス確認）
-    - 推定結果レポート確認（ATE/ATTの推定値、点推定値、信頼区間）
-    - HTMLレポートダウンロード
-
-- 因果推論（Doubly Robust法）効果推定パターン＋パラメーター最適化
-    - データ指定
-    - 目的変数（Outcome）の指定
-    - タスクタイプの指定（causal）
-    - **推定対象（Estimand）の指定**（ATE: 平均処置効果 / ATT: 処置群平均処置効果、DefaultはATT）
-    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
-    - **個体ID変数の指定**（パネルデータの場合のCross-fitting用）
-    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
-    - モデル学習・探索の基本設定
-      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
-      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
-      - **傾向スコアのクリッピング閾値**
-    - チューニング設定（最適化）
-      - **チューニング実行の有無**（Enabled=True）
-      - **試行回数（n_trials）の指定**（例: 30回）
-      - **探索プリセットの指定**（Standard / Fast：探索範囲の広さを選択）
-      - **最適化ターゲット（Objective）の指定**
-        - **Balance Priority (dr_balance_priority)**: 共変量バランス（SMD）の確保を最優先し、その制約下で精度を最適化（Default）
-        - **Standard Error (dr_std_error)**: 推定量の標準誤差の最小化（精度の最大化）のみを目指す
-        - **Overlap Penalty (dr_overlap_penalty)**: 傾向スコアの重なり（Overlap）の確保を重視する
-      - **バランス閾値（Balance Threshold）の指定**（Balance Priority選択時、許容するSMDの最大値。例: 0.10）
-      - **ペナルティ重み（Penalty Weight）の指定**（制約違反時のペナルティ強度）
-    - 最適化 & 推定実行
-    - 診断・評価（最適化されたモデルでの **Overlap / SMD** 確認）
-    - 推定結果レポート確認（ATE/ATTの推定値、点推定値、信頼区間）
-    - HTMLレポートダウンロード
-
-  - 因果推論（Doubly Robust DiD法）効果推定パターン
-    - データ指定
-    - 目的変数（Outcome）の指定
-    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
-    - **時点変数の指定**
-      - **時点識別カラム（Time Col）**（例: year, date 等）
-      - **処置後フラグ（Post Col）**（バイナリ変数、自動チェック）
-    - **データ構造（Design）の指定**
-      - **パネルデータ（panel）**: 同一個体を複数時点で観測
-      - **繰り返しクロスセクション（repeated_cross_section）**: 時点ごとに異なる個体を観測
-    - **個体ID変数の指定**（パネルデータの場合は**必須**。各個体を識別するキー）
-    - **推定対象（Estimand）の指定**
-      - **ATT**（処置群における平均処置効果）：DiDの標準的な推定対象（※目的変数がBinaryの場合はATTのみサポート）
-    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
-    - 傾向スコア・結果モデルの設定（DR法と同様）
-      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
-      - **傾向スコアモデルのハイパーパラメーター**（LightGBM設定）
-      - **結果モデルのハイパーパラメーター**（LightGBM設定。※パネルの場合は「差分」に対して学習されます）
-      - **傾向スコアのキャリブレーション手法**（Platt / Isotonic）
-      - **傾向スコアのクリッピング閾値**
-    - 学習・推定実行
-    - 診断・評価（**Overlap / SMD: 標準化平均差** 等のバランス確認）
-    - 推定結果レポート確認（ATTの点推定値、信頼区間）
-    - HTMLレポートダウンロード
-
-- 因果推論（Doubly Robust DiD法）効果推定パターン＋パラメーター最適化
-    - データ指定
-    - 目的変数（Outcome）の指定
-    - **処置変数（Treatment）の指定**（バイナリ変数、自動チェック）
-    - **時点変数の指定**
-      - **時点識別カラム（Time Col）**（例: year, date 等）
-      - **処置後フラグ（Post Col）**（バイナリ変数、自動チェック）
-    - **データ構造（Design）の指定**
-      - **パネルデータ（panel）**: 同一個体を複数時点で観測
-      - **繰り返しクロスセクション（repeated_cross_section）**: 時点ごとに異なる個体を観測
-    - **個体ID変数の指定**（パネルデータの場合は**必須**。各個体を識別するキー）
-    - **推定対象（Estimand）の指定**
-      - **ATT**（処置群における平均処置効果）：DiDの標準的な推定対象（※目的変数がBinaryの場合はATTのみサポート）
-    - 共変量指定（目的変数と処置変数と個体ID変数以外をデフォルトで指定、ユーザーが手動で除外指定）
-    - モデル学習・探索の基本設定
-      - **クロスフィッティングの有無**（DefaultはTrue：True/False）
-      - **傾向スコアのキャリブレーション手法**（Platt Scaling / Isotonic Regression）
-      - **傾向スコアのクリッピング閾値**
-    - チューニング設定（最適化）
-      - **チューニング実行の有無**（Enabled=True）
-      - **試行回数（n_trials）の指定**（例: 30回）
-      - **探索プリセットの指定**（Standard / Fast）
-      - **最適化ターゲット（Objective）の指定**
-        - **DR-DiD Balance Priority (drdid_balance_priority)**: 共変量バランス（SMD）の確保を最優先し、その制約下で精度を最適化（Default）
-        - **DR-DiD Standard Error (drdid_std_error)**: 推定量の標準誤差の最小化のみを目指す
-        - **DR-DiD Overlap Penalty (drdid_overlap_penalty)**: 傾向スコアの重なり（Overlap）の確保を重視する
-      - **バランス閾値（Balance Threshold）の指定**（Balance Priority選択時、許容するSMDの最大値。例: 0.10）
-      - **ペナルティ重み（Penalty Weight）の指定**
-    - 最適化 & 推定実行
-    - 診断・評価（最適化されたモデルでの **Overlap / SMD** 確認）
-    - 推定結果レポート確認（ATTの点推定値、信頼区間）
-    - HTMLレポートダウンロード
-
-  - シミュレーション（Counterfactual）実行パターン
-    - 学習済みRegression/Binary/Multiclassモデル（アーティファクト）指定
-    - ベースラインデータ指定
-    - **シナリオ定義**（特定の変数に対する増減・固定などの操作定義）
-    - シミュレーション実行
-    - 結果比較（ベースライン予測値 vs シナリオ予測値の差分）
-    - 結果ダウンロード
-
-  - モデルエクスポートパターン
-    - 学習済みモデル（アーティファクト）指定
-    - **出力フォーマット指定**（Python Native / ONNX）
-    - エクスポート実行
-    - 検証レポート確認（推論結果の一致性確認）
-    - モデルファイルダウンロード
-
----
-
-### テスト要件
-
-#### Stage 1 テスト
-
-1. **1-A: JST時刻表示**
-   - Runs テーブルの全タイムスタンプカラム（created_at, started_at, finished_at）が JST 形式で表示されること。
-   - Export ファイル名のタイムスタンプが JST であること。
-   - UTC タイムスタンプが `None` の場合に "n/a" が表示されること（既存テスト契約維持）。
-
-2. **1-B: レポートダウンロード**
-   - HTMLレポートのエクスポートジョブ完了後、ブラウザダウンロードがトリガーされること。
-   - Excelレポートのエクスポートジョブ完了後、同様にダウンロードがトリガーされること。
-   - ジョブ失敗時にエラーメッセージが表示され、ダウンロードがトリガーされないこと。
-   - `dcc.Download` コンポーネントがレイアウトに存在すること。
-
-3. **1-C: 学習曲線表示**
-   - `training_history` が存在する Artifact を選択した場合に学習曲線が描画されること。
-   - `training_history` が `None` の Artifact（因果推論等）でエラーにならず空グラフが表示されること。
-   - フォルドごとの曲線と平均曲線が正しくプロットされること。
-
-#### Stage 2 テスト
-- ユースケース分析の成果物（マトリクス、ギャップ一覧）が作成されていること。
-- Phase 26.2 実装計画ドラフトが DESIGN_BLUEPRINT に追記されていること。
-
-### 成功基準
-
-1. **Stage 1**: 3件のバグ修正が完了し、全既存テストがパスすること。
-2. **Stage 2**: 全ユースケースパターンの現行GUI対応状況が文書化されていること。
-3. **後方互換**: 既存の GUI テストが全パスし、Stable API の互換性が維持されること。
-
-### Stage 2 成果物（2026-02-16）
-
-#### A. 現行GUI対応状況マトリクス
-
-| ユースケース | 現行GUI対応 | 現行導線 | 主なギャップ | Phase26.2 での扱い |
-|---|---|---|---|---|
-| Regression/Binary/Multiclass 学習・評価 | 部分対応 | Data → Target → Validation → Train → Run → Results | Target/Validation の初学者向けガード説明が不足 | 導線説明カードとガードレールUI統合を追加 |
-| Regression/Binary/Multiclass チューニング学習・評価 | 部分対応 | Train（tuning有効化）→ Run → Results | チューニング設定の推奨値プリセット説明不足 | Objective別テンプレートと推奨値ヘルプ追加 |
-| 学習済みモデルで予測値算出 | 部分対応 | Run（evaluate） | 予測専用ウィザード不在、出力ダウンロード導線が弱い | Evaluate専用プリセット導線を Results/Runs から追加 |
-| 学習済みモデルの別データ再評価 | 部分対応 | Results（Re-evaluate）/Run（evaluate） | 特徴量一致チェックの可視化が不足 | 事前診断結果を実行前に表示 |
-| Frontier 学習・評価 | 部分対応 | Target/Train で frontier 設定 → Run | Alpha設定の意味説明不足 | Frontier専用ヘルプとデフォルト候補を追加 |
-| Frontier チューニング学習・評価 | 部分対応 | Train（tuning）→ Run | pinball最適化意図の説明不足 | Objective説明と推奨探索範囲を追加 |
-| DR 効果推定 | 部分対応 | Target（causal）→ Validation/Train → Run | estimand/treatment/unit_id の入力ガイド不足 | Causal専用フォームセクション分離 |
-| DR 効果推定 + 最適化 | 部分対応 | Train（tuning objective）→ Run | balance/objectiveの選択基準が不明瞭 | 目的別プリセットと警告文を追加 |
-| DR-DiD 効果推定 | 部分対応 | Target/Validation/Train → Run | panel/repeated_cs 条件の入力ミス防止が弱い | design別必須項目の動的ガード追加 |
-| DR-DiD 効果推定 + 最適化 | 部分対応 | Train（tuning）→ Run | objective差の説明不足 | DR-DiD objectiveの比較ヘルプ追加 |
-| Counterfactual シミュレーション | 部分対応 | Run（simulate） | シナリオ作成UIがなくファイルパス手入力依存 | Scenario DSL 補助UIは別Phaseで設計（26.2は導線整備まで） |
-| モデルエクスポート（Python/ONNX） | 部分対応 | Run（export） | Export設定と成果物参照の導線分断 | Runs/Results から export action へショートカット追加 |
-| HTML/Excel レポート出力 | 対応 | Results（export） | ジョブ完了後のブラウザDLが未実装（Stage1で修正） | Stage1で解消、26.2では文言/再実行導線を改善 |
-
-#### B. ギャップ一覧（優先度付き）
-
-| Priority | ギャップ | 影響範囲 | 解消方針（Phase26.2） |
-|---|---|---|---|
-| P0 | Causal系（DR/DR-DiD）の必須項目ガイド不足 | Target / Validation / Train / Run | Causal専用セクション化 + 必須入力のインライン診断 |
-| P0 | Evaluate/Export/Simulate が Run 画面の自由入力に依存 | Run / Results / Runs | ユースケース別プリセット導線を追加し手入力を削減 |
-| P1 | チューニング objective と指標の関係が不明瞭 | Train / Results | objective説明、推奨値、代表指標マッピング表示 |
-| P1 | Frontier の Alpha 設定支援不足 | Target / Train | Alpha の用途ヘルプと推奨プリセット追加 |
-| P1 | 実行前チェック結果の視認性不足 | Validation / Run | ガードレール結果を severity順に固定表示 |
-| P2 | Compare/Runs から再学習導線が弱い | Runs / Compare / Train | Clone時に「次にやること」を自動表示 |
-| P2 | Export/Artifact 操作結果のフィードバック不足 | Results / Runs | 成功/失敗ステータスと再試行導線を統一 |
-
-#### C. Phase 26.2 実装計画ドラフト
-
-1. 実装順序（画面単位）
-   - Step 1: Target 画面のユースケース別補助UI（task type / causal分岐）
-   - Step 2: Validation 画面の必須条件ガード強化（timeseries/causal）
-   - Step 3: Train 画面の objective/パラメータ説明テンプレート追加
-   - Step 4: Run 画面に action プリセット導線（fit/tune/evaluate/simulate/export）
-   - Step 5: Runs/Results から再実行・再評価のショートカット導線統一
-
-2. 依存関係
-   - 26.2 は 26.1 Stage 1 完了（JST/Export DL/Learning Curves 修正）を前提とする。
-   - Core/API 非変更。GUI adapter 層のみ更新。
-
-3. 完了条件
-   - 主要ユースケース（学習/チューニング/再評価/因果推定/エクスポート）で、手入力必須項目が現状比で減少していること。
-   - ガードレール警告が実行前に視認可能で、修正導線が明示されること。
-   - 既存GUIテスト + 26.2追加テストが全てパスすること。
-
-4. テスト観点（26.2追加予定）
-   - `tests/test_gui_target_page.py`: causal/frontier 分岐の必須項目ガイド
-   - `tests/test_gui_validation_page.py`: split/causal の必須条件表示
-   - `tests/test_gui_train_page.py`: objective説明と推奨値のUI契約
-   - `tests/test_gui_run_presets.py`（新規予定）: actionプリセットで必要入力が自動補完されること
-   - `tests/test_gui_e2e_flow.py`: 主要ユースケースの完遂導線
-
-### 対象ファイル（Stage 1）
-
-| ファイル | 変更内容 |
-|----------|----------|
-| `src/veldra/gui/app.py` | 1-A: JST変換適用箇所確認、1-B: ダウンロードコールバック追加、1-C: `training_history` 取得ロジック修正 |
-| `src/veldra/gui/pages/results_page.py` | 1-B: `dcc.Download` + ダウンロードボタン追加 |
-| `src/veldra/gui/services.py` | 1-A: Export ファイル名タイムスタンプ JST 化 |
-| `tests/test_gui_phase26_1.py` | 新規: Stage 1 の3件に対するユニットテスト |
+### 26.2 への引き継ぎ
+- 26.2 は Stage 1 の修正を前提に、GUI adapter のみで Step0-5 を実装する。
+- Core/API は非変更を維持する。
 
 ## 13.2 Phase 26.2: ユースケース駆動UI改善
 
 ### 目的
-
-Phase 26.1 Stage 2 で特定されたギャップ（P0〜P2 の 7 件）を解消し、
-初学者が**各ユースケースで迷わず操作を完遂**できる GUI を実現する。
-バックエンド（Core/API）は変更せず、GUI adapter 層のみ更新する。
+- 26.1 Stage2 で特定したギャップを解消し、UC-1〜UC-10 の操作完遂性を高める。
+- Core/API を変更せず、GUI adapter 層の改善に限定する。
 
 ### 前提
-
-- Phase 26.1 Stage 1 完了（JST / Export DL / Learning Curves 修正済み）
-- Core/API 非変更。GUI adapter 層のみ更新
-
----
-
-### 実装固定方針（2026-02-17）
-
-Phase 26.2 は **6 ステップ**で実施する。
-**Step 0（Notebook 課題洗い出し）** → Step 1〜5（GUI 改修）の順に進める。
-
----
-
-### Step 0: Notebook による課題洗い出し
-
-**目的**: GUI を変更する前に、全ユースケースを Notebook 上で実際に操作し、
-課題を体系的に洗い出す。設計判断の根拠を記録し、Step 1〜5 の優先度を確定する。
-
-**成果物**: `notebooks/phase26_2_ux_audit.ipynb`
-
-**Notebook セル構成**:
-
-1. **セットアップ** — GUI ページモジュールの import、テスト用データ生成
-2. **ユースケース別ウォークスルー** — 下記の各ユースケースについて:
-   - 現行レイアウト関数を呼び出してコンポーネントツリーを出力
-   - 初学者が迷うポイントをマークダウンセルで記録
-   - 必須入力項目 vs 実際の UI 要素のマッピング確認
-   - ガードレール発火条件の確認（`GuardRailChecker` を直接呼び出し）
-3. **ギャップ分類** — 発見した課題を以下のカテゴリに分類:
-   - (A) ヘルプテキスト不足（説明がない）
-   - (B) 動的ガイド不足（タスクタイプ別の条件表示がない）
-   - (C) 推奨値・プリセット不足（デフォルト値の根拠が不明）
-   - (D) 導線不足（次のアクションが分からない）
-4. **優先度確定** — Phase 26.1 Stage 2 のギャップ一覧（P0〜P2）と Notebook 発見を統合し、
-   Step 1〜5 の実装優先度を最終確定
-5. **ヘルプテキスト素案** — 各画面に追加するテキスト・ツールチップの原文を下書き
-
-**対象ユースケース（Notebook で検証）**:
-
-| # | ユースケース | 検証観点 |
-|---|---|---|
-| UC-1 | Regression 学習・評価 | 基本フロー完遂、最低限入力で動作するか |
-| UC-2 | Binary チューニング学習・評価 | tuning 設定の到達容易性、objective 説明 |
-| UC-3 | Frontier 学習・評価 | Alpha 設定の意味理解、frontier 固有の導線 |
-| UC-4 | DR 因果推論（効果推定） | estimand/treatment/unit_id の入力ガイド |
-| UC-5 | DR-DiD 因果推論 | panel/repeated_cs 条件、time_col/post_col 設定 |
-| UC-6 | DR 因果推論 + パラメータ最適化 | balance_priority 等の objective 選択基準 |
-| UC-7 | 学習済みモデルの予測値算出 | evaluate action への到達、データ指定方法 |
-| UC-8 | 学習済みモデルの別データ再評価 | 特徴量一致チェックの可視化 |
-| UC-9 | モデルエクスポート（Python/ONNX） | export action 導線、Runs/Results からのショートカット |
-| UC-10 | HTML/Excel レポート出力 | ダウンロード導線（26.1 修正後の動作確認） |
-
-**完了条件**:
-- Notebook が実行可能（エラーなし）であること
-- 各ユースケースのギャップが (A)〜(D) カテゴリで分類されていること
-- Step 1〜5 の実装優先度が確定し、ヘルプテキスト素案が記録されていること
-
----
-
-### Step 1: 共通ヘルプUIコンポーネント基盤
-
-**目的**: 全画面で再利用する UI パーツを整備し、Step 2〜5 の実装を効率化する。
-
-**新規ファイル**: `src/veldra/gui/components/help_ui.py`
-
-**コンポーネント一覧**:
-
-| コンポーネント | 用途 | 実装 |
-|---|---|---|
-| `help_icon(topic_key)` | パラメータ横の ℹ️ アイコン + ツールチップ | `dbc.Badge` + `dbc.Tooltip` |
-| `context_card(title, body, variant)` | ユースケース別の説明カード | `dbc.Card(color=variant)` |
-| `recommendation_badge(text, level)` | 推奨値バッジ（info/warning） | `dbc.Badge` |
-| `guide_alert(messages, severity)` | 複数メッセージをまとめるガイドアラート | `dbc.Alert` with list |
-
-**ヘルプテキスト定義**: `src/veldra/gui/components/help_texts.py`
-
-```python
-HELP_TEXTS: dict[str, dict[str, str]] = {
-    # Target page
-    "task_type_regression": {
-        "short": "連続値（売上、気温等）を予測",
-        "detail": "目的変数が連続値の場合に選択します。評価指標: RMSE, MAE, R²",
-    },
-    "task_type_binary": {
-        "short": "2値（購入/非購入等）を分類",
-        "detail": "目的変数が0/1の2値の場合に選択します。評価指標: AUC, F1, Precision, Recall",
-    },
-    # ... 全パラメータ分を定義
-}
-```
-
-**テスト**: `tests/test_gui_help_ui.py`
-- 各コンポーネントがレンダリング可能であること
-- `HELP_TEXTS` の全キーが `short` と `detail` を持つこと
-
----
-
-### Step 2: Target ページ — タスクタイプ別ガイド強化
-
-**対象ファイル**: `src/veldra/gui/pages/target_page.py`, `src/veldra/gui/app.py`
-
-**変更内容**:
-
-1. **タスクタイプ説明の追加**
-   - RadioItems の各選択肢の右側に `help_icon()` を配置
-   - 選択中のタスクタイプに応じた `context_card()` を動的表示
-   - Frontier 選択時: Alpha パラメータの意味と推奨値（0.90, 0.50）を表示
-
-2. **Causal モード専用ガイド**
-   - Causal Switch ON 時に DR vs DR-DiD の使い分け `context_card` を表示:
-     - DR: 「クロスセクションデータで処置効果を推定する場合」
-     - DR-DiD: 「前後比較（パネル/繰り返しクロスセクション）で処置効果を推定する場合」
-   - Treatment 列ドロップダウン横に「バイナリ変数（0/1）が必要」のバリデーションヒント
-   - Unit ID 列ドロップダウン横に「パネルデータの場合に個体を識別する列」の説明
-
-3. **除外列ガイド**
-   - 「目的変数と直接的な因果関係がなく、リーク原因になりうる列を除外します」の説明追加
-
-**コールバック変更**（`app.py`）:
-- `_cb_target_guardrails` にタスクタイプ別のガイドメッセージ生成を追加
-- Causal 有効時の必須入力チェック強化（treatment 列未選択で warning）
-
-**テスト追加**: `tests/test_gui_target_page.py`
-- Frontier 選択時に Alpha ガイドが表示されること
-- Causal ON 時に DR/DR-DiD ガイドが表示されること
-- Treatment 列未選択でガードレール warning が発火すること
-
----
-
-### Step 3: Validation ページ — 分割方式ガイド + 必須条件ガード
-
-**対象ファイル**: `src/veldra/gui/pages/validation_page.py`, `src/veldra/gui/app.py`
-
-**変更内容**:
-
-1. **分割方式比較ガイド**
-   - 分割タイプ選択の上部に折りたたみ式 `context_card` を配置:
-     - KFold: 「標準的な交差検証。データの順序に意味がない場合に使用」
-     - Stratified: 「分類タスクでクラス比率を維持する交差検証。Binary/Multiclass 推奨」
-     - Group: 「同一グループのデータが学習・検証に分かれないようにする分割」
-     - TimeSeries: 「時系列データで未来のデータが学習に混入しないようにする分割」
-
-2. **TimeSeries パラメータ説明**
-   - `gap`: 「学習データと検証データの間に設ける空白期間（リーク防止）」+ `help_icon`
-   - `embargo`: 「検証データ後の一定期間を次の学習に使わない（自己相関対策）」+ `help_icon`
-   - `expanding` vs `blocked`: 「expanding: 学習データが累積 / blocked: 固定長ウィンドウ」
-
-3. **タスクタイプ連動の推奨表示**
-   - Binary/Multiclass → 「Stratified KFold を推奨します」の `recommendation_badge`
-   - Causal → 「KFold を推奨します（Stratified は処置変数の分布を歪める可能性）」
-   - TimeSeries タスク → TimeSeries 分割が自動選択 + 説明表示
-
-**コールバック変更**（`app.py`）:
-- `_cb_validation_guardrails` にタスクタイプ別推奨分割との不一致 warning を追加
-- Causal + Stratified の組み合わせで info レベル注意喚起
-
-**テスト追加**: `tests/test_gui_validation_page.py`
-- Binary タスクで Stratified 推奨バッジが表示されること
-- TimeSeries 選択時に gap/embargo 説明が表示されること
-- Causal + Stratified で注意喚起が表示されること
-
----
-
-### Step 4: Train ページ — パラメータ説明 + Objective テンプレート
-
-**対象ファイル**: `src/veldra/gui/pages/train_page.py`, `src/veldra/gui/app.py`
-
-**変更内容**:
-
-1. **LightGBM パラメータ説明**
-   - 各パラメータ入力の横に `help_icon()` を配置:
-     - `learning_rate`: 「学習率。小さいほど精度向上の可能性があるが学習が遅くなる。推奨: 0.01〜0.1」
-     - `num_leaves`: 「木の葉数。大きいほど表現力が上がるが過学習リスク増。推奨: 31〜127」
-     - `max_depth`: 「木の最大深さ。-1で無制限。num_leaves と併用で過学習制御」
-     - `min_child_samples`: 「葉ノードの最小サンプル数。大きいほど過学習防止。推奨: 20〜100」
-     - `early_stopping_rounds`: 「検証指標が改善しない連続ラウンド数で学習を打ち切る」
-
-2. **パラメータプリセットボタン**
-   - `dbc.ButtonGroup` で「Conservative（過学習防止優先）」「Balanced（バランス）」を配置
-   - Conservative: `learning_rate=0.01, num_leaves=31, min_child_samples=50`
-   - Balanced: `learning_rate=0.05, num_leaves=63, min_child_samples=20`
-   - ボタン押下で各入力フィールドに値を反映するコールバック
-
-3. **Tuning Objective 説明**
-   - Objective ドロップダウンの各選択肢に説明を付与（`dcc.Dropdown` の `title` 属性または下部表示）:
-     - Regression: `rmse`（二乗誤差、外れ値に敏感）, `mae`（絶対誤差、外れ値に頑健）
-     - Binary: `auc`（識別力）, `f1`（精度と再現率のバランス）, `logloss`（確率精度）
-     - Frontier: `pinball`（分位点回帰の標準損失）
-     - Causal DR: `dr_balance_priority`（SMDバランス優先）, `dr_std_error`（標準誤差最小化）, `dr_overlap_penalty`（Overlap確保）
-     - Causal DR-DiD: `drdid_balance_priority` / `drdid_std_error` / `drdid_overlap_penalty`
-   - 選択中の objective に応じた `context_card` で推奨ユースケースを表示
-
-4. **Tuning プリセット説明**
-   - Fast: 「探索範囲を狭めて高速に完了（初回探索向け）」
-   - Standard: 「広い探索範囲で網羅的に探索（本番向け）」
-
-**コールバック変更**（`app.py`）:
-- パラメータプリセット適用コールバック追加
-- Objective 選択連動の説明カード更新コールバック追加
-
-**テスト追加**: `tests/test_gui_train_page.py`
-- 各パラメータに `help_icon` が存在すること
-- Conservative プリセット適用で値が正しくセットされること
-- Causal objective 選択時に説明カードが表示されること
-
----
-
-### Step 5: Run ページ — Action プリセット導線 + Runs/Results ショートカット
-
-**対象ファイル**: `src/veldra/gui/pages/run_page.py`, `src/veldra/gui/pages/runs_page.py`, `src/veldra/gui/pages/results_page.py`, `src/veldra/gui/app.py`
-
-**変更内容**:
-
-1. **Run ページ: Action 手動オーバーライド**
-   - 現行の自動検出ロジック（`_cb_detect_run_action`）は維持
-   - 自動検出結果の横に「変更」リンクを追加し、手動切替可能にする
-   - 各 Action の説明バッジ:
-     - `fit`: 「モデル学習（交差検証）を実行」
-     - `tune`: 「Optuna によるパラメータ最適化 + 学習」
-     - `evaluate`: 「学習済みモデルで新データを予測・評価」
-     - `simulate`: 「反実仮想シミュレーションを実行」
-     - `export`: 「モデルを Python/ONNX 形式でエクスポート」
-     - `estimate_dr`: 「Doubly Robust 法で因果効果を推定」
-
-2. **Run ページ: 実行前チェック結果の視認性向上**
-   - ガードレール結果を severity 順（error → warning → info）に固定表示
-   - error がある場合は Launch ボタンを disabled にし、理由を明示
-   - 修正すべき画面へのリンク（「Target ページで修正 →」）を表示
-
-3. **Runs ページ: アクションボタン説明追加**
-   - Clone: 「選択した Run の設定を Train 画面にコピーします」のツールチップ
-   - Delete: 「選択した Run の履歴を削除します（モデルファイルは残ります）」
-   - Compare: 「2つの Run を選択して指標・設定を比較します」
-   - Migrate: 「設定ファイルを最新バージョンに変換します」
-   - Clone 実行後に `guide_alert` で「Train 画面で設定を確認して再実行してください」を表示
-
-4. **Results ページ: 再評価導線の改善**
-   - Re-evaluate ボタンの上に説明: 「別のデータセットでモデルの性能を検証します」
-   - データパス入力時に特徴量一致チェックの事前診断結果を表示
-   - Export ボタン横に形式説明: Excel（「特徴量重要度・予測値・残差をシート別に出力」）/ HTML（「自己完結型のレポートファイル」）
-
-5. **Runs/Results → Export/Re-evaluate ショートカット**
-   - Runs テーブルの各行に「Export」「Re-evaluate」アイコンボタンを追加
-   - クリックで Results ページに遷移し、対応アクションをハイライト
-
-**コールバック変更**（`app.py`）:
-- Action 手動オーバーライドコールバック追加
-- ガードレール結果の severity ソート + 修正リンク生成
-- Runs テーブルのショートカットボタンコールバック追加
-
-**テスト追加**:
-- `tests/test_gui_run_presets.py`（新規）: Action 手動切替が動作すること、説明バッジが表示されること
-- `tests/test_gui_runs_page.py`: Clone 後のガイドアラートが表示されること
-- `tests/test_gui_results_enhanced.py`: Re-evaluate 説明と Export 形式説明が表示されること
-
----
-
-### 対象ファイル一覧
-
-| ファイル | Step | 変更内容 |
-|---|---|---|
-| `notebooks/phase26_2_ux_audit.ipynb` | 0 | 新規: 全ユースケースのウォークスルーと課題洗い出し |
-| `src/veldra/gui/components/help_ui.py` | 1 | 新規: 共通ヘルプUIコンポーネント（help_icon, context_card, recommendation_badge, guide_alert） |
-| `src/veldra/gui/components/help_texts.py` | 1 | 新規: 全パラメータのヘルプテキスト定義 |
-| `src/veldra/gui/pages/target_page.py` | 2 | タスクタイプ説明、Causal ガイド、除外列説明の追加 |
-| `src/veldra/gui/pages/validation_page.py` | 3 | 分割方式比較ガイド、TimeSeries パラメータ説明、推奨分割表示 |
-| `src/veldra/gui/pages/train_page.py` | 4 | パラメータ help_icon、プリセットボタン、Objective 説明 |
-| `src/veldra/gui/pages/run_page.py` | 5 | Action 手動オーバーライド、説明バッジ、ガードレール視認性向上 |
-| `src/veldra/gui/pages/runs_page.py` | 5 | アクションボタンツールチップ、ショートカットボタン |
-| `src/veldra/gui/pages/results_page.py` | 5 | Re-evaluate 導線改善、Export 形式説明 |
-| `src/veldra/gui/app.py` | 2-5 | 各 Step のコールバック追加・修正 |
-| `tests/test_gui_help_ui.py` | 1 | 新規: ヘルプUIコンポーネントのテスト |
-| `tests/test_gui_run_presets.py` | 5 | 新規: Action プリセット導線のテスト |
-| `tests/test_gui_target_page.py` | 2 | Causal/Frontier ガイド表示のテスト追加 |
-| `tests/test_gui_validation_page.py` | 3 | 分割推奨・条件表示のテスト追加 |
-| `tests/test_gui_train_page.py` | 4 | パラメータ help_icon・プリセットのテスト追加 |
-| `tests/test_gui_runs_page.py` | 5 | アクション説明・ショートカットのテスト追加 |
-| `tests/test_gui_results_enhanced.py` | 5 | 導線改善のテスト追加 |
-
----
-
-### テスト計画
-
-| テスト | 内容 | ファイル |
-|---|---|---|
-| ヘルプUIコンポーネント | 各コンポーネントのレンダリング、HELP_TEXTS の網羅性 | `tests/test_gui_help_ui.py` |
-| Target ガイド | タスクタイプ別説明、Causal ガイド、除外列説明 | `tests/test_gui_target_page.py` |
-| Validation ガイド | 分割方式比較、TimeSeries 説明、推奨分割表示 | `tests/test_gui_validation_page.py` |
-| Train ガイド | パラメータ help_icon、プリセット適用、Objective 説明 | `tests/test_gui_train_page.py` |
-| Run プリセット | Action 手動切替、説明バッジ、ガードレール severity ソート | `tests/test_gui_run_presets.py` |
-| Runs ショートカット | Clone ガイド、Export/Re-evaluate ショートカット | `tests/test_gui_runs_page.py` |
-| Results 導線 | Re-evaluate 説明、Export 形式説明 | `tests/test_gui_results_enhanced.py` |
-| 後方互換 | 既存 GUI テストが全パス | 既存テスト群 |
-
-### 検証コマンド
-
-- `uv run pytest tests/test_gui_help_ui.py -v`
-- `uv run pytest tests/test_gui_target_page.py tests/test_gui_validation_page.py tests/test_gui_train_page.py -v`
-- `uv run pytest tests/test_gui_run_presets.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py -v`
-- `uv run pytest tests -x --tb=short`
-
----
-
-### 完了条件
-
-1. **Step 0**: Notebook が実行可能で、全ユースケースのギャップが分類・記録されていること。
-2. **Step 1**: 共通ヘルプUIコンポーネントが作成され、テストがパスすること。
-3. **Step 2**: Target ページでタスクタイプ別・Causal 別のガイドが表示されること。
-4. **Step 3**: Validation ページで分割方式の比較ガイドと推奨表示が動作すること。
-5. **Step 4**: Train ページでパラメータ説明、プリセット、Objective 説明が表示されること。
-6. **Step 5**: Run/Runs/Results で Action 説明、ショートカット、導線改善が動作すること。
-7. **後方互換**: 既存 GUI テストが全パスし、Stable API の互換性が維持されること。
-8. **UX 改善**: 主要ユースケース（学習/チューニング/因果推定/再評価/エクスポート）で、手入力必須項目が現状比で減少していること。
-
-### 実装完了状況（2026-02-17）
-
-- Step 0: `notebooks/phase26_2_ux_audit.ipynb` を追加し、UC-1〜UC-10 の監査テンプレートを整備。
-- Step 1: `help_ui.py` / `help_texts.py` を追加し、ヘルプUI再利用基盤を導入。
-- Step 2: Target に task/causal/frontier ガイドと causal 必須入力ガードを追加。
-- Step 3: Validation に split 比較ガイド、timeseries 補助説明、推奨バッジ表示を追加。
-- Step 4: Train に主要パラメータ help、Conservative/Balanced プリセット、objective 説明カードを追加。
-- Step 5: Run に manual override と pre-run guardrail 表示、Runs に Export/Re-evaluate ショートカット、Results に再評価前 feature schema 診断を追加。
-- 互換性: `veldra.api.*` の公開シグネチャは未変更。RunConfig/Artifact 契約は維持。
-
-### 補正フェーズ完了状況（2026-02-17）
-
-- 補正背景: 上記 Step 0 は「監査テンプレート整備」までで止まっており、UC-1〜UC-10 の実実行証跡と GUI 同等性検証が不足していた。
-- 補正方針: Phase26.2 の完了基準を「Notebook実行証跡 + GUI parity pass（到達+成果物一致）」へ再定義した。
-- Step 0（補正版）:
-  - `notebooks/phase26_2_ux_audit.ipynb` を監査ハブに再編。
-  - UC別 Notebook を 10 冊追加。
-    - `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb`
-    - `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb`
-    - `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb`
-    - `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb`
-    - `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb`
-    - `notebooks/phase26_2_uc06_causal_dr_tune.ipynb`
-    - `notebooks/phase26_2_uc07_artifact_evaluate.ipynb`
-    - `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb`
-    - `notebooks/phase26_2_uc09_export_python_onnx.ipynb`
-    - `notebooks/phase26_2_uc10_export_html_excel.ipynb`
-  - 実行証跡を `notebooks/phase26_2_execution_manifest.json` に固定。
-- Step 2（補正版）:
-  - Notebook 実行契約テストを追加。
-    - `tests/test_notebook_phase26_2_uc_structure.py`
-    - `tests/test_notebook_phase26_2_execution_evidence.py`
-    - `tests/test_notebook_phase26_2_paths.py`
-- Step 3/4（補正版）:
-  - Playwright E2E 基盤を追加。
-    - `tests/e2e_playwright/conftest.py`
-    - `tests/e2e_playwright/test_uc01_regression_flow.py` ... `tests/e2e_playwright/test_uc10_export_html_excel_flow.py`
-  - pytest marker を追加。
-    - `gui_e2e`（全面E2E）
-    - `gui_smoke`（CIスモーク: UC-1/UC-8/UC-10）
-- Step 5（補正版）:
-  - 同等性レポートを追加。
-    - `docs/phase26_2_parity_report.md`
-  - Optional 依存の graceful degradation を manifest と parity report に明示（例: `openpyxl` 未導入時の Excel export）。
+- 26.1 Stage1 完了（JST / Export DL / Learning Curves 修正済み）。
+
+### 実装固定方針（confirmed, 2026-02-17）
+- Step0（Notebook 監査）-> Step1〜5（GUI 改修）の順で実施する。
+
+### 実装結果（要約）
+- Step0: 監査基盤
+  - `notebooks/phase26_2_ux_audit.ipynb` で UC 監査枠組みを整備。
+- Step1: 共通ヘルプUI
+  - `help_ui.py` / `help_texts.py` を追加し、説明表示の再利用基盤を導入。
+- Step2: Target 強化
+  - task/causal/frontier ガイドと causal 必須入力チェックを追加。
+- Step3: Validation 強化
+  - split 比較ガイド、timeseries 補助説明、推奨バッジを追加。
+- Step4: Train 強化
+  - 主要パラメータ help、Conservative/Balanced プリセット、objective 説明カードを追加。
+- Step5: Run/Runs/Results 導線強化
+  - run action manual override、pre-run guardrail 可視化、runs shortcut、results 再評価前 precheck を追加。
+
+### 補正フェーズ（2026-02-17）
+- 完了基準を「テンプレート整備」から「実行証跡 + parity 検証」へ補正した。
+- 追加成果物:
+  - UC別 Notebook 10 本（`phase26_2_uc01`〜`phase26_2_uc10`）
+  - 実行証跡 `notebooks/phase26_2_execution_manifest.json`
+  - Notebook 契約テスト（構造/証跡/パス）
+  - Playwright E2E（UC-1〜UC-10）と `gui_e2e` / `gui_smoke` marker
+  - 同等性レポート `docs/phase26_2_parity_report.md`
+
+### 完了条件（要約）
+1. Step0-5 の GUI 改修が反映され、UC-1〜UC-10 の到達導線が確認できること。
+2. Notebook 実行証跡と parity レポートが更新されていること。
+3. Stable API / RunConfig / Artifact 契約を維持していること。
+
+### 運用メモ
+- Phase26〜26.2 の詳細な時系列・判断理由・テスト実績は `HISTORY.md` を正とする。
 
 ## 13.3 Phase26.3: ユースケース詳細化
 
@@ -2286,6 +997,165 @@ uv run pytest tests -x --tb=short
 - 内容: `tuning.metrics_candidates` は tuning objective 許可セットとは独立した task 別許可セットで検証する（regression: `rmse/huber/mae`, binary: `logloss/auc`, multiclass: `multi_logloss/multi_error`）。
 - 理由: モニタリング/診断用 metrics 候補と最適化 objective の責務を分離し、設計意図と実装契約を一致させるため。
 - 影響範囲: `src/veldra/config/models.py` / `tests/test_phase263_config_extensions.py` / `tests/test_runconfig_validation.py`
+
+### Phase26.3 実装評価（2026-02-17）
+
+#### 完了状況
+
+Phase26.3 の全 6 Step を完了。テスト **27 passed, 0 failed**。
+
+| Step | 内容 | 状況 |
+|---|---|---|
+| Step 1 | `veldra.diagnostics` パッケージ新設（7 モジュール） | 完了 |
+| Step 2 | `observation_table` を全 TrainingOutput + Artifact に追加 | 完了 |
+| Step 3 | 因果推定層の nuisance 診断拡張 | 完了 |
+| Step 4 | Notebook 詳細化（UC-1〜UC-6 + UC-11/UC-12 新規） | 完了 |
+| Step 5 | UC-7/UC-8 の診断出力追加 | 完了 |
+| Step 6 | 実行証跡 manifest + 契約テスト | 完了 |
+
+#### 残課題（Phase26.4 へ引き継ぎ）
+
+1. **Notebook の教育的品質が低い**: 自動生成 Notebook（UC-1〜UC-12）は実行証跡としては十分だが、学習教材としては不十分（概念説明なし、パラメーター未解説、結果解釈なし）。
+2. **手書き Workflow Notebook との品質格差**: `*_analysis_workflow.ipynb` 群は教育的品質 7-8/10 だが、Phase26 UC Notebook は 0-2/10。
+3. **テストカバレッジの偏り**: 統合テスト 90% 超だが、ユニットテスト（特に core API happy path、エッジケース、数値安定性）が不足。
+
+---
+
+## 13.4 Phase26.4: Notebook 教育化 & テスト品質強化
+
+### 目的
+
+Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初学者向け教材**として再構成し、併せて**テストカバレッジの構造的ギャップ**を解消する。
+
+### 前提
+
+- Notebook の2系統（自動生成 UC 系 / 手書き Workflow 系）は統合せず、役割を明確に分離する。
+- UC 系は「実行証跡 + クイックリファレンス」として維持し、教育的補強を最小限に留める。
+- Workflow 系を「公式チュートリアル」として位置づけ、重点的に教育品質を向上させる。
+- テスト追加は既存の公開 API シグネチャを変更しない。
+- 命名規約は **英語スネークケース** を採用し、ユーザー向け名称から `phase26` 識別子を除去する。
+- Notebook 配置は `notebooks/tutorials` と `notebooks/quick_reference` の 2 系統に分離する。
+- 旧ファイル名は **1リリース互換** として root 配下に残し、`Moved to ...` を明記した互換スタブへ置換する。
+
+---
+
+### 実装ステップ（Step 0-6）
+
+#### Step 0: 設計記録更新（先行）
+
+- 本節（13.4）に命名再編方針、実装順序、互換期限を明記する。
+- `HISTORY.md` に以下の Decision を記録する。
+  - `Decision: confirmed` 命名規約（英語スネークケース）と配置規約（tutorials / quick_reference）
+  - `Decision: provisional` 旧名スタブ撤去時期（次期リリースで確定）
+
+#### Step 1: Notebook 配置再編と互換スタブ整備
+
+##### 1-1. Workflow → Tutorials（canonical）
+
+| 旧ファイル | 新ファイル（canonical） |
+|---|---|
+| `notebooks/regression_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_01_regression_basics.ipynb` |
+| `notebooks/binary_tuning_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_02_binary_classification_tuning.ipynb` |
+| `notebooks/frontier_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_03_frontier_quantile_regression.ipynb` |
+| `notebooks/simulate_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_04_scenario_simulation.ipynb` |
+| `notebooks/lalonde_dr_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_05_causal_dr_lalonde.ipynb` |
+| `notebooks/lalonde_drdid_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_06_causal_drdid_lalonde.ipynb` |
+| （新規） | `notebooks/tutorials/tutorial_00_quickstart.ipynb` |
+| （新規） | `notebooks/tutorials/tutorial_07_model_evaluation_guide.ipynb` |
+
+##### 1-2. UC 実行証跡 → Quick Reference（canonical）
+
+| 旧ファイル | 新ファイル（canonical） |
+|---|---|
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | `notebooks/quick_reference/reference_02_binary_tune_evaluate.ipynb` |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_03_frontier_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | `notebooks/quick_reference/reference_04_causal_dr_estimate.ipynb` |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | `notebooks/quick_reference/reference_05_causal_drdid_estimate.ipynb` |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | `notebooks/quick_reference/reference_06_causal_dr_tune.ipynb` |
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | `notebooks/quick_reference/reference_07_artifact_evaluate.ipynb` |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` |
+| `notebooks/phase26_2_uc09_export_python_onnx.ipynb` | `notebooks/quick_reference/reference_09_export_python_onnx.ipynb` |
+| `notebooks/phase26_2_uc10_export_html_excel.ipynb` | `notebooks/quick_reference/reference_10_export_html_excel.ipynb` |
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_ux_audit.ipynb` | `notebooks/reference_index.ipynb` |
+
+##### 1-3. 互換スタブ
+
+- 旧名 Notebook は root 配下に残し、冒頭セルを `Moved to ...` + 互換期限（1リリース）へ差し替える。
+- `rg --files notebooks | rg "phase26_.*\\.ipynb"` のヒットは互換スタブのみを許容条件とする。
+
+#### Step 2: Tutorials の教育強化（Part A-1 + A-3）
+
+- 対象: `tutorial_01`〜`tutorial_06` + 新規 `tutorial_00`, `tutorial_07`
+- 全 tutorial に共通して以下を追加する。
+  - Concept primer
+  - Config 解説表
+  - 結果解釈セル
+  - If-then 感度分析セル
+  - よくある失敗
+  - Further reading
+
+#### Step 3: Quick Reference 12本の整備（Part A-2）
+
+- `scripts/generate_phase263_notebooks.py` の出力先を `notebooks/quick_reference` に変更する。
+- 各 notebook に以下を追加する。
+  - 冒頭 3行の Overview
+  - Config コメント
+  - 出力注釈
+  - 対応 tutorial へのリンク
+- `notebooks/phase26_3_execution_manifest.json` の `notebook` フィールドは canonical パスへ更新する。
+- `examples/out/phase26_2_*` / `examples/out/phase26_3_*` は互換維持のため変更しない。
+
+#### Step 4: テスト品質強化（Part B）
+
+##### P0
+- `tests/test_runner_fit_happy.py`
+- `tests/test_runner_evaluate_happy.py`
+- `tests/test_runner_predict_happy.py`
+- `tests/test_runner_tune_happy.py`
+- `tests/test_edge_cases.py`
+
+##### P1
+- `tests/test_numerical_stability.py`
+- `tests/test_config_cross_field.py`
+- `tests/conftest.py` fixture 追加
+  - `unbalanced_binary_frame`
+  - `categorical_frame`
+  - `timeseries_frame`
+  - `missing_values_frame`
+  - `outlier_frame`
+
+##### P2
+- `tests/test_data_loader_robust.py`
+
+#### Step 5: 既存参照の全面更新
+
+- `README.md` の notebook 導線を canonical 名へ更新。
+- `docs/phase26_2_parity_report.md` の notebook パスを canonical 名へ更新。
+- Notebook 構造/契約テスト（`tests/test_notebook_*`）の対象パスを canonical 名へ更新。
+- `tests/e2e_playwright/conftest.py` の manifest ファイル名（`phase26_2_execution_manifest.json`）は据え置く。
+
+#### Step 6: 受け入れ確認
+
+```bash
+uv run pytest tests/test_runner_fit_happy.py tests/test_runner_evaluate_happy.py tests/test_runner_predict_happy.py tests/test_runner_tune_happy.py -v
+uv run pytest tests/test_edge_cases.py tests/test_numerical_stability.py tests/test_config_cross_field.py tests/test_data_loader_robust.py -v
+uv run pytest tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_3_uc_structure.py -v
+uv run pytest tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e -v
+uv run pytest tests -x --tb=short
+```
+
+### 完了条件
+
+1. `notebooks/tutorials` / `notebooks/quick_reference` の canonical Notebook が全件存在する。
+2. `notebooks/reference_index.ipynb` が tutorial / quick reference を全件リンクする。
+3. 旧名 notebook が互換スタブとして残り、移行先と互換期限を明記している。
+4. quick reference 12本が `Setup / Workflow / Result Summary / SUMMARY` を維持している。
+5. tutorial 8本が教育セクション（Concept primer など）を含む。
+6. `phase26_3_execution_manifest.json` の `notebook` パスが canonical を指し、対象 UC は `passed` で outputs が実在する。
+7. Part B の新規テストがパスし、`veldra.api.*` の公開シグネチャ互換を維持している。
 
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム

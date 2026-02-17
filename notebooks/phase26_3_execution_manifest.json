@@ -5,7 +5,7 @@
     {
       "uc": "UC-1",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/train.csv",
@@ -36,7 +36,7 @@
     {
       "uc": "UC-2",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_02_binary_tune_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/artifacts_fit/e13aafedb4a448cab53e1a6f248a1c12",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc02_binary_tune_evaluate/train.csv",
@@ -72,7 +72,7 @@
     {
       "uc": "UC-3",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_03_frontier_fit_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/artifacts/02fcf683212e45d098f89e510a258829",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc03_frontier_fit_evaluate/train.csv",
@@ -102,7 +102,7 @@
     {
       "uc": "UC-4",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc04_causal_dr_estimate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_04_causal_dr_estimate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/artifacts/causal/656a563ef8774d4f929713ff0da65927",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc04_causal_dr_estimate/metrics.csv",
@@ -134,7 +134,7 @@
     {
       "uc": "UC-5",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_05_causal_drdid_estimate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/artifacts/causal/6db808634c0f4f8f86ddfaf9d0020648",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc05_causal_drdid_estimate/metrics.csv",
@@ -162,7 +162,7 @@
     {
       "uc": "UC-6",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc06_causal_dr_tune.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_06_causal_dr_tune.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/artifacts/tuning/regression_tune_8ca7bd7cd87c",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc06_causal_dr_tune/metrics.csv",
@@ -192,7 +192,7 @@
     {
       "uc": "UC-7",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc07_artifact_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_07_artifact_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc07_artifact_evaluate/metrics.csv",
@@ -219,7 +219,7 @@
     {
       "uc": "UC-8",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc08_artifact_reevaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc01_regression_fit_evaluate/artifacts/1a23ab40a8b84f8b8a6195db1b27ff61",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc08_artifact_reevaluate/reeval_compare.csv",
@@ -250,7 +250,7 @@
     {
       "uc": "UC-11",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/artifacts/b0feaca9a2324374bc283ff69ede3bdc",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_multiclass_fit_evaluate/train.csv",
@@ -282,7 +282,7 @@
     {
       "uc": "UC-12",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/artifacts/10b9a3342cfe48bd9eed6faa894dfc23",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_3_uc_timeseries_fit_evaluate/train.csv",
@@ -314,7 +314,7 @@
     {
       "uc": "UC-9",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc09_export_python_onnx.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_09_export_python_onnx.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc09_export_python_onnx/exports",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc09_export_python_onnx/exports/python",
@@ -325,7 +325,7 @@
     {
       "uc": "UC-10",
       "status": "passed",
-      "notebook": "/home/rem/repos/VeldraML/notebooks/phase26_2_uc10_export_html_excel.ipynb",
+      "notebook": "/home/rem/repos/VeldraML/notebooks/quick_reference/reference_10_export_html_excel.ipynb",
       "artifact_path": "/home/rem/repos/VeldraML/examples/out/phase26_2_uc10_export_html_excel/reports",
       "outputs": [
         "/home/rem/repos/VeldraML/examples/out/phase26_2_uc10_export_html_excel/reports/report.html",

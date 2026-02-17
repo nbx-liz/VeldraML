@@ -1313,3 +1313,64 @@
 - `uv run pytest -q tests/test_phase263_config_extensions.py tests/test_runconfig_validation.py tests/test_notebook_phase26_3_uc_structure.py` を通過（`37 passed`）。
 - `uv run pytest -q tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を通過（`2 passed`）。
 - `uv run pytest -q tests -m "not gui_e2e"` を通過（`584 passed, 10 deselected`）。
+
+### 2026-02-17（作業/PR: phase26.4-notebook-ux-rename-and-test-hardening）
+**背景**
+- Phase26.4 の実装着手にあたり、`phase26_*` 命名が利用者導線として理解しづらく、Notebook 情報設計の再編が必要だった。
+- Notebook 契約テストは構造寄りに偏っており、runner happy path / edge / 数値安定性 / data loader 堅牢性を補完する必要があった。
+
+**変更内容**
+- 設計更新:
+  - `DESIGN_BLUEPRINT.md` 13.4 を Step0-6 の実装順序、命名再編マップ、互換期限（1リリース）つきで具体化。
+- Notebook 再編:
+  - `notebooks/tutorials/` と `notebooks/quick_reference/` を新設し、canonical Notebook を用途別に再配置。
+  - 新規 tutorial: `tutorial_00_quickstart.ipynb`, `tutorial_07_model_evaluation_guide.ipynb` を追加。
+  - `notebooks/reference_index.ipynb` を追加し、Tutorial/Quick Reference の索引を統一。
+  - 旧名 Notebook（workflow / phase26 UC / phase26 audit）を `Moved to ...` 明記の互換スタブへ置換。
+- 生成/証跡更新:
+  - `scripts/generate_phase263_notebooks.py` を `notebooks/quick_reference/` 出力へ更新し、Overview / Learn More / Config Notes / Output Annotation を追加。
+  - `notebooks/phase26_3_execution_manifest.json` の `notebook` フィールドを canonical パスへ更新。
+- 参照更新:
+  - `README.md` の notebook 導線を `notebooks/tutorials/*` へ更新。
+  - `docs/phase26_2_parity_report.md` の Notebook 証跡パスを `notebooks/quick_reference/*` へ更新。
+  - Notebook テスト群の参照先を canonical へ更新し、互換スタブ検証を追加。
+- テスト強化:
+  - 追加: `tests/test_runner_fit_happy.py`, `tests/test_runner_evaluate_happy.py`, `tests/test_runner_predict_happy.py`, `tests/test_runner_tune_happy.py`
+  - 追加: `tests/test_edge_cases.py`, `tests/test_numerical_stability.py`, `tests/test_config_cross_field.py`, `tests/test_data_loader_robust.py`
+  - 追加: `tests/test_notebook_tutorial_catalog.py`
+  - 拡張: `tests/conftest.py` に `unbalanced_binary_frame` / `categorical_frame` / `timeseries_frame` / `missing_values_frame` / `outlier_frame` を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Notebook 命名規約は英語スネークケースとし、canonical 配置を `notebooks/tutorials` / `notebooks/quick_reference` の2系統へ固定する。
+  - 理由: 学習導線（チュートリアル）と実行証跡（クイックリファレンス）の責務を分離し、利用者が目的別に辿れるようにするため。
+  - 影響範囲: notebooks / README / docs / notebook tests / manifest notebook paths
+- Decision: provisional（暫定）
+  - 内容: 旧名 Notebook は 1リリース互換スタブとして維持し、次期リリースで削除可否を確定する。
+  - 理由: 既存リンク・運用手順の破壊を避けながら段階移行するため。
+  - 影響範囲: notebooks root 旧名ファイル群 / 移行ガイド
+
+**検証結果**
+- `uv run ruff check`（Phase26.4 変更対象の scripts/tests）を通過。
+- `uv run pytest -q`（Phase26.4 追加/更新テスト群 25ファイル）を実施し、`70 passed`。
+- `uv run pytest -q tests -m "not gui_e2e"` を実施し、`624 passed, 10 deselected`。
+- `rg --files notebooks | rg \"phase26_.*\\.ipynb\"` のヒットが互換スタブのみであることを確認。
+
+### 2026-02-17（作業/PR: docs-phase26-blueprint-compression）
+**背景**
+- `DESIGN_BLUEPRINT.md` の Phase26〜26.2 が詳細手順中心で肥大化し、現状把握に必要な要点を素早く参照しにくくなっていた。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `13 Phase 26` / `13.1 Phase 26.1` / `13.2 Phase 26.2` を要約再編。
+- 各セクションを「目的 / 固定方針 / 実装結果 / 完了条件」中心に圧縮し、詳細な手順列挙を削減。
+- 26.2 の補正フェーズ（実行証跡 + parity 検証）と成果物（Notebook群、manifest、E2E、parity report）は保持。
+- 詳細トレースは `HISTORY.md` を正とする運用メモを `DESIGN_BLUEPRINT.md` に明記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: DESIGN_BLUEPRINT の Phase26〜26.2 は「設計状態の要約」に徹し、実装手順の詳細は HISTORY に集約する。
+  - 理由: 設計書の可読性と履歴トレース性を両立するため。
+  - 影響範囲: docs
+
+**検証結果**
+- `DESIGN_BLUEPRINT.md` の 13〜13.2 が要約形で連続し、`13.3` 以降へ接続されることを確認。

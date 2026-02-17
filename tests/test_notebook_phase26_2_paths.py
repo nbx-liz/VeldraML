@@ -4,16 +4,22 @@ import json
 from pathlib import Path
 
 UC_NOTEBOOKS = {
-    "phase26_2_uc01_regression_fit_evaluate.ipynb": ["fit(", "evaluate("],
-    "phase26_2_uc02_binary_tune_evaluate.ipynb": ["tune(", "evaluate("],
-    "phase26_2_uc03_frontier_fit_evaluate.ipynb": ["fit(", "frontier"],
-    "phase26_2_uc04_causal_dr_estimate.ipynb": ["estimate_dr(", "dr"],
-    "phase26_2_uc05_causal_drdid_estimate.ipynb": ["estimate_dr(", "dr_did"],
-    "phase26_2_uc06_causal_dr_tune.ipynb": ["tune(", "dr_balance_priority"],
-    "phase26_2_uc07_artifact_evaluate.ipynb": ["Artifact.load", "evaluate("],
-    "phase26_2_uc08_artifact_reevaluate.ipynb": ["_cb_result_eval_precheck", "evaluate("],
-    "phase26_2_uc09_export_python_onnx.ipynb": ["export(", "onnx"],
-    "phase26_2_uc10_export_html_excel.ipynb": ["export_html_report", "export_excel_report"],
+    "quick_reference/reference_01_regression_fit_evaluate.ipynb": ["fit(", "evaluate("],
+    "quick_reference/reference_02_binary_tune_evaluate.ipynb": ["tune(", "evaluate("],
+    "quick_reference/reference_03_frontier_fit_evaluate.ipynb": ["fit(", "frontier"],
+    "quick_reference/reference_04_causal_dr_estimate.ipynb": ["estimate_dr(", "dr"],
+    "quick_reference/reference_05_causal_drdid_estimate.ipynb": ["estimate_dr(", "dr_did"],
+    "quick_reference/reference_06_causal_dr_tune.ipynb": ["tune(", "dr_balance_priority"],
+    "quick_reference/reference_07_artifact_evaluate.ipynb": ["Artifact.load", "evaluate("],
+    "quick_reference/reference_08_artifact_reevaluate.ipynb": [
+        "_cb_result_eval_precheck",
+        "evaluate(",
+    ],
+    "quick_reference/reference_09_export_python_onnx.ipynb": ["export(", "onnx"],
+    "quick_reference/reference_10_export_html_excel.ipynb": [
+        "export_html_report",
+        "export_excel_report",
+    ],
 }
 
 
