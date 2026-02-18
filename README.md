@@ -908,7 +908,8 @@ Coverage:
 
 ```bash
 uv run coverage erase
-uv run coverage run -m pytest -q
+uv run coverage run -m pytest -q -m "not gui and not notebook_e2e"
+uv run coverage run --append -m pytest -q -m "gui and not gui_e2e and not notebook_e2e"
 uv run coverage report -m
 ```
 
@@ -916,7 +917,7 @@ GUI coverage gate (app/services):
 
 ```bash
 uv run coverage erase
-uv run coverage run -m pytest -q tests/test_gui_* tests/test_new_ux.py
+uv run coverage run -m pytest -q -m "gui and not gui_e2e and not notebook_e2e"
 uv run coverage report -m src/veldra/gui/app.py src/veldra/gui/services.py
 ```
 

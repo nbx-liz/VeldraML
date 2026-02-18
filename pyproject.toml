@@ -74,6 +74,9 @@ markers = [
     "gui_smoke: CI smoke subset of Playwright GUI end-to-end tests",
     "notebook_e2e: Notebook execution evidence and output contract tests",
 ]
+filterwarnings = [
+    "ignore:.*joblib will operate in serial mode.*:UserWarning",
+]
 
 [tool.ruff]
 target-version = "py311"

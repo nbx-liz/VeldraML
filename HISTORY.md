@@ -1752,3 +1752,73 @@
 - `uv run ruff check src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/runs_page.py src/veldra/gui/pages/data_page.py src/veldra/gui/components/task_table.py src/veldra/gui/types.py tests/test_gui_job_store.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_job_store_perf.py` を通過。
 - `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_job_store_perf.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py` を実施（`50 passed`）。
 - `uv run pytest -q tests/test_gui_app_callbacks_internal.py tests/test_gui_results_enhanced.py tests/test_gui_pages_logic.py tests/test_gui_data_enhanced.py tests/test_gui_services_unit.py tests/test_gui_app_helpers.py` を実施（`14 passed`）。
+
+### 2026-02-18（作業/PR: phase33-gui-lazy-runtime-contract-and-marker-hardening）
+**背景**
+- GUI import 時のメモリ回帰を再発させないため、既存 lazy import を「実装依存」から「契約依存」へ固定する必要があった。
+- `gui_e2e` が `-m "not gui"` 側に混入しうる収集条件が残っており、core/gui 分離運用を厳密化する必要があった。
+
+**変更内容**
+- `src/veldra/gui/_lazy_runtime.py` を新設し、`Artifact` / runner関数 / data loader の遅延解決ロジックを共通化。
+- `src/veldra/gui/app.py` / `src/veldra/gui/services.py` の lazy 解決経路を共通ヘルパーへ寄せ、`Artifact` や `fit/evaluate` など既存 monkeypatch ポイントは維持。
+- `tests/test_gui_lazy_import_contract.py` を追加し、`import veldra.gui.app` / `import veldra.gui.services` 直後に
+  `veldra.api.runner`, `veldra.api.artifact`, `veldra.data`, `lightgbm`, `optuna`, `sklearn` が未ロードであることを subprocess で検証。
+- `tests/conftest.py` の収集フックを更新し、`tests/e2e_playwright/*` または `gui_e2e` marker を持つテストへ `gui` marker を自動付与。
+- `README.md` の Development セクションを更新し、coverage 実行を
+  `core`（`not gui and not notebook_e2e`）→`gui`（`gui and not gui_e2e and not notebook_e2e`）の2段階手順へ標準化。
+- `DESIGN_BLUEPRINT.md` の Phase33 を提案から実施計画へ更新し、DoD と provisional decision を明記。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase33 は新規機能追加ではなく、既存 lazy import 契約の固定化と marker 分離の厳密化を主目的とする。
+  - 理由: Stable API を維持しつつ、メモリ回帰とテスト運用の曖昧さを同時に抑制するため。
+  - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`, `tests/test_gui_lazy_import_contract.py`, `README.md`, `DESIGN_BLUEPRINT.md`
+- Decision: confirmed（確定）
+  - 内容: lazy runtime 共通化、cold import 契約テスト追加、`gui_e2e` の `gui` 内包、coverage 2段階運用の文書化を完了した。
+  - 理由: 既存 GUI 互換性を保ったまま、Phase33 DoD を満たせたため。
+  - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/{conftest.py,test_gui_lazy_import_contract.py}`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check src/veldra/gui/_lazy_runtime.py src/veldra/gui/app.py src/veldra/gui/services.py tests/conftest.py tests/test_gui_lazy_import_contract.py README.md DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_lazy_import_contract.py tests/test_gui_services_core.py tests/test_gui_app_additional_branches.py tests/test_gui_services_edge_cases.py` を実施（`31 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest --collect-only -q -m "not gui" tests/e2e_playwright` を実施（`no tests collected (14 deselected)`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest --collect-only -q -m "gui"` を実施（`224/754 collected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "gui and not gui_e2e and not notebook_e2e"` を実施（`210 passed, 544 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`739 passed, 15 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/e2e_playwright -m "gui_e2e"` を実施（`14 skipped`）。
+
+### 2026-02-18（作業/PR: test-warning-suppression-joblib-serial-mode）
+**背景**
+- テスト実行環境で `joblib` の multiprocessing 初期化が権限制約により `UserWarning` を出力し、回帰確認ログのノイズになっていた。
+
+**変更内容**
+- `pyproject.toml` の `tool.pytest.ini_options.filterwarnings` に
+  `joblib will operate in serial mode` の `UserWarning` 抑制ルールを追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 環境依存で非機能的な `joblib` 警告は pytest 設定で抑制する。
+  - 理由: 実害のないノイズ警告を除去し、テストログの可読性を維持するため。
+  - 影響範囲: `pyproject.toml`, テスト実行ログ
+
+**検証結果**
+- `.venv/bin/pytest -q tests/test_multiclass_edge_cases.py tests/test_gui_services_core.py` を実施（`9 passed`、該当 warning 非表示）。
+
+### 2026-02-18（作業/PR: test-io-load-reduction-system-tmp-path）
+**背景**
+- テスト実行時に CSV/Artifact の書き込みが多く、ワークスペース配下 I/O 負荷が高くなっていた。
+
+**変更内容**
+- `tests/conftest.py` の `tmp_path` fixture を更新し、既定書き込み先を system temp dir（`tempfile.gettempdir()`）配下へ変更。
+- system temp dir が利用不可な環境向けに、既存の `.pytest_tmp/cases` へフォールバックする分岐を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: テストの一時ファイルは system temp dir を優先し、妥当性を維持したまま I/O 負荷を軽減する。
+  - 理由: テスト検証内容を変えずに、重い書き込みを高速な一時領域へ寄せるため。
+  - 影響範囲: `tests/conftest.py`, テスト実行時の一時ファイル配置
+
+**検証結果**
+- `.venv/bin/pytest -q tests/test_runner_fit_happy.py tests/test_runner_tune_happy.py tests/test_gui_job_store.py` を実施（`21 passed`）。
+- `.venv/bin/pytest -q tests/test_artifact_store.py tests/test_tune_artifacts.py tests/test_observation_table.py` を実施（`9 passed`）。
+- `.venv/bin/ruff check tests/conftest.py` を通過。

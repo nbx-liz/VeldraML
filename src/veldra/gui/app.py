@@ -19,6 +19,11 @@ import plotly.graph_objs as go
 import yaml
 from dash import Input, Output, State, callback_context, dcc, html
 
+from veldra.gui._lazy_runtime import (
+    resolve_artifact_class,
+    resolve_data_loader,
+    resolve_runner_function,
+)
 from veldra.gui.components.charts import (
     plot_causal_smd,
     plot_comparison_bar,
@@ -99,10 +104,7 @@ def _get_artifact_cls() -> Any:
     global Artifact, _ARTIFACT_CLS
     if Artifact is not _ArtifactProxy:
         return Artifact
-    if _ARTIFACT_CLS is None:
-        from veldra.api.artifact import Artifact as _Artifact
-
-        _ARTIFACT_CLS = _Artifact
+    _ARTIFACT_CLS = resolve_artifact_class(cached_class=_ARTIFACT_CLS)
     return _ARTIFACT_CLS
 
 
@@ -119,18 +121,13 @@ Artifact: Any = _ArtifactProxy
 def _get_evaluate() -> Any:
     global evaluate
     if evaluate is None:
-        from veldra.api.runner import evaluate as _evaluate
-
-        evaluate = _evaluate
+        evaluate = resolve_runner_function("evaluate")
     return evaluate
 
 
 def _get_load_tabular_data() -> Any:
     global load_tabular_data
-    if load_tabular_data is None:
-        from veldra.data import load_tabular_data as _load_tabular_data
-
-        load_tabular_data = _load_tabular_data
+    load_tabular_data = resolve_data_loader(current_loader=load_tabular_data)
     return load_tabular_data
 
 

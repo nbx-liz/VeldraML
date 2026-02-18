@@ -26,6 +26,11 @@ from veldra.api.exceptions import (
 from veldra.api.logging import log_event
 from veldra.config.migrate import migrate_run_config_file, migrate_run_config_payload
 from veldra.config.models import RunConfig
+from veldra.gui._lazy_runtime import (
+    resolve_artifact_class,
+    resolve_data_loader,
+    resolve_runner_function,
+)
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.types import (
     ArtifactSummary,
@@ -59,10 +64,7 @@ def _get_artifact_cls() -> Any:
     global Artifact, _ARTIFACT_CLS
     if Artifact is not _ArtifactProxy:
         return Artifact
-    if _ARTIFACT_CLS is None:
-        from veldra.api.artifact import Artifact as _Artifact
-
-        _ARTIFACT_CLS = _Artifact
+    _ARTIFACT_CLS = resolve_artifact_class(cached_class=_ARTIFACT_CLS)
     return _ARTIFACT_CLS
 
 
@@ -88,9 +90,7 @@ def _get_runner_func(name: str) -> Any:
     }.get(name)
     if current is not None:
         return current
-    from veldra.api import runner as _runner
-
-    resolved = getattr(_runner, name)
+    resolved = resolve_runner_function(name)
     if name == "evaluate":
         evaluate = resolved
     elif name == "estimate_dr":
@@ -108,10 +108,7 @@ def _get_runner_func(name: str) -> Any:
 
 def _get_load_tabular_data() -> Any:
     global load_tabular_data
-    if load_tabular_data is None:
-        from veldra.data import load_tabular_data as _load_tabular_data
-
-        load_tabular_data = _load_tabular_data
+    load_tabular_data = resolve_data_loader(current_loader=load_tabular_data)
     return load_tabular_data
 
 
@@ -1522,9 +1519,7 @@ def compare_artifacts_multi(artifacts: list[str], baseline: str) -> dict[str, An
         metrics_map[path] = _flatten_numeric_metrics(getattr(art, "metrics", {}) or {})
 
     baseline_cfg = cfg_payloads.get(baseline, {})
-    baseline_data_obj = (
-        (baseline_cfg.get("data") or {}) if isinstance(baseline_cfg, dict) else {}
-    )
+    baseline_data_obj = (baseline_cfg.get("data") or {}) if isinstance(baseline_cfg, dict) else {}
     baseline_data = baseline_data_obj.get("path")
     baseline_split = (
         (baseline_cfg.get("split") or {}) if isinstance(baseline_cfg, dict) else {}

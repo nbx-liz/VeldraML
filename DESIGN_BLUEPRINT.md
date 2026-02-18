@@ -828,23 +828,39 @@ pytest tests/ -v --tb=short
 * Dataページを AG Grid 優先構成に拡張し、遅延読込 callback を追加。
 * housekeeping interval を追加し、archive/purge の定期実行導線を実装。
 
-## 20 Phase 33: GUIメモリ再最適化 & テスト分離（提案）
+## 20 Phase 33: GUIメモリ再最適化 & テスト分離（実施計画）
 
-### Proposal
-- GUI adapter（`veldra.gui.app` / `veldra.gui.services`）で、重量級依存
-  （`veldra.api.runner`, `veldra.api.artifact`, `veldra.data`）の eager import を再度廃止し、
-  callback 実行時に遅延解決する。
-- pytest 側で GUI テストを `gui` marker で分離し、coverage 実行を
-  `core` と `gui` の2段階で実行可能にする。
+### 要約
+- `src/veldra/gui/app.py` と `src/veldra/gui/services.py` の既存 lazy import を再固定し、
+  「cold import 時に重量モジュールを読まない」契約をテストで明文化する。
+- pytest の marker 運用を厳密化し、`gui_e2e` を常に `gui` に内包させる。
+- coverage 実行を `core` / `gui` の2段階手順として標準化する。
 
-### 理由
-- GUI import だけで高いRSSを消費すると、`coverage run -m pytest` 実行時に
-  環境次第でOOMに到達しやすくなる。
-- テストを論理分離することで、メモリ制約環境でも再現性を維持した運用がしやすくなる。
+### 実施内容
+- 新規 `src/veldra/gui/_lazy_runtime.py` を追加し、`Artifact` / runner functions /
+  `load_tabular_data` の遅延解決ロジックを共通化する。
+- `src/veldra/gui/app.py` / `src/veldra/gui/services.py` は上記ヘルパーへ統一しつつ、
+  `Artifact`, `fit`, `evaluate` 等の monkeypatch 互換ポイントを維持する。
+- `tests/conftest.py` の収集ルールを更新し、`tests/e2e_playwright/*` または
+  `gui_e2e` marker を持つテストへ `gui` marker を必ず付与する。
+- 新規テストで `import veldra.gui.app` / `import veldra.gui.services` 直後に
+  `veldra.api.runner`, `veldra.api.artifact`, `veldra.data`, `lightgbm`, `optuna`, `sklearn`
+  が未ロードであることを検証する。
 
 ### 互換性方針
 - `veldra.api.*` の公開シグネチャは変更しない。
 - GUI機能契約（callback I/O、RunConfig共通入口）は維持する。
+
+### Definition of Done
+- cold import 契約テストが green。
+- `-m "not gui"` 実行時に Playwright E2E が収集対象から除外される。
+- README に core/gui 2段階 coverage 手順が反映される。
+
+### Decision（provisional）
+- 内容: Phase33 は「新規最適化」ではなく「既存 lazy import 契約の固定化 + marker分離の厳密化」を実施する。
+- 理由: 互換性を維持しながら OOM 再発リスクとテスト運用の曖昧さを低減するため。
+- 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`,
+  `tests/test_gui_lazy_import_contract.py`, `README.md`, `HISTORY.md`
 
 ## 21. Phase34: GUI改善
 ### 目的
