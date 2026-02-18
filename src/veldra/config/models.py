@@ -89,6 +89,54 @@ class SplitConfig(BaseModel):
     embargo: int = 0
     train_size: int | None = None
 
+    @model_validator(mode="after")
+    def _validate_split_fields(self) -> "SplitConfig":
+        if self.type == "timeseries" and not self.time_col:
+            raise ValueError("split.time_col is required when split.type='timeseries'")
+
+        if self.type == "group" and not self.group_col:
+            raise ValueError("split.group_col is required when split.type='group'")
+
+        if self.type == "timeseries":
+            if self.gap < 0:
+                raise ValueError("split.gap must be >= 0 when split.type='timeseries'")
+            if self.embargo < 0:
+                raise ValueError("split.embargo must be >= 0 when split.type='timeseries'")
+            if self.test_size is not None and self.test_size < 1:
+                raise ValueError("split.test_size must be >= 1 when split.type='timeseries'")
+            if self.timeseries_mode == "blocked":
+                if self.train_size is None or self.train_size < 1:
+                    raise ValueError(
+                        "split.train_size must be >= 1 when "
+                        "split.type='timeseries' and split.timeseries_mode='blocked'"
+                    )
+            else:
+                if self.train_size is not None:
+                    raise ValueError(
+                        "split.train_size can be set only when "
+                        "split.type='timeseries' and split.timeseries_mode='blocked'"
+                    )
+        else:
+            if self.timeseries_mode != "expanding":
+                raise ValueError(
+                    "split.timeseries_mode can be customized only when split.type='timeseries'"
+                )
+            if self.test_size is not None:
+                raise ValueError(
+                    "split.test_size can be customized only when split.type='timeseries'"
+                )
+            if self.gap != 0:
+                raise ValueError("split.gap can be customized only when split.type='timeseries'")
+            if self.embargo != 0:
+                raise ValueError(
+                    "split.embargo can be customized only when split.type='timeseries'"
+                )
+            if self.train_size is not None:
+                raise ValueError(
+                    "split.train_size can be customized only when split.type='timeseries'"
+                )
+        return self
+
 
 class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -106,6 +154,51 @@ class TrainConfig(BaseModel):
     feature_weights: dict[str, float] | None = None
     top_k: int | None = None
     seed: int = 42
+
+    @model_validator(mode="after")
+    def _validate_train_fields(self) -> "TrainConfig":
+        if self.num_boost_round < 1:
+            raise ValueError("train.num_boost_round must be >= 1")
+        if not (0.0 < self.early_stopping_validation_fraction < 1.0):
+            raise ValueError(
+                "train.early_stopping_validation_fraction must satisfy 0 < value < 1"
+            )
+        if self.early_stopping_rounds is not None and self.early_stopping_rounds < 1:
+            raise ValueError("train.early_stopping_rounds must be >= 1 or None")
+        if self.auto_num_leaves:
+            if not (0.0 < self.num_leaves_ratio <= 1.0):
+                raise ValueError("train.num_leaves_ratio must satisfy 0 < value <= 1")
+            if "num_leaves" in self.lgb_params:
+                raise ValueError(
+                    "train.auto_num_leaves cannot be combined with train.lgb_params.num_leaves"
+                )
+        if self.min_data_in_leaf_ratio is not None:
+            if not (0.0 < self.min_data_in_leaf_ratio < 1.0):
+                raise ValueError(
+                    "train.min_data_in_leaf_ratio must satisfy 0 < value < 1 when set"
+                )
+            if "min_data_in_leaf" in self.lgb_params:
+                raise ValueError(
+                    "train.min_data_in_leaf_ratio cannot be combined with "
+                    "train.lgb_params.min_data_in_leaf"
+                )
+        if self.min_data_in_bin_ratio is not None:
+            if not (0.0 < self.min_data_in_bin_ratio < 1.0):
+                raise ValueError(
+                    "train.min_data_in_bin_ratio must satisfy 0 < value < 1 when set"
+                )
+            if "min_data_in_bin" in self.lgb_params:
+                raise ValueError(
+                    "train.min_data_in_bin_ratio cannot be combined with "
+                    "train.lgb_params.min_data_in_bin"
+                )
+        if self.feature_weights is not None:
+            for name, weight in self.feature_weights.items():
+                if weight <= 0:
+                    raise ValueError(
+                        f"train.feature_weights[{name!r}] must be > 0, got {weight}"
+                    )
+        return self
 
 
 class TuningConfig(BaseModel):
@@ -211,51 +304,6 @@ class RunConfig(BaseModel):
         if self.config_version < 1:
             raise ValueError("config_version must be >= 1")
 
-        if self.split.type == "timeseries" and not self.split.time_col:
-            raise ValueError("split.time_col is required when split.type='timeseries'")
-
-        if self.split.type == "group" and not self.split.group_col:
-            raise ValueError("split.group_col is required when split.type='group'")
-
-        if self.split.type == "timeseries":
-            if self.split.gap < 0:
-                raise ValueError("split.gap must be >= 0 when split.type='timeseries'")
-            if self.split.embargo < 0:
-                raise ValueError("split.embargo must be >= 0 when split.type='timeseries'")
-            if self.split.test_size is not None and self.split.test_size < 1:
-                raise ValueError("split.test_size must be >= 1 when split.type='timeseries'")
-            if self.split.timeseries_mode == "blocked":
-                if self.split.train_size is None or self.split.train_size < 1:
-                    raise ValueError(
-                        "split.train_size must be >= 1 when "
-                        "split.type='timeseries' and split.timeseries_mode='blocked'"
-                    )
-            else:
-                if self.split.train_size is not None:
-                    raise ValueError(
-                        "split.train_size can be set only when "
-                        "split.type='timeseries' and split.timeseries_mode='blocked'"
-                    )
-        else:
-            if self.split.timeseries_mode != "expanding":
-                raise ValueError(
-                    "split.timeseries_mode can be customized only when split.type='timeseries'"
-                )
-            if self.split.test_size is not None:
-                raise ValueError(
-                    "split.test_size can be customized only when split.type='timeseries'"
-                )
-            if self.split.gap != 0:
-                raise ValueError("split.gap can be customized only when split.type='timeseries'")
-            if self.split.embargo != 0:
-                raise ValueError(
-                    "split.embargo can be customized only when split.type='timeseries'"
-                )
-            if self.split.train_size is not None:
-                raise ValueError(
-                    "split.train_size can be customized only when split.type='timeseries'"
-                )
-
         if self.task.type == "frontier":
             if not (0.0 < self.frontier.alpha < 1.0):
                 raise ValueError("frontier.alpha must satisfy 0 < alpha < 1 for frontier task")
@@ -269,9 +317,6 @@ class RunConfig(BaseModel):
 
         train_fields_set = self.train.model_fields_set
         class_weight_explicit = "class_weight" in train_fields_set
-
-        if self.train.num_boost_round < 1:
-            raise ValueError("train.num_boost_round must be >= 1")
         if self.train.metrics is not None:
             if len(self.train.metrics) == 0:
                 raise ValueError("train.metrics must not be empty when set")
@@ -285,45 +330,6 @@ class RunConfig(BaseModel):
                     f"train.metrics contains unsupported values for task.type='{self.task.type}': "
                     f"{invalid_metrics}. Allowed: {sorted(_TRAIN_ALLOWED_METRICS[self.task.type])}"
                 )
-        if not (0.0 < self.train.early_stopping_validation_fraction < 1.0):
-            raise ValueError(
-                "train.early_stopping_validation_fraction must satisfy 0 < value < 1"
-            )
-        if self.train.early_stopping_rounds is not None and self.train.early_stopping_rounds < 1:
-            raise ValueError("train.early_stopping_rounds must be >= 1 or None")
-        if self.train.auto_num_leaves:
-            if not (0.0 < self.train.num_leaves_ratio <= 1.0):
-                raise ValueError("train.num_leaves_ratio must satisfy 0 < value <= 1")
-            if "num_leaves" in self.train.lgb_params:
-                raise ValueError(
-                    "train.auto_num_leaves cannot be combined with train.lgb_params.num_leaves"
-                )
-        if self.train.min_data_in_leaf_ratio is not None:
-            if not (0.0 < self.train.min_data_in_leaf_ratio < 1.0):
-                raise ValueError(
-                    "train.min_data_in_leaf_ratio must satisfy 0 < value < 1 when set"
-                )
-            if "min_data_in_leaf" in self.train.lgb_params:
-                raise ValueError(
-                    "train.min_data_in_leaf_ratio cannot be combined with "
-                    "train.lgb_params.min_data_in_leaf"
-                )
-        if self.train.min_data_in_bin_ratio is not None:
-            if not (0.0 < self.train.min_data_in_bin_ratio < 1.0):
-                raise ValueError(
-                    "train.min_data_in_bin_ratio must satisfy 0 < value < 1 when set"
-                )
-            if "min_data_in_bin" in self.train.lgb_params:
-                raise ValueError(
-                    "train.min_data_in_bin_ratio cannot be combined with "
-                    "train.lgb_params.min_data_in_bin"
-                )
-        if self.train.feature_weights is not None:
-            for name, weight in self.train.feature_weights.items():
-                if weight <= 0:
-                    raise ValueError(
-                        f"train.feature_weights[{name!r}] must be > 0, got {weight}"
-                    )
         if self.train.top_k is not None:
             if self.task.type != "binary":
                 raise ValueError("train.top_k can only be set when task.type='binary'")

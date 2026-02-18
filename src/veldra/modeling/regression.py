@@ -17,6 +17,7 @@ from sklearn.metrics import (
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling._cv_runner import TaskSpec, booster_iteration_stats, run_cv_training
 from veldra.modeling.utils import (
     resolve_auto_num_leaves,
     resolve_feature_weights,
@@ -37,14 +38,7 @@ class RegressionTrainingOutput:
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
-    current_iteration_fn = getattr(booster, "current_iteration", None)
-    current_iteration = (
-        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
-    )
-    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
-    if best_iteration <= 0:
-        best_iteration = current_iteration
-    return best_iteration, current_iteration
+    return booster_iteration_stats(booster, fallback_rounds)
 
 
 def _build_feature_frame(config: RunConfig, data: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
@@ -144,119 +138,121 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
         raise VeldraValidationError("split.type='stratified' is not supported for regression task.")
     splits = iter_cv_splits(config, data, x)
 
-    oof_pred = np.full(len(x), np.nan, dtype=float)
-    fold_ids = np.full(len(x), -1, dtype=int)
-    fold_records: list[dict[str, float | int]] = []
-    history_folds: list[dict[str, Any]] = []
+    def _fit_booster(
+        x_train: pd.DataFrame,
+        y_train: pd.Series,
+        x_valid: pd.DataFrame,
+        y_valid: pd.Series,
+        cfg: RunConfig,
+        _ctx: dict[str, Any],
+        evaluation_history: dict[str, Any],
+    ) -> lgb.Booster:
+        return _train_single_booster(
+            x_train=x_train,
+            y_train=y_train,
+            x_valid=x_valid,
+            y_valid=y_valid,
+            config=cfg,
+            evaluation_history=evaluation_history,
+        )
 
-    for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-        if len(train_idx) == 0 or len(valid_idx) == 0:
-            raise VeldraValidationError("Encountered an empty train/valid split.")
-        x_fold_train = x.iloc[train_idx]
-        y_fold_train = y.iloc[train_idx]
-        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
-            x_fold_train, y_fold_train, config
+    def _predict_valid(
+        booster: lgb.Booster,
+        x_valid: pd.DataFrame,
+        _ctx: dict[str, Any],
+    ) -> np.ndarray:
+        return np.asarray(
+            booster.predict(x_valid, num_iteration=booster.best_iteration),
+            dtype=float,
         )
-        eval_history: dict[str, Any] = {}
-        booster = _train_single_booster(
-            x_train=x_es_train,
-            y_train=y_es_train,
-            x_valid=x_es_valid,
-            y_valid=y_es_valid,
-            config=config,
-            evaluation_history=eval_history,
-        )
-        pred = booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration)
-        oof_pred[valid_idx] = pred
-        fold_ids[valid_idx] = fold_idx
-        best_iteration, num_iterations = _booster_iteration_stats(
-            booster, config.train.num_boost_round
-        )
-        history_folds.append(
+
+    def _fold_metrics(
+        y_valid: pd.Series,
+        pred: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float]:
+        y_true = y_valid.to_numpy(dtype=float)
+        return {
+            "rmse": float(np.sqrt(mean_squared_error(y_true, pred))),
+            "mae": float(mean_absolute_error(y_true, pred)),
+            "mape": float(mean_absolute_percentage_error(y_true, pred)),
+            "r2": float(r2_score(y_true, pred)),
+        }
+
+    def _fold_record(
+        fold_idx: int,
+        metrics: dict[str, float],
+        n_train: int,
+        n_valid: int,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float | int]:
+        return {
+            "fold": fold_idx,
+            "rmse": metrics["rmse"],
+            "mae": metrics["mae"],
+            "mape": metrics["mape"],
+            "r2": metrics["r2"],
+            "n_train": n_train,
+            "n_valid": n_valid,
+        }
+
+    def _mean_metrics(y_all: pd.Series, oof: np.ndarray, _ctx: dict[str, Any]) -> dict[str, float]:
+        y_true = y_all.to_numpy(dtype=float)
+        return {
+            "rmse": float(np.sqrt(mean_squared_error(y_true, oof))),
+            "mae": float(mean_absolute_error(y_true, oof)),
+            "mape": float(mean_absolute_percentage_error(y_true, oof)),
+            "r2": float(r2_score(y_true, oof)),
+        }
+
+    def _observation_table(
+        fold_ids: np.ndarray,
+        y_all: pd.Series,
+        oof: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> pd.DataFrame:
+        y_true = y_all.to_numpy(dtype=float)
+        return pd.DataFrame(
             {
-                "fold": fold_idx,
-                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
-                "num_iterations": num_iterations,
-                "eval_history": eval_history.get("valid_0", eval_history),
+                "fold_id": fold_ids,
+                "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+                "y_true": y_true,
+                "prediction": oof,
+                "residual": y_true - oof,
             }
         )
 
-        fold_rmse = float(np.sqrt(mean_squared_error(y.iloc[valid_idx], pred)))
-        fold_mae = float(mean_absolute_error(y.iloc[valid_idx], pred))
-        fold_mape = float(mean_absolute_percentage_error(y.iloc[valid_idx], pred))
-        fold_r2 = float(r2_score(y.iloc[valid_idx], pred))
-        fold_records.append(
-            {
-                "fold": fold_idx,
-                "rmse": fold_rmse,
-                "mae": fold_mae,
-                "mape": fold_mape,
-                "r2": fold_r2,
-                "n_train": int(len(train_idx)),
-                "n_valid": int(len(valid_idx)),
-            }
-        )
-
-    if np.isnan(oof_pred).any():
-        raise VeldraValidationError(
-            "OOF predictions contain missing values. Check split configuration."
-        )
-
-    mean_rmse = float(np.sqrt(mean_squared_error(y, oof_pred)))
-    mean_mae = float(mean_absolute_error(y, oof_pred))
-    mean_mape = float(mean_absolute_percentage_error(y, oof_pred))
-    mean_r2 = float(r2_score(y, oof_pred))
-    cv_results = pd.DataFrame.from_records(fold_records)
-
-    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
-        x, y, config
-    )
-    final_eval_history: dict[str, Any] = {}
-    final_model = _train_single_booster(
-        x_train=x_final_train,
-        y_train=y_final_train,
-        x_valid=x_final_valid,
-        y_valid=y_final_valid,
+    cv_out = run_cv_training(
         config=config,
-        evaluation_history=final_eval_history,
+        x=x,
+        y=y,
+        splits=splits,
+        spec=TaskSpec(
+            fit_booster=_fit_booster,
+            predict_valid=_predict_valid,
+            fold_metrics=_fold_metrics,
+            fold_record=_fold_record,
+            mean_metrics=_mean_metrics,
+            observation_table=_observation_table,
+            init_oof=lambda n_rows, _ctx: np.full(n_rows, np.nan, dtype=float),
+        ),
+        split_for_early_stopping_fn=split_for_early_stopping,
     )
-    final_best_iteration, final_num_iterations = _booster_iteration_stats(
-        final_model, config.train.num_boost_round
-    )
-    training_history = {
-        "folds": history_folds,
-        "final_model": {
-            "best_iteration": (
-                final_best_iteration if final_best_iteration > 0 else final_num_iterations
-            ),
-            "num_iterations": final_num_iterations,
-            "eval_history": final_eval_history.get("valid_0", final_eval_history),
-        },
-    }
 
     metrics = {
-        "folds": fold_records,
-        "mean": {"rmse": mean_rmse, "mae": mean_mae, "mape": mean_mape, "r2": mean_r2},
+        "folds": cv_out.fold_records,
+        "mean": cv_out.mean_metrics,
     }
-    observation_table = pd.DataFrame(
-        {
-            "fold_id": fold_ids,
-            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
-            "y_true": y.to_numpy(dtype=float),
-            "prediction": oof_pred,
-            "residual": y.to_numpy(dtype=float) - oof_pred,
-        }
-    )
     feature_schema = {
         "feature_names": x.columns.tolist(),
         "target": config.data.target,
         "task_type": config.task.type,
     }
     return RegressionTrainingOutput(
-        model_text=final_model.model_to_string(),
+        model_text=cv_out.final_model.model_to_string(),
         metrics=metrics,
-        cv_results=cv_results,
+        cv_results=cv_out.cv_results,
         feature_schema=feature_schema,
-        training_history=training_history,
-        observation_table=observation_table,
+        training_history=cv_out.training_history,
+        observation_table=cv_out.observation_table,
     )

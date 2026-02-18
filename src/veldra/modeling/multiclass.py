@@ -13,11 +13,11 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling._cv_runner import TaskSpec, booster_iteration_stats, run_cv_training
 from veldra.modeling.utils import (
     resolve_auto_num_leaves,
     resolve_feature_weights,
     resolve_ratio_params,
-    split_for_early_stopping,
 )
 from veldra.split import iter_cv_splits
 
@@ -33,14 +33,7 @@ class MulticlassTrainingOutput:
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
-    current_iteration_fn = getattr(booster, "current_iteration", None)
-    current_iteration = (
-        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
-    )
-    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
-    if best_iteration <= 0:
-        best_iteration = current_iteration
-    return best_iteration, current_iteration
+    return booster_iteration_stats(booster, fallback_rounds)
 
 
 def _to_python_scalar(value: Any) -> Any:
@@ -206,100 +199,107 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
     num_class = len(target_classes)
     splits = iter_cv_splits(config, data, x, y)
 
-    oof_proba = np.full((len(x), num_class), np.nan, dtype=float)
-    fold_ids = np.full(len(x), -1, dtype=int)
-    fold_records: list[dict[str, float | int]] = []
-    history_folds: list[dict[str, Any]] = []
-
-    for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-        if len(train_idx) == 0 or len(valid_idx) == 0:
-            raise VeldraValidationError("Encountered an empty train/valid split.")
-        x_fold_train = x.iloc[train_idx]
-        y_fold_train = y.iloc[train_idx]
-        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
-            x_fold_train, y_fold_train, config
+    def _fit_booster(
+        x_train: pd.DataFrame,
+        y_train: pd.Series,
+        x_valid: pd.DataFrame,
+        y_valid: pd.Series,
+        cfg: RunConfig,
+        ctx: dict[str, Any],
+        evaluation_history: dict[str, Any],
+    ) -> lgb.Booster:
+        return _train_single_booster(
+            x_train=x_train,
+            y_train=y_train,
+            x_valid=x_valid,
+            y_valid=y_valid,
+            config=cfg,
+            num_class=int(ctx["num_class"]),
+            evaluation_history=evaluation_history,
         )
-        eval_history: dict[str, Any] = {}
 
-        booster = _train_single_booster(
-            x_train=x_es_train,
-            y_train=y_es_train,
-            x_valid=x_es_valid,
-            y_valid=y_es_valid,
-            config=config,
-            num_class=num_class,
-            evaluation_history=eval_history,
-        )
+    def _predict_valid(
+        booster: lgb.Booster,
+        x_valid: pd.DataFrame,
+        ctx: dict[str, Any],
+    ) -> np.ndarray:
         pred_raw = np.asarray(
-            booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration),
+            booster.predict(x_valid, num_iteration=booster.best_iteration),
             dtype=float,
         )
-        pred_proba = _normalize_proba(pred_raw, len(valid_idx), num_class)
-        oof_proba[valid_idx, :] = pred_proba
-        fold_ids[valid_idx] = fold_idx
+        return _normalize_proba(pred_raw, len(x_valid), int(ctx["num_class"]))
 
-        fold_metrics = _multiclass_metrics(y.iloc[valid_idx].to_numpy(), pred_proba)
-        best_iteration, num_iterations = _booster_iteration_stats(
-            booster, config.train.num_boost_round
-        )
-        history_folds.append(
+    def _fold_metrics(
+        y_valid: pd.Series,
+        pred: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float]:
+        return _multiclass_metrics(y_valid.to_numpy(), pred)
+
+    def _fold_record(
+        fold_idx: int,
+        metrics: dict[str, float],
+        n_train: int,
+        n_valid: int,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float | int]:
+        return {
+            "fold": fold_idx,
+            "accuracy": metrics["accuracy"],
+            "macro_f1": metrics["macro_f1"],
+            "logloss": metrics["logloss"],
+            "multi_error": metrics["multi_error"],
+            "n_train": n_train,
+            "n_valid": n_valid,
+        }
+
+    def _mean_metrics(y_all: pd.Series, oof: np.ndarray, _ctx: dict[str, Any]) -> dict[str, float]:
+        return _multiclass_metrics(y_all.to_numpy(), oof)
+
+    def _observation_table(
+        fold_ids: np.ndarray,
+        y_all: pd.Series,
+        oof: np.ndarray,
+        ctx: dict[str, Any],
+    ) -> pd.DataFrame:
+        target_classes_local = list(ctx["target_classes"])
+        oof_pred_idx = np.argmax(oof, axis=1)
+        table = pd.DataFrame(
             {
-                "fold": fold_idx,
-                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
-                "num_iterations": num_iterations,
-                "eval_history": eval_history.get("valid_0", eval_history),
+                "fold_id": fold_ids,
+                "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+                "y_true": y_all.to_numpy(dtype=int),
+                "label_pred": oof_pred_idx.astype(int),
             }
         )
-        fold_records.append(
-            {
-                "fold": fold_idx,
-                "accuracy": fold_metrics["accuracy"],
-                "macro_f1": fold_metrics["macro_f1"],
-                "logloss": fold_metrics["logloss"],
-                "multi_error": fold_metrics["multi_error"],
-                "n_train": int(len(train_idx)),
-                "n_valid": int(len(valid_idx)),
-            }
-        )
+        for idx, class_label in enumerate(target_classes_local):
+            table[f"proba_{class_label}"] = oof[:, idx]
+        return table
 
-    if np.isnan(oof_proba).any():
-        raise VeldraValidationError(
-            "OOF predictions contain missing values. Check split configuration."
-        )
-
-    mean_metrics = _multiclass_metrics(y.to_numpy(), oof_proba)
-    cv_results = pd.DataFrame.from_records(fold_records)
-
-    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
-        x, y, config
-    )
-    final_eval_history: dict[str, Any] = {}
-    final_model = _train_single_booster(
-        x_train=x_final_train,
-        y_train=y_final_train,
-        x_valid=x_final_valid,
-        y_valid=y_final_valid,
+    cv_out = run_cv_training(
         config=config,
-        num_class=num_class,
-        evaluation_history=final_eval_history,
-    )
-    final_best_iteration, final_num_iterations = _booster_iteration_stats(
-        final_model, config.train.num_boost_round
-    )
-    training_history = {
-        "folds": history_folds,
-        "final_model": {
-            "best_iteration": (
-                final_best_iteration if final_best_iteration > 0 else final_num_iterations
+        x=x,
+        y=y,
+        splits=splits,
+        spec=TaskSpec(
+            fit_booster=_fit_booster,
+            predict_valid=_predict_valid,
+            fold_metrics=_fold_metrics,
+            fold_record=_fold_record,
+            mean_metrics=_mean_metrics,
+            observation_table=_observation_table,
+            init_oof=lambda n_rows, ctx: np.full(
+                (n_rows, int(ctx["num_class"])),
+                np.nan,
+                dtype=float,
             ),
-            "num_iterations": final_num_iterations,
-            "eval_history": final_eval_history.get("valid_0", final_eval_history),
-        },
-    }
+        ),
+        context={"num_class": num_class, "target_classes": target_classes},
+    )
 
     metrics = {
-        "folds": fold_records,
-        "mean": mean_metrics,
+        "folds": cv_out.fold_records,
+        "mean": cv_out.mean_metrics,
     }
     feature_schema = {
         "feature_names": x.columns.tolist(),
@@ -307,22 +307,11 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
         "task_type": config.task.type,
         "target_classes": target_classes,
     }
-    oof_pred_idx = np.argmax(oof_proba, axis=1)
-    observation_table = pd.DataFrame(
-        {
-            "fold_id": fold_ids,
-            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
-            "y_true": y.to_numpy(dtype=int),
-            "label_pred": oof_pred_idx.astype(int),
-        }
-    )
-    for idx, class_label in enumerate(target_classes):
-        observation_table[f"proba_{class_label}"] = oof_proba[:, idx]
     return MulticlassTrainingOutput(
-        model_text=final_model.model_to_string(),
+        model_text=cv_out.final_model.model_to_string(),
         metrics=metrics,
-        cv_results=cv_results,
+        cv_results=cv_out.cv_results,
         feature_schema=feature_schema,
-        training_history=training_history,
-        observation_table=observation_table,
+        training_history=cv_out.training_history,
+        observation_table=cv_out.observation_table,
     )
