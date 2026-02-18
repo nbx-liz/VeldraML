@@ -46,10 +46,3 @@ def test_uc_notebooks_include_expected_action_snippets() -> None:
         source = _notebook_source(Path("notebooks") / notebook)
         for snippet in snippets:
             assert snippet in source, f"{notebook}: {snippet}"
-
-
-def test_manifest_parity_criterion_is_fixed_value() -> None:
-    payload = json.loads(
-        Path("notebooks/phase26_2_execution_manifest.json").read_text(encoding="utf-8")
-    )
-    assert payload.get("parity_criterion") == "reachability_and_artifact_outputs"

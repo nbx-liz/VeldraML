@@ -14,7 +14,7 @@ TUTORIAL_NOTEBOOKS = [
     "tutorial_07_model_evaluation_guide.ipynb",
 ]
 
-LEGACY_WORKFLOW_NOTEBOOKS = [
+REMOVED_LEGACY_WORKFLOW_NOTEBOOKS = [
     "regression_analysis_workflow.ipynb",
     "binary_tuning_analysis_workflow.ipynb",
     "frontier_analysis_workflow.ipynb",
@@ -51,8 +51,6 @@ def test_tutorial_notebooks_exist_and_include_education_sections() -> None:
             assert marker in source, f"{notebook}: missing {marker}"
 
 
-def test_legacy_workflow_notebooks_are_compatibility_stubs() -> None:
-    for notebook in LEGACY_WORKFLOW_NOTEBOOKS:
-        source = _source(Path("notebooks") / notebook)
-        assert "Compatibility Stub" in source, notebook
-        assert "Moved to `notebooks/tutorials/" in source, notebook
+def test_legacy_workflow_notebooks_are_removed() -> None:
+    for notebook in REMOVED_LEGACY_WORKFLOW_NOTEBOOKS:
+        assert not (Path("notebooks") / notebook).exists(), notebook

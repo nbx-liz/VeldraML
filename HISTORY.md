@@ -1414,3 +1414,34 @@
 - `uv run pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_3_uc_structure.py` を実施（`5 passed`）。
 - `uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 passed`）。
 - `uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。
+
+### 2026-02-18（作業/PR: phase26.6-legacy-notebook-manifest-cleanup）
+**背景**
+- Phase26.4 で導入した legacy notebook 互換スタブの運用期限が終了し、canonical notebook への一本化が必要だった。
+- notebook 証跡が `notebooks/phase26_*_execution_manifest.json` に分散しており、`examples/out/*` 実体との二重管理を解消する必要があった。
+
+**変更内容**
+- legacy notebook を削除し、`notebooks/tutorials/*` / `notebooks/quick_reference/*` / `notebooks/reference_index.ipynb` のみを canonical として残した。
+- `notebooks/phase26_2_execution_manifest.json` と `notebooks/phase26_3_execution_manifest.json` を削除し、証跡参照を `examples/out/phase26_*/summary.json` + outputs 実体へ移行した。
+- `tests/e2e_playwright/conftest.py` の fixture を manifest 依存から固定パス解決（`latest_artifact_path.txt`, `reeval_missing_col.csv` 等）へ置換し、`test_uc07/08/10` を新 IF に更新した。
+- `tests/test_notebook_phase26_2_execution_evidence.py` を削除し、`tests/test_notebook_execution_evidence.py` を追加。`tests/test_notebook_phase26_3_execution_evidence.py` / `tests/test_notebook_phase26_3_outputs.py` を summary ベースへ更新した。
+- `scripts/generate_phase263_notebooks.py` から manifest 生成ロジックを削除し、quick reference 生成 + 実行に責務を限定した。
+- `README.md` と `DESIGN_BLUEPRINT.md` を更新し、manifest 前提・legacy stub 維持前提・phase26.2 parity report 依存を撤去した。
+- `docs/phase26_2_parity_report.md` と未使用 `src/veldra/postprocess/__init__.py`（および空ディレクトリ）を削除した。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: legacy notebook 互換スタブ運用を終了し、canonical notebook のみを正とする。
+  - 理由: ドキュメント導線とテスト契約を一本化し、保守対象を縮小するため。
+  - 影響範囲: notebooks / notebook tests / DESIGN_BLUEPRINT / README
+- Decision: confirmed（確定）
+  - 内容: notebook 証跡は manifest ファイルを廃止し、`examples/out/phase26_*/summary.json` と outputs 実体で管理する。
+  - 理由: 生成物の実体を単一の真実源にして、証跡の二重管理を防ぐため。
+  - 影響範囲: tests/e2e_playwright / notebook_e2e tests / scripts/generate_phase263_notebooks.py / docs
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check README.md DESIGN_BLUEPRINT.md tests/e2e_playwright tests/test_notebook_tutorial_catalog.py tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py scripts/generate_phase263_notebooks.py` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_tutorial_catalog.py tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py` を実施（`12 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_phase26_3_uc_structure.py tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を実施（`2 passed, 1 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 skipped`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。

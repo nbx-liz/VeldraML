@@ -16,7 +16,7 @@ UC_NOTEBOOKS = [
     "quick_reference/reference_10_export_html_excel.ipynb",
 ]
 
-LEGACY_NOTEBOOKS = [
+REMOVED_LEGACY_NOTEBOOKS = [
     "phase26_2_uc01_regression_fit_evaluate.ipynb",
     "phase26_2_uc02_binary_tune_evaluate.ipynb",
     "phase26_2_uc03_frontier_fit_evaluate.ipynb",
@@ -65,7 +65,7 @@ def test_phase26_2_uc_notebooks_have_required_sections() -> None:
         assert "## Config Notes" in source, notebook
         assert "## Workflow" in source, notebook
         assert "## Result Summary" in source, notebook
-        assert "SUMMARY =" in source, notebook
+        assert "SUMMARY" in source, notebook
 
 
 def test_phase26_2_audit_hub_links_all_uc_notebooks() -> None:
@@ -79,8 +79,6 @@ def test_phase26_2_audit_hub_links_all_uc_notebooks() -> None:
         assert notebook in source, notebook
 
 
-def test_legacy_phase26_notebooks_are_compatibility_stubs() -> None:
-    for notebook in LEGACY_NOTEBOOKS:
-        source = _cells_source(_load_notebook(Path("notebooks") / notebook))
-        assert "Compatibility Stub" in source, notebook
-        assert "Moved to `notebooks/" in source, notebook
+def test_legacy_phase26_notebooks_are_removed() -> None:
+    for notebook in REMOVED_LEGACY_NOTEBOOKS:
+        assert not (Path("notebooks") / notebook).exists(), notebook

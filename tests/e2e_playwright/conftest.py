@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import socket
 import subprocess
@@ -10,18 +9,10 @@ from pathlib import Path
 import pytest
 
 
-@pytest.fixture(scope="session")
-def phase26_manifest() -> dict:
-    path = Path("notebooks/phase26_2_execution_manifest.json")
+def _require_path(path: Path, *, reason: str) -> str:
     if not path.exists():
-        pytest.skip("phase26_2_execution_manifest.json is missing")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="session")
-def phase26_entries(phase26_manifest: dict) -> dict[str, dict]:
-    entries = phase26_manifest.get("entries") or []
-    return {str(entry.get("uc")): entry for entry in entries}
+        pytest.skip(f"{reason}: missing {path}")
+    return str(path.resolve())
 
 
 def _find_free_port() -> int:
@@ -96,12 +87,35 @@ def gui_base_url(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.fixture(scope="session")
-def sample_data_paths(phase26_entries: dict[str, dict]) -> dict[str, str]:
-    uc1_outputs = phase26_entries.get("UC-1", {}).get("outputs", [])
-    uc8_outputs = phase26_entries.get("UC-8", {}).get("outputs", [])
+def artifact_path_uc1() -> str:
+    marker = Path("examples/out/phase26_2_uc01_regression_fit_evaluate/latest_artifact_path.txt")
+    _require_path(marker, reason="UC-1 artifact marker")
+    artifact_path = Path(marker.read_text(encoding="utf-8").strip())
+    return _require_path(artifact_path, reason="UC-1 artifact")
+
+
+@pytest.fixture(scope="session")
+def artifact_root_uc1(artifact_path_uc1: str) -> str:
+    return str(Path(artifact_path_uc1).parent)
+
+
+@pytest.fixture(scope="session")
+def sample_data_paths() -> dict[str, str]:
     return {
-        "uc1_train": str(uc1_outputs[0]) if len(uc1_outputs) > 0 else "",
-        "uc1_test": str(uc1_outputs[1]) if len(uc1_outputs) > 1 else "",
-        "uc8_ok": str(uc8_outputs[0]) if len(uc8_outputs) > 0 else "",
-        "uc8_bad": str(uc8_outputs[1]) if len(uc8_outputs) > 1 else "",
+        "uc1_train": _require_path(
+            Path("examples/out/phase26_2_uc01_regression_fit_evaluate/train.csv"),
+            reason="UC-1 train data",
+        ),
+        "uc1_test": _require_path(
+            Path("examples/out/phase26_2_uc01_regression_fit_evaluate/test.csv"),
+            reason="UC-1 test data",
+        ),
+        "uc8_ok": _require_path(
+            Path("examples/out/phase26_2_uc08_artifact_reevaluate/reeval_ok.csv"),
+            reason="UC-8 re-eval ok data",
+        ),
+        "uc8_bad": _require_path(
+            Path("examples/out/phase26_2_uc08_artifact_reevaluate/reeval_missing_col.csv"),
+            reason="UC-8 re-eval bad data",
+        ),
     }

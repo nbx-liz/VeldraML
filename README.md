@@ -560,7 +560,7 @@ Notebook includes:
 
 Phase26.3 notebook execution policy:
 - `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` 〜 `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` と `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` / `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
-- 実行証跡は `notebooks/phase26_3_execution_manifest.json` で管理します。
+- 実行証跡は `examples/out/phase26_*/summary.json` と生成物ファイル群で管理します。
 - 構造契約は通常テストで検証し、重い証跡検証は `pytest -m notebook_e2e` で実行します。
 
 Export demo:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # ruff: noqa: E501
-import json
 import textwrap
 from pathlib import Path
 
@@ -1415,91 +1414,6 @@ def _execute_notebook(path: Path) -> None:
         nbformat.write(nb, f)
 
 
-def _build_manifest() -> None:
-    manifest_path = NB_DIR / "phase26_3_execution_manifest.json"
-    entries: list[dict[str, object]] = []
-
-    summary_files = {
-        "UC-1": ROOT / "examples" / "out" / "phase26_2_uc01_regression_fit_evaluate" / "summary.json",
-        "UC-2": ROOT / "examples" / "out" / "phase26_2_uc02_binary_tune_evaluate" / "summary.json",
-        "UC-3": ROOT / "examples" / "out" / "phase26_2_uc03_frontier_fit_evaluate" / "summary.json",
-        "UC-4": ROOT / "examples" / "out" / "phase26_2_uc04_causal_dr_estimate" / "summary.json",
-        "UC-5": ROOT / "examples" / "out" / "phase26_2_uc05_causal_drdid_estimate" / "summary.json",
-        "UC-6": ROOT / "examples" / "out" / "phase26_2_uc06_causal_dr_tune" / "summary.json",
-        "UC-7": ROOT / "examples" / "out" / "phase26_2_uc07_artifact_evaluate" / "summary.json",
-        "UC-8": ROOT / "examples" / "out" / "phase26_2_uc08_artifact_reevaluate" / "summary.json",
-        "UC-11": ROOT / "examples" / "out" / "phase26_3_uc_multiclass_fit_evaluate" / "summary.json",
-        "UC-12": ROOT / "examples" / "out" / "phase26_3_uc_timeseries_fit_evaluate" / "summary.json",
-    }
-
-    notebook_map = {
-        "UC-1": QUICK_REF_DIR / "reference_01_regression_fit_evaluate.ipynb",
-        "UC-2": QUICK_REF_DIR / "reference_02_binary_tune_evaluate.ipynb",
-        "UC-3": QUICK_REF_DIR / "reference_03_frontier_fit_evaluate.ipynb",
-        "UC-4": QUICK_REF_DIR / "reference_04_causal_dr_estimate.ipynb",
-        "UC-5": QUICK_REF_DIR / "reference_05_causal_drdid_estimate.ipynb",
-        "UC-6": QUICK_REF_DIR / "reference_06_causal_dr_tune.ipynb",
-        "UC-7": QUICK_REF_DIR / "reference_07_artifact_evaluate.ipynb",
-        "UC-8": QUICK_REF_DIR / "reference_08_artifact_reevaluate.ipynb",
-        "UC-9": QUICK_REF_DIR / "reference_09_export_python_onnx.ipynb",
-        "UC-10": QUICK_REF_DIR / "reference_10_export_html_excel.ipynb",
-        "UC-11": QUICK_REF_DIR / "reference_11_multiclass_fit_evaluate.ipynb",
-        "UC-12": QUICK_REF_DIR / "reference_12_timeseries_fit_evaluate.ipynb",
-    }
-
-    for uc in ["UC-1", "UC-2", "UC-3", "UC-4", "UC-5", "UC-6", "UC-7", "UC-8", "UC-11", "UC-12"]:
-        summary = json.loads(summary_files[uc].read_text(encoding="utf-8"))
-        entries.append(
-            {
-                "uc": uc,
-                "status": "passed",
-                "notebook": str(notebook_map[uc].resolve()),
-                "artifact_path": summary.get("artifact_path"),
-                "outputs": summary.get("outputs", []),
-                "metrics": summary.get("metrics", []),
-            }
-        )
-
-    # Preserve UC-9/10 as minimal export-only entries.
-    entries.append(
-        {
-            "uc": "UC-9",
-            "status": "passed",
-            "notebook": str(notebook_map["UC-9"].resolve()),
-            "artifact_path": str(
-                (ROOT / "examples" / "out" / "phase26_2_uc09_export_python_onnx" / "exports").resolve()
-            ),
-            "outputs": [
-                str((ROOT / "examples" / "out" / "phase26_2_uc09_export_python_onnx" / "exports" / "python").resolve()),
-                str((ROOT / "examples" / "out" / "phase26_2_uc09_export_python_onnx" / "exports" / "onnx").resolve()),
-            ],
-            "metrics": [],
-        }
-    )
-    entries.append(
-        {
-            "uc": "UC-10",
-            "status": "passed",
-            "notebook": str(notebook_map["UC-10"].resolve()),
-            "artifact_path": str(
-                (ROOT / "examples" / "out" / "phase26_2_uc10_export_html_excel" / "reports").resolve()
-            ),
-            "outputs": [
-                str((ROOT / "examples" / "out" / "phase26_2_uc10_export_html_excel" / "reports" / "report.html").resolve()),
-                str((ROOT / "examples" / "out" / "phase26_2_uc10_export_html_excel" / "reports" / "report.xlsx").resolve()),
-            ],
-            "metrics": [],
-        }
-    )
-
-    payload = {
-        "phase": "26.3",
-        "parity_criterion": "reachability_and_artifact_outputs",
-        "entries": entries,
-    }
-    manifest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
 def main() -> None:
     QUICK_REF_DIR.mkdir(parents=True, exist_ok=True)
     for nb_name, title, setup, workflow, overview, tutorial in SPEC:
@@ -1510,8 +1424,6 @@ def main() -> None:
 
     for nb_name, *_ in SPEC:
         _execute_notebook(NB_DIR / nb_name)
-
-    _build_manifest()
 
 
 if __name__ == "__main__":

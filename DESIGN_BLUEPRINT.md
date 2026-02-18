@@ -395,7 +395,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 
 ### 実装結果（要約）
 - Step0: 監査基盤
-  - `notebooks/phase26_2_ux_audit.ipynb` で UC 監査枠組みを整備。
+  - `notebooks/reference_index.ipynb` を canonical な索引ハブとして運用。
 - Step1: 共通ヘルプUI
   - `help_ui.py` / `help_texts.py` を追加し、説明表示の再利用基盤を導入。
 - Step2: Target 強化
@@ -411,14 +411,17 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - 完了基準を「テンプレート整備」から「実行証跡 + parity 検証」へ補正した。
 - 追加成果物:
   - UC別 Notebook 10 本（`phase26_2_uc01`〜`phase26_2_uc10`）
-  - 実行証跡 `notebooks/phase26_2_execution_manifest.json`
   - Notebook 契約テスト（構造/証跡/パス）
   - Playwright E2E（UC-1〜UC-10）と `gui_e2e` / `gui_smoke` marker
-  - 同等性レポート `docs/phase26_2_parity_report.md`
+
+### クリーンアップ（2026-02-18）
+- legacy 互換スタブ Notebook（root 配下の旧 workflow / old UC / old audit）を撤去し、canonical のみを運用対象とした。
+- `phase26_2/phase26_3` execution manifest は廃止し、証跡は `examples/out/phase26_*/summary.json` と生成物ファイルで管理する。
+- Phase26.2 専用 parity レポートは削除し、履歴トレースは `HISTORY.md` に集約した。
 
 ### 完了条件（要約）
 1. Step0-5 の GUI 改修が反映され、UC-1〜UC-10 の到達導線が確認できること。
-2. Notebook 実行証跡と parity レポートが更新されていること。
+2. Notebook 実行証跡（`examples/out/phase26_*/summary.json` + outputs）が更新されていること。
 3. Stable API / RunConfig / Artifact 契約を維持していること。
 
 ### 運用メモ
@@ -873,14 +876,14 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 
 #### Step 6: 実行証跡の更新と契約テスト
 
-**目的**: 全 Notebook のヘッドレス実行で出力ファイルが生成されることを確認し、execution manifest を更新。
+**目的**: 全 Notebook のヘッドレス実行で出力ファイルが生成されることを確認し、summary evidence を更新。
 
 **成果物**:
 
 | ファイル | 内容 |
 |---|---|
-| `notebooks/phase26_3_execution_manifest.json` | 各 Notebook の実行結果（status, outputs リスト, 出力ファイルのハッシュ） |
-| `tests/test_notebook_phase26_3_execution_evidence.py` | manifest の整合性テスト（全 UC が passed、outputs が存在） |
+| `examples/out/phase26_*/summary.json` | 各 Notebook の実行結果（status, outputs リスト, metrics） |
+| `tests/test_notebook_phase26_3_execution_evidence.py` | summary の整合性テスト（全 UC が passed、outputs が存在） |
 | `tests/test_notebook_phase26_3_outputs.py` | 各 Notebook の出力ファイル検証（PNG 画像の存在、CSV の列名・行数、指標の妥当範囲） |
 
 ---
@@ -914,7 +917,7 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 | `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | 4 | 新規 |
 | `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | 5 | 変更: 診断セクション追加 |
 | `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | 5 | 変更: 比較指標追加 |
-| `notebooks/phase26_3_execution_manifest.json` | 6 | 新規 |
+| `examples/out/phase26_*/summary.json` | 6 | 新規 |
 | `tests/test_diagnostics_importance.py` | 1 | 新規 |
 | `tests/test_diagnostics_shap.py` | 1 | 新規 |
 | `tests/test_diagnostics_metrics.py` | 1 | 新規 |
@@ -940,7 +943,7 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 | 因果診断 | ESS、SMD、トリミング比較が正しい型・範囲で返ること | `tests/test_diagnostics_causal.py` |
 | Observation table | 各 TrainingOutput の observation_table が fold_id, in_out 列を含むこと | `tests/test_observation_table.py` |
 | Notebook 構造 | 全 Notebook が SUMMARY セル、diagnostics import、savefig 呼び出しを含むこと | `tests/test_notebook_phase26_3_uc_structure.py` |
-| 実行証跡 | manifest の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_phase26_3_execution_evidence.py` |
+| 実行証跡 | summary の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_phase26_3_execution_evidence.py` |
 | 出力ファイル検証 | PNG の存在、CSV の列名一致、指標値の妥当範囲（例: 0 ≤ AUC ≤ 1） | `tests/test_notebook_phase26_3_outputs.py` |
 | 後方互換 | 既存テスト群（`tests/test_*.py`）が全パス | 既存テスト群 |
 
@@ -975,7 +978,7 @@ uv run pytest tests -x --tb=short
 3. **Step 3**: `DREstimationOutput` に `nuisance_diagnostics` が追加され、因果テストがパスすること。
 4. **Step 4**: UC-1〜UC-6 の Notebook が完全版に更新され、Multiclass / TimeSeries の新規 Notebook が追加されていること。
 5. **Step 5**: UC-7, UC-8 の Notebook に診断出力が追加されていること。
-6. **Step 6**: `phase26_3_execution_manifest.json` が生成され、全 Notebook の出力ファイルが検証済みであること。
+6. **Step 6**: `examples/out/phase26_*/summary.json` が生成され、全 Notebook の出力ファイルが検証済みであること。
 7. **後方互換**: `veldra.api.*` の公開シグネチャが未変更であること。`RunResult`, `EvalResult`, `CausalResult` の既存フィールドが維持されていること。
 8. **依存制約**: 外部ライブラリの追加なし（matplotlib は既存依存）。SHAP は LightGBM 内蔵のみ使用。
 
@@ -987,12 +990,12 @@ uv run pytest tests -x --tb=short
 ### Decision（confirmed）
 - 内容: Notebook 証跡はハイブリッド運用とし、構造契約テストは常時実行、重い証跡検証は `notebook_e2e` marker で分離する。
 - 理由: CI 負荷と実行時間を抑制しつつ、Phase26.3 の成果物検証を維持するため。
-- 影響範囲: `pyproject.toml` marker / `tests/test_notebook_phase26_3_*` / execution manifest 運用
+- 影響範囲: `pyproject.toml` marker / `tests/test_notebook_phase26_3_*` / summary evidence 運用
 
 ### Decision（confirmed）
 - 内容: Phase26.3 の Notebook は `UC-1〜UC-8 + UC-11/12` を実行済み状態でコミットし、placeholder 出力を撤廃する。`UC-9/10` は export 中心の最小更新を維持する。
 - 理由: Notebook を開いた時点で図表・表・指標を確認可能にし、実行証跡の再現性を担保するため。
-- 影響範囲: `notebooks/phase26_2_uc0*.ipynb` / `notebooks/phase26_3_uc_*.ipynb` / `notebooks/phase26_3_execution_manifest.json`
+- 影響範囲: `notebooks/quick_reference/*.ipynb` / `examples/out/phase26_*/summary.json`
 
 ### Decision（confirmed）
 - 内容: `tuning.metrics_candidates` は tuning objective 許可セットとは独立した task 別許可セットで検証する（regression: `rmse/huber/mae`, binary: `logloss/auc`, multiclass: `multi_logloss/multi_error`）。
@@ -1036,7 +1039,7 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
 - テスト追加は既存の公開 API シグネチャを変更しない。
 - 命名規約は **英語スネークケース** を採用し、ユーザー向け名称から `phase26` 識別子を除去する。
 - Notebook 配置は `notebooks/tutorials` と `notebooks/quick_reference` の 2 系統に分離する。
-- 旧ファイル名は **1リリース互換** として root 配下に残し、`Moved to ...` を明記した互換スタブへ置換する。
+- legacy 互換スタブは cleanup で撤去し、canonical notebook のみを運用対象とする。
 
 ---
 
@@ -1047,9 +1050,9 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
 - 本節（13.4）に命名再編方針、実装順序、互換期限を明記する。
 - `HISTORY.md` に以下の Decision を記録する。
   - `Decision: confirmed` 命名規約（英語スネークケース）と配置規約（tutorials / quick_reference）
-  - `Decision: provisional` 旧名スタブ撤去時期（次期リリースで確定）
+  - `Decision: confirmed` 旧名スタブ撤去（Phase27 前 cleanup）
 
-#### Step 1: Notebook 配置再編と互換スタブ整備
+#### Step 1: Notebook 配置再編
 
 ##### 1-1. Workflow → Tutorials（canonical）
 
@@ -1082,10 +1085,10 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
 | `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` |
 | `notebooks/phase26_2_ux_audit.ipynb` | `notebooks/reference_index.ipynb` |
 
-##### 1-3. 互換スタブ
+##### 1-3. legacy ノートブック削除（cleanup 後）
 
-- 旧名 Notebook は root 配下に残し、冒頭セルを `Moved to ...` + 互換期限（1リリース）へ差し替える。
-- `rg --files notebooks | rg "phase26_.*\\.ipynb"` のヒットは互換スタブのみを許容条件とする。
+- 旧名 Notebook は root 配下から削除済み。
+- `notebooks/` 直下は canonical 補助ファイル（`reference_index.ipynb`）のみを残す。
 
 #### Step 2: Tutorials の教育強化（Part A-1 + A-3）
 
@@ -1106,7 +1109,7 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
   - Config コメント
   - 出力注釈
   - 対応 tutorial へのリンク
-- `notebooks/phase26_3_execution_manifest.json` の `notebook` フィールドは canonical パスへ更新する。
+- 実行証跡は `examples/out/phase26_*/summary.json` と outputs 実体で管理する。
 - `examples/out/phase26_2_*` / `examples/out/phase26_3_*` は互換維持のため変更しない。
 
 #### Step 4: テスト品質強化（Part B）
@@ -1134,16 +1137,16 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
 #### Step 5: 既存参照の全面更新
 
 - `README.md` の notebook 導線を canonical 名へ更新。
-- `docs/phase26_2_parity_report.md` の notebook パスを canonical 名へ更新。
+- `docs/phase26_2_parity_report.md` は削除し、履歴は `HISTORY.md` に集約する。
 - Notebook 構造/契約テスト（`tests/test_notebook_*`）の対象パスを canonical 名へ更新。
-- `tests/e2e_playwright/conftest.py` の manifest ファイル名（`phase26_2_execution_manifest.json`）は据え置く。
+- `tests/e2e_playwright/conftest.py` の fixture を summary/output 直参照へ更新する。
 
 #### Step 6: 受け入れ確認
 
 ```bash
 uv run pytest tests/test_runner_fit_happy.py tests/test_runner_evaluate_happy.py tests/test_runner_predict_happy.py tests/test_runner_tune_happy.py -v
 uv run pytest tests/test_edge_cases.py tests/test_numerical_stability.py tests/test_config_cross_field.py tests/test_data_loader_robust.py -v
-uv run pytest tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_3_uc_structure.py -v
+uv run pytest tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py tests/test_notebook_phase26_3_uc_structure.py -v
 uv run pytest tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e -v
 uv run pytest tests -x --tb=short
 ```
@@ -1152,10 +1155,10 @@ uv run pytest tests -x --tb=short
 
 1. `notebooks/tutorials` / `notebooks/quick_reference` の canonical Notebook が全件存在する。
 2. `notebooks/reference_index.ipynb` が tutorial / quick reference を全件リンクする。
-3. 旧名 notebook が互換スタブとして残り、移行先と互換期限を明記している。
+3. 旧名 notebook（legacy root files）が削除されている。
 4. quick reference 12本が `Setup / Workflow / Result Summary / SUMMARY` を維持している。
 5. tutorial 8本が教育セクション（Concept primer など）を含む。
-6. `phase26_3_execution_manifest.json` の `notebook` パスが canonical を指し、対象 UC は `passed` で outputs が実在する。
+6. `examples/out/phase26_*/summary.json` が対象 UC をカバーし、outputs が実在する。
 7. Part B の新規テストがパスし、`veldra.api.*` の公開シグネチャ互換を維持している。
 
 ## 13.5 Phase26.5: 13.3 A/B Notebook適用 + gui_e2e 安定化
@@ -1185,7 +1188,7 @@ uv run pytest tests -x --tb=short
 - 13.3 A の LightGBM 値は `train.lgb_params` で明示し、`auto_num_leaves=True` と ratio パラメーターを併用する。
 - Frontier は `train.metrics=['quantile']` を維持し、A の固定値のみ適用する。
 - E2E 修正は GUI 側を変更せず、テスト側の待機/操作を堅牢化する。
-- legacy stub Notebook は互換目的で維持し、Phase26.5 の適用対象外とする。
+- legacy stub Notebook は cleanup で撤去済みとし、canonical notebook のみを運用対象とする。
 
 ### 実装ステップ
 
@@ -1255,13 +1258,13 @@ uv run pytest -q -m "not gui_e2e"
 2. `standard` preset の search space が 13.3 B と一致すること。
 3. `gui_e2e` が hidden input 待機起因のタイムアウトなしで通過すること。
 4. `veldra.api.*` の公開シグネチャ互換が維持されること。
-5. 実行証跡（`phase26_3_execution_manifest.json`）が canonical notebook path と整合すること。
+5. 実行証跡（`examples/out/phase26_*/summary.json`）が canonical notebook outputs と整合すること。
 
-### Decision（provisional）
+### Decision（confirmed）
 
-- 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）とし、legacy stub は対象外とする。
-- 理由: 互換スタブの責務を維持しつつ、実利用導線の設定契約を優先して整合させるため。
-- 影響範囲: notebooks / notebook tests / generation script
+- 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）のみとし、legacy stub は cleanup で撤去する。
+- 理由: 実利用導線へ対象を限定し、保守コストと契約混在を解消するため。
+- 影響範囲: notebooks / notebook tests / generation script / docs
 
 ### Decision（confirmed）
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from ._helpers import assert_ids, goto, set_input_value
@@ -11,11 +9,10 @@ from ._helpers import assert_ids, goto, set_input_value
 def test_uc07_evaluate_existing_artifact(
     page,
     gui_base_url: str,
-    phase26_entries: dict[str, dict],
+    artifact_path_uc1: str,
+    artifact_root_uc1: str,
     sample_data_paths: dict[str, str],
 ) -> None:
-    artifact_path = str(phase26_entries["UC-1"]["artifact_path"])
-    artifact_root = str(Path(artifact_path).parent)
     eval_data = sample_data_paths.get("uc1_test", "")
 
     goto(page, gui_base_url, "/results")
@@ -30,11 +27,11 @@ def test_uc07_evaluate_existing_artifact(
         ],
     )
 
-    set_input_value(page, "#artifact-root-path", artifact_root)
+    set_input_value(page, "#artifact-root-path", artifact_root_uc1)
     page.click("#artifact-refresh-btn")
     page.wait_for_timeout(700)
 
-    page.select_option("#artifact-select", artifact_path)
+    page.select_option("#artifact-select", artifact_path_uc1)
     set_input_value(page, "#artifact-eval-data-path", eval_data)
     page.click("#artifact-evaluate-btn")
 

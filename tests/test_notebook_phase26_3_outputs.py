@@ -8,7 +8,19 @@ import pytest
 
 pytestmark = pytest.mark.notebook_e2e
 
-TARGET_UCS = {f"UC-{i}" for i in range(1, 9)} | {"UC-11", "UC-12"}
+SUMMARY_FILES = {
+    "UC-1": Path("examples/out/phase26_2_uc01_regression_fit_evaluate/summary.json"),
+    "UC-2": Path("examples/out/phase26_2_uc02_binary_tune_evaluate/summary.json"),
+    "UC-3": Path("examples/out/phase26_2_uc03_frontier_fit_evaluate/summary.json"),
+    "UC-4": Path("examples/out/phase26_2_uc04_causal_dr_estimate/summary.json"),
+    "UC-5": Path("examples/out/phase26_2_uc05_causal_drdid_estimate/summary.json"),
+    "UC-6": Path("examples/out/phase26_2_uc06_causal_dr_tune/summary.json"),
+    "UC-7": Path("examples/out/phase26_2_uc07_artifact_evaluate/summary.json"),
+    "UC-8": Path("examples/out/phase26_2_uc08_artifact_reevaluate/summary.json"),
+    "UC-11": Path("examples/out/phase26_3_uc_multiclass_fit_evaluate/summary.json"),
+    "UC-12": Path("examples/out/phase26_3_uc_timeseries_fit_evaluate/summary.json"),
+}
+
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 REQUIRED_CSV_COLUMNS: dict[str, dict[str, set[str]]] = {
@@ -69,14 +81,11 @@ def _assert_metric_bounds(frame: pd.DataFrame) -> None:
 
 
 def test_phase26_3_outputs_have_materialized_files() -> None:
-    payload = json.loads(Path("notebooks/phase26_3_execution_manifest.json").read_text("utf-8"))
-    for entry in payload.get("entries", []):
-        uc = str(entry.get("uc"))
-        if uc not in TARGET_UCS:
-            continue
-
+    for uc, summary_path in SUMMARY_FILES.items():
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
         csv_outputs: dict[str, pd.DataFrame] = {}
-        for out in entry.get("outputs", []):
+
+        for out in payload.get("outputs", []):
             path = Path(str(out))
             assert path.exists(), path
             assert path.stat().st_size > 0
