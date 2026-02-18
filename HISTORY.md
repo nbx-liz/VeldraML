@@ -1615,3 +1615,48 @@
 - `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/components/task_table.py src/veldra/gui/components/progress_viewer.py src/veldra/gui/pages/run_page.py src/veldra/gui/app.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py` を通過。
 - `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py tests/test_gui_services_run_dispatch.py tests/test_gui_services_core.py` を実施（`51 passed`）。
 - `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`184 passed`）。
+
+### 2026-02-18（作業/PR: phase29-cancel-retry-and-error-recovery）
+**背景**
+- Phase28 時点では `cancel_requested` が実行フローへ十分反映されず、running ジョブが成功確定へ上書きされる競合余地が残っていた。
+- failed ジョブの再実行は再投入手順が手作業で、ジョブ詳細からの復旧導線と失敗診断（Next Step）が不足していた。
+
+**変更内容**
+- `src/veldra/gui/types.py`
+  - `RetryPolicy` dataclass を追加し、`RunInvocation.retry_policy` を新設。
+  - `GuiJobRecord` に `retry_count` / `retry_parent_job_id` / `last_error_kind` を追加。
+- `src/veldra/gui/job_store.py`
+  - `jobs` テーブルへ後方互換 migration（`retry_count`, `retry_parent_job_id`, `last_error_kind`）を追加。
+  - `is_cancel_requested()` / `mark_canceled_from_request()` / `create_retry_job()` を実装。
+  - `mark_failed(..., error_kind=...)` へ拡張。
+- `src/veldra/gui/services.py`
+  - `CanceledByUser` を導入し、`run_action()` に協調キャンセル checkpoint を追加。
+  - `classify_gui_error()` / `build_next_steps()` を追加し、失敗 payload に `error_kind` / `next_steps` を保存。
+  - `retry_run_job()` を追加（failed/canceled の手動リトライ）。
+- `src/veldra/gui/worker.py`
+  - `CanceledByUser` を `canceled` で終端化。
+  - 成功直前の cancel 競合時に `canceled` を優先。
+  - `RetryPolicy` に基づく自動リトライ枠（指数バックオフ）を追加（既定 `max_retries=0` で無効）。
+- `src/veldra/gui/pages/run_page.py` / `src/veldra/gui/app.py`
+  - Job Detail に `Retry Task` ボタンを追加。
+  - failed/canceled 時のボタン活性制御を追加し、`next_steps` を Job Detail に表示。
+- `src/veldra/api/runner.py`
+  - `fit` / `tune` / `estimate_dr` に optional keyword-only `cancellation_hook` を追加（後方互換）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: `RetryPolicy` は GUI adapter の `RunInvocation` に限定し、Core `RunConfig` には追加しない。
+  - 理由: Core の責務境界と Stable API 互換を維持するため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,services.py,worker.py,app.py,pages/run_page.py}`
+- Decision: confirmed（確定）
+  - 内容: 自動リトライ既定は `max_retries=0`（手動中心）とし、バックオフ実装は将来有効化に備えて先行導入する。
+  - 理由: 不要な自動再実行リスクを抑えるため。
+  - 影響範囲: `src/veldra/gui/{types.py,worker.py,services.py,job_store.py}`
+- Decision: confirmed（確定）
+  - 内容: Next Step は既知エラー分類に限定して表示し、未知エラーは原文優先とする。
+  - 理由: 過剰な汎用ヒントによる誤誘導を避けるため。
+  - 影響範囲: `src/veldra/gui/services.py`, `src/veldra/gui/app.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/api/runner.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を実施（`37 passed`）。

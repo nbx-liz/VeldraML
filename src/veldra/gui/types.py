@@ -25,6 +25,14 @@ class ArtifactSummary:
 
 
 @dataclass(slots=True)
+class RetryPolicy:
+    max_retries: int = 0
+    base_delay_sec: float = 1.0
+    max_delay_sec: float = 8.0
+    retry_on: tuple[str, ...] = ("timeout", "resource_busy", "io_transient")
+
+
+@dataclass(slots=True)
 class RunInvocation:
     action: str
     config_yaml: str | None = None
@@ -34,6 +42,7 @@ class RunInvocation:
     scenarios_path: str | None = None
     export_format: str | None = None
     priority: GuiJobPriority = "normal"
+    retry_policy: RetryPolicy | None = None
 
 
 @dataclass(slots=True)
@@ -59,6 +68,9 @@ class GuiJobRecord:
     finished_at_utc: str | None = None
     result: GuiRunResult | None = None
     error_message: str | None = None
+    retry_count: int = 0
+    retry_parent_job_id: str | None = None
+    last_error_kind: str | None = None
 
 
 @dataclass(slots=True)

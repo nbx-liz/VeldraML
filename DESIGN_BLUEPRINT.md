@@ -622,6 +622,29 @@ pytest tests/ -v --tb=short
 
 ---
 
+### 実装結果（2026-02-18）
+* `RetryPolicy` を `RunInvocation` に追加し、`GuiJobRecord` に `retry_count` / `retry_parent_job_id` / `last_error_kind` を追加。
+* `jobs` テーブルへ後方互換 migration（`retry_count`, `retry_parent_job_id`, `last_error_kind`）を実装。
+* `GuiJobStore` に `is_cancel_requested` / `mark_canceled_from_request` / `create_retry_job` を追加。
+* `run_action()` に協調キャンセルチェックポイント（設定読込/データ読込/runner前後）を追加し、`CanceledByUser` を導入。
+* `veldra.api.runner.fit/tune/estimate_dr` に `cancellation_hook`（keyword-only, optional）を追加し、既存呼び出し互換を維持。
+* `GuiWorker` は `cancel_requested` 競合を `canceled` 終端で処理し、`RetryPolicy` を使う自動リトライ枠（既定0回）を実装。
+* Runページに `Retry Task` ボタンを追加し、failed/canceled ジョブの手動再投入をサポート。
+* 失敗ジョブ詳細に `next_steps` を表示し、エラー分類（validation/file/permission/memory/timeout/cancel等）を payload 化。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: `RetryPolicy` は GUI adapter の `RunInvocation` にのみ持たせ、Core `RunConfig` には追加しない。
+  * 理由: Core/Stable API 契約を維持しつつ、GUI運用機能を最小侵襲で拡張するため。
+* Decision: confirmed
+  * 内容: 自動リトライ既定は `max_retries=0`（手動リトライ中心）とし、将来有効化可能なバックオフ枠のみ先行実装する。
+  * 理由: 不要な自動再実行リスクを避けつつ、運用拡張余地を確保するため。
+* Decision: confirmed
+  * 内容: 失敗時の Next Step 提示は既知分類のみを対象とし、未知エラーは原文優先とする。
+  * 理由: ノイズを抑え、誤誘導を避けるため。
+
+---
+
 ### 対象ファイル
 * `src/veldra/gui/services.py` - `run_action` 内へのキャンセルチェックポイント挿入
 * `src/veldra/gui/job_store.py` - リトライポリシー用フィールドおよび管理メソッドの実装

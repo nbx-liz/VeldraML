@@ -626,7 +626,9 @@ GUI run behavior:
 - `/run` shows real-time progress (`progress_pct`/`current_step`) and per-job streaming logs.
 - job logs are persisted in SQLite (`job_logs`) with retention cap `10,000` lines per job.
 - queued jobs can be canceled immediately.
-- running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
+- running jobs support cooperative cancellation checkpoints and terminate as `canceled` on request.
+- failed/canceled jobs can be retried from Job Detail (`Retry Task`), and retry lineage is persisted.
+- failure payloads include categorized `error_kind` and `next_steps` hints for known patterns.
 - Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.
 - `/runs` provides history, clone, compare, and migrate actions.
 - `/compare` shows metric/config diffs for two artifacts.

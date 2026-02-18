@@ -307,6 +307,14 @@ def layout(state: dict | None = None) -> html.Div:
                                                 className="me-2",
                                                 disabled=True,
                                             ),
+                                            dbc.Button(
+                                                "Retry Task",
+                                                id="run-retry-job-btn",
+                                                color="warning",
+                                                size="sm",
+                                                className="me-2",
+                                                disabled=True,
+                                            ),
                                             html.Span(
                                                 id="selected-job-id-display",
                                                 className="text-muted small",

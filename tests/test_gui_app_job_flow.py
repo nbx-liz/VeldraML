@@ -141,3 +141,13 @@ def test_set_job_priority_result(monkeypatch) -> None:
     )
     assert app_module._cb_set_job_priority(1, "j1", "high") == "[INFO] priority updated"
     assert app_module._cb_set_job_priority(1, None, "high").startswith("[ERROR]")
+
+
+def test_retry_job_result(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "retry_run_job",
+        lambda _job_id: SimpleNamespace(message="retry queued"),
+    )
+    assert app_module._cb_retry_job(1, "j1") == "[INFO] retry queued"
+    assert app_module._cb_retry_job(1, None) == ""

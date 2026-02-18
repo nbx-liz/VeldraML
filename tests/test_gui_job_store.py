@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from veldra.gui.job_store import GuiJobStore, _decode_invocation, _decode_result
-from veldra.gui.types import GuiRunResult, RunInvocation
+from veldra.gui.types import GuiRunResult, RetryPolicy, RunInvocation
 
 
 def test_job_store_enqueue_claim_and_complete(tmp_path) -> None:
@@ -40,6 +40,7 @@ def test_job_store_cancel_contract(tmp_path) -> None:
     canceled = store.request_cancel(queued.job_id)
     assert canceled is not None
     assert canceled.status == "canceled"
+    assert store.is_cancel_requested(queued.job_id) is True
 
     running = store.enqueue_job(RunInvocation(action="tune"))
     claim = store.claim_next_job()
@@ -48,6 +49,26 @@ def test_job_store_cancel_contract(tmp_path) -> None:
     assert requested is not None
     assert requested.status == "cancel_requested"
     assert requested.cancel_requested is True
+    assert store.is_cancel_requested(running.job_id) is True
+
+
+def test_job_store_create_retry_job_contract(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    failed = store.enqueue_job(
+        RunInvocation(
+            action="fit",
+            retry_policy=RetryPolicy(max_retries=2, retry_on=("timeout",)),
+        )
+    )
+    store.mark_failed(failed.job_id, message="boom", payload={}, error_kind="timeout")
+    retry = store.create_retry_job(
+        failed.job_id,
+        reason="manual_retry",
+        policy=RetryPolicy(max_retries=0),
+    )
+    assert retry.status == "queued"
+    assert retry.retry_parent_job_id == failed.job_id
+    assert retry.retry_count == 1
 
 
 def test_job_store_persistence_across_instances(tmp_path) -> None:

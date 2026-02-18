@@ -61,6 +61,7 @@ from veldra.gui.services import (
     migrate_config_file_via_gui,
     migrate_config_from_yaml,
     normalize_gui_error,
+    retry_run_job,
     save_config_yaml,
     set_run_job_priority,
     submit_run_job,
@@ -1143,6 +1144,7 @@ def create_app() -> dash.Dash:
     app.callback(
         Output("run-job-detail", "children"),
         Output("run-cancel-job-btn", "disabled"),
+        Output("run-retry-job-btn", "disabled"),
         Output("selected-job-id-display", "children"),
         Output("run-job-select", "data"),  # Store selection
         Output("run-log-limit", "data"),
@@ -1161,6 +1163,13 @@ def create_app() -> dash.Dash:
         State("run-job-select", "data"),
         prevent_initial_call=True,
     )(_cb_cancel_job)
+
+    app.callback(
+        Output("run-result-log", "children", allow_duplicate=True),
+        Input("run-retry-job-btn", "n_clicks"),
+        State("run-job-select", "data"),
+        prevent_initial_call=True,
+    )(_cb_retry_job)
 
     app.callback(
         Output("run-result-log", "children", allow_duplicate=True),
@@ -2711,9 +2720,9 @@ def _cb_show_selected_job_detail(
     data: list[dict] | None,
     selected_job_id: str | None,
     current_log_limit: int | None,
-) -> tuple[Any, bool, str, str | None, int]:
+) -> tuple[Any, bool, bool, str, str | None, int]:
     if not data:
-        return "Select a job to view details.", True, "", selected_job_id, 200
+        return "Select a job to view details.", True, True, "", selected_job_id, 200
 
     next_log_limit = max(50, int(current_log_limit or 200))
     triggered = ""
@@ -2731,18 +2740,19 @@ def _cb_show_selected_job_detail(
     if selected_rows:
         row_idx = selected_rows[0]
         if row_idx >= len(data):
-            return "Job not found.", True, "", selected_job_id, next_log_limit
+            return "Job not found.", True, True, "", selected_job_id, next_log_limit
         job_id = data[row_idx]["job_id"]
 
     if not job_id:
-        return "Select a job to view details.", True, "", None, next_log_limit
+        return "Select a job to view details.", True, True, "", None, next_log_limit
 
     job = get_run_job(job_id)
 
     if not job:
-        return "Job details unavailable.", True, "", selected_job_id, next_log_limit
+        return "Job details unavailable.", True, True, "", selected_job_id, next_log_limit
 
     can_cancel = job.status in ["queued", "running"]
+    can_retry = job.status in ["failed", "canceled"]
     status_color = "primary"
     if job.status == "succeeded":
         status_color = "success"
@@ -2805,6 +2815,14 @@ def _cb_show_selected_job_detail(
                 html.Pre(job.error_message, className="mb-0"), color="danger", className="mt-3"
             )
         )
+    next_steps = []
+    if job.result and isinstance(job.result.payload, dict):
+        raw_steps = job.result.payload.get("next_steps")
+        if isinstance(raw_steps, list):
+            next_steps = [str(item) for item in raw_steps if str(item).strip()]
+    if next_steps:
+        details_elems.append(html.Label("Next Step", className="fw-bold mt-3"))
+        details_elems.append(html.Ul([html.Li(step) for step in next_steps], className="mb-2"))
 
     if job.result and job.result.payload:
         payload_str = _json_dumps(job.result.payload)
@@ -2833,7 +2851,7 @@ def _cb_show_selected_job_detail(
 
     details = html.Div(details_elems, className="p-2")
 
-    return details, not can_cancel, f"Selected: {job_id}", job_id, next_log_limit
+    return details, not can_cancel, not can_retry, f"Selected: {job_id}", job_id, next_log_limit
 
 
 def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:
@@ -2844,6 +2862,16 @@ def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:
         return f"[INFO] {result.message}"
     except Exception as exc:
         return f"[ERROR] {str(exc)}"
+
+
+def _cb_retry_job(_n_clicks: int, job_id: str | None) -> str:
+    if not job_id:
+        return ""
+    try:
+        result = retry_run_job(job_id)
+        return f"[INFO] {result.message}"
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}"
 
 
 def _cb_set_job_priority(_n_clicks: int, job_id: str | None, priority: str | None) -> str:

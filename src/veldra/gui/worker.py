@@ -3,14 +3,51 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 
 from veldra.api.logging import log_event
 from veldra.gui.job_store import GuiJobStore
-from veldra.gui.services import run_action
+from veldra.gui.services import CanceledByUser, run_action
+from veldra.gui.types import RetryPolicy
 
 LOGGER = logging.getLogger("veldra.gui.worker")
+
+
+def _retry_delay_sec(retry_count: int, policy: RetryPolicy | None) -> float:
+    if policy is None:
+        return 0.0
+    base = max(0.0, float(policy.base_delay_sec))
+    cap = max(base, float(policy.max_delay_sec))
+    return min(cap, base * math.pow(2.0, max(0, int(retry_count) - 1)))
+
+
+def _normalize_policy(policy: RetryPolicy | dict[str, object] | None) -> RetryPolicy | None:
+    if policy is None:
+        return None
+    if isinstance(policy, RetryPolicy):
+        return policy
+    if isinstance(policy, dict):
+        try:
+            return RetryPolicy(**policy)
+        except Exception:
+            return None
+    return None
+
+
+def _should_auto_retry(
+    *,
+    retry_count: int,
+    error_kind: str,
+    policy: RetryPolicy | None,
+) -> bool:
+    if policy is None:
+        return False
+    if int(policy.max_retries) <= int(retry_count):
+        return False
+    retry_on = {str(k).strip().lower() for k in policy.retry_on}
+    return str(error_kind).strip().lower() in retry_on
 
 
 class GuiWorker:
@@ -82,11 +119,37 @@ class GuiWorker:
                     job_id=claimed.job_id,
                     job_store=self._store,
                 )
+            except CanceledByUser:
+                updated = self._store.mark_canceled_from_request(
+                    claimed.job_id,
+                    message="Canceled by user request.",
+                )
+                self._store.append_job_log(
+                    claimed.job_id,
+                    level="WARNING",
+                    message="worker_completed",
+                    payload={"status": "canceled"},
+                )
+                if updated is not None:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        "gui job updated",
+                        run_id=updated.job_id,
+                        artifact_path=updated.invocation.artifact_path,
+                        task_type=updated.action,
+                        event="gui job updated",
+                        status=updated.status,
+                        action=updated.action,
+                        cancel_requested=updated.cancel_requested,
+                    )
+                continue
             except Exception as exc:  # pragma: no cover - defensive branch.
                 updated = self._store.mark_failed(
                     claimed.job_id,
                     message=f"Unhandled worker error: {exc}",
                     payload={},
+                    error_kind="unknown",
                 )
                 if updated is not None:
                     log_event(
@@ -103,25 +166,68 @@ class GuiWorker:
                 continue
 
             if result.success:
-                updated = self._store.mark_succeeded(claimed.job_id, result)
-                self._store.append_job_log(
-                    claimed.job_id,
-                    level="INFO",
-                    message="worker_completed",
-                    payload={"status": "succeeded"},
-                )
+                if self._store.is_cancel_requested(claimed.job_id):
+                    updated = self._store.mark_canceled_from_request(
+                        claimed.job_id,
+                        message="Canceled by user request.",
+                    )
+                    self._store.append_job_log(
+                        claimed.job_id,
+                        level="WARNING",
+                        message="worker_completed",
+                        payload={"status": "canceled"},
+                    )
+                else:
+                    updated = self._store.mark_succeeded(claimed.job_id, result)
+                    self._store.append_job_log(
+                        claimed.job_id,
+                        level="INFO",
+                        message="worker_completed",
+                        payload={"status": "succeeded"},
+                    )
             else:
+                error_kind = str(result.payload.get("error_kind", "unknown")).strip().lower()
                 updated = self._store.mark_failed(
                     claimed.job_id,
                     message=result.message,
                     payload=result.payload,
+                    error_kind=error_kind,
                 )
                 self._store.append_job_log(
                     claimed.job_id,
                     level="ERROR",
                     message="worker_completed",
-                    payload={"status": "failed", "error": result.message},
+                    payload={"status": "failed", "error": result.message, "error_kind": error_kind},
                 )
+                policy = _normalize_policy(claimed.invocation.retry_policy)
+                if (
+                    updated is not None
+                    and _should_auto_retry(
+                        retry_count=updated.retry_count,
+                        error_kind=error_kind,
+                        policy=policy,
+                    )
+                ):
+                    delay = _retry_delay_sec(updated.retry_count + 1, policy)
+                    if delay > 0:
+                        self._store.append_job_log(
+                            claimed.job_id,
+                            level="INFO",
+                            message="retry_backoff_sleep",
+                            payload={"delay_sec": delay},
+                        )
+                        self._stop_event.wait(delay)
+                    retry_job = self._store.create_retry_job(
+                        claimed.job_id,
+                        reason=f"auto_retry:{error_kind}",
+                        policy=policy,
+                    )
+                    self._store.append_job_log(
+                        claimed.job_id,
+                        level="INFO",
+                        message="retry_auto_enqueued",
+                        payload={"retry_job_id": retry_job.job_id},
+                    )
 
             if updated is not None:
                 log_event(

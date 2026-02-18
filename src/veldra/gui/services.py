@@ -31,6 +31,7 @@ from veldra.gui.types import (
     GuiJobRecord,
     GuiJobResult,
     GuiRunResult,
+    RetryPolicy,
     RunInvocation,
 )
 
@@ -228,6 +229,78 @@ def normalize_gui_error(exc: Exception) -> str:
     if isinstance(exc, VeldraNotImplementedError):
         return f"Not implemented: {exc}"
     return f"{exc.__class__.__name__}: {exc}"
+
+
+def classify_gui_error(exc: Exception) -> str:
+    if isinstance(exc, CanceledByUser):
+        return "cancel"
+    if isinstance(exc, VeldraValidationError):
+        return "validation"
+    if isinstance(exc, FileNotFoundError):
+        return "file_not_found"
+    if isinstance(exc, PermissionError):
+        return "permission"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, MemoryError):
+        return "memory"
+    msg = str(exc).lower()
+    if "not found" in msg or "does not exist" in msg:
+        return "file_not_found"
+    if "permission" in msg or "access denied" in msg:
+        return "permission"
+    if "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if "busy" in msg or "database is locked" in msg:
+        return "resource_busy"
+    if "temporar" in msg or "connection reset" in msg:
+        return "io_transient"
+    return "unknown"
+
+
+def build_next_steps(error_kind: str, *, action: str | None = None) -> list[str]:
+    if error_kind == "validation":
+        return ["設定値と入力パスを確認し、RunConfig を再検証してください。"]
+    if error_kind == "file_not_found":
+        return ["対象ファイルの存在と相対/絶対パスを確認してください。"]
+    if error_kind == "permission":
+        return ["ファイル権限と書き込み先ディレクトリ権限を確認してください。"]
+    if error_kind == "memory":
+        return ["データ量や `num_boost_round` を下げるか、分割数を減らして再実行してください。"]
+    if error_kind == "timeout":
+        return ["環境負荷を下げて再実行し、必要ならリトライ回数を増やしてください。"]
+    if error_kind == "cancel":
+        return ["処理はユーザーキャンセルで停止しました。必要なら Retry Task を実行してください。"]
+    if error_kind in {"resource_busy", "io_transient"}:
+        return ["一時的障害の可能性があります。少し待ってから再実行してください。"]
+    if action:
+        return [f"ジョブログを確認し、`{action}` の入力と依存関係を再確認してください。"]
+    return []
+
+
+def _build_error_payload(exc: Exception, *, action: str | None = None) -> dict[str, Any]:
+    kind = classify_gui_error(exc)
+    return {
+        "error_kind": kind,
+        "next_steps": build_next_steps(kind, action=action),
+    }
+
+
+class CanceledByUser(RuntimeError):
+    """Raised when cooperative cancellation is requested for a running GUI job."""
+
+
+def _invoke_runner_with_optional_hook(
+    fn: Any,
+    *args: Any,
+    cancellation_hook: Any,
+) -> Any:
+    try:
+        return fn(*args, cancellation_hook=cancellation_hook)
+    except TypeError as exc:
+        if "unexpected keyword argument 'cancellation_hook'" in str(exc):
+            return fn(*args)
+        raise
 
 
 def _require(value: str | None, field_name: str) -> str:
@@ -716,6 +789,21 @@ class _RunActionContext:
             pct = 20.0 + (70.0 * max(0, min(done, total)) / float(total))
             self.update_progress(pct, f"tuning_trials_{done}/{total}")
 
+    def check_cancellation(self, step: str = "checkpoint") -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        if self.job_store.is_cancel_requested(self.job_id):
+            self.update_progress(100.0, "canceled")
+            self.append_log(
+                level="WARNING",
+                message="action_canceled",
+                payload={"step": step},
+            )
+            raise CanceledByUser("Canceled by user request.")
+
+    def cancellation_hook(self) -> None:
+        self.check_cancellation("runner_hook")
+
 
 class _RunnerLogCapture(logging.Handler):
     def __init__(self, context: _RunActionContext) -> None:
@@ -761,6 +849,7 @@ def run_action(
         )
         context.update_progress(5.0, "validating")
         context.append_log(level="INFO", message="action_started", payload={"action": action})
+        context.check_cancellation("validated")
         if action not in {
             "fit",
             "evaluate",
@@ -776,41 +865,63 @@ def run_action(
         if action == "fit":
             context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
+            context.check_cancellation("fit_after_config")
             context.update_progress(20.0, "fit_running")
             with _capture_runner_logs(context):
-                result = _get_runner_func("fit")(config)
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("fit"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("fit_after_runner")
             context.update_progress(95.0, "fit_finalize")
         elif action == "tune":
             context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
             context.tune_total_trials = int(config.tuning.n_trials)
+            context.check_cancellation("tune_after_config")
             context.update_progress(20.0, "tune_running")
             with _capture_runner_logs(context):
-                result = _get_runner_func("tune")(config)
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("tune"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("tune_after_runner")
             context.update_progress(95.0, "tune_finalize")
         elif action == "estimate_dr":
             context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
+            context.check_cancellation("estimate_after_config")
             context.update_progress(20.0, "estimate_running")
             with _capture_runner_logs(context):
-                result = _get_runner_func("estimate_dr")(config)
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("estimate_dr"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("estimate_after_runner")
             context.update_progress(95.0, "estimate_finalize")
         elif action == "evaluate":
             context.update_progress(12.0, "load_data")
             data_path = _require(invocation.data_path, "data_path")
             frame = _get_load_tabular_data()(data_path)
+            context.check_cancellation("evaluate_after_data")
             if invocation.artifact_path and invocation.artifact_path.strip():
                 context.update_progress(30.0, "load_artifact")
                 artifact = Artifact.load(invocation.artifact_path.strip())
+                context.check_cancellation("evaluate_after_artifact")
                 context.update_progress(45.0, "evaluate_running")
                 with _capture_runner_logs(context):
                     result = _get_runner_func("evaluate")(artifact, frame)
             else:
                 context.update_progress(30.0, "load_config")
                 config = _resolve_config(invocation)
+                context.check_cancellation("evaluate_after_config")
                 context.update_progress(45.0, "evaluate_running")
                 with _capture_runner_logs(context):
                     result = _get_runner_func("evaluate")(config, frame)
+            context.check_cancellation("evaluate_after_runner")
             context.update_progress(95.0, "evaluate_finalize")
         elif action == "simulate":
             context.update_progress(12.0, "load_inputs")
@@ -820,34 +931,43 @@ def run_action(
             artifact = Artifact.load(artifact_path)
             frame = _get_load_tabular_data()(data_path)
             scenarios = _load_scenarios(scenarios_path)
+            context.check_cancellation("simulate_after_inputs")
             context.update_progress(45.0, "simulate_running")
             with _capture_runner_logs(context):
                 result = _get_runner_func("simulate")(artifact, frame, scenarios)
+            context.check_cancellation("simulate_after_runner")
             context.update_progress(95.0, "simulate_finalize")
         elif action == "export_excel":
             context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_excel_after_artifact")
             context.update_progress(55.0, "export_excel_running")
             output_path = export_excel_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_excel_after_runner")
             context.update_progress(95.0, "export_excel_finalize")
         elif action == "export_html_report":
             context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_html_after_artifact")
             context.update_progress(55.0, "export_html_running")
             output_path = export_html_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_html_after_runner")
             context.update_progress(95.0, "export_html_finalize")
         else:
             context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             artifact = Artifact.load(artifact_path)
             export_format = (invocation.export_format or "python").strip().lower()
+            context.check_cancellation("export_after_artifact")
             context.update_progress(55.0, "export_running")
             with _capture_runner_logs(context):
                 result = _get_runner_func("export")(artifact, format=export_format)
+            context.check_cancellation("export_after_runner")
             context.update_progress(95.0, "export_finalize")
 
+        context.check_cancellation("before_completion")
         context.update_progress(100.0, "completed")
         context.append_log(level="INFO", message="action_completed", payload={"action": action})
         return GuiRunResult(
@@ -855,6 +975,8 @@ def run_action(
             message=f"{action} completed successfully.",
             payload=_result_to_payload(result),
         )
+    except CanceledByUser:
+        raise
     except Exception as exc:
         if job_id and job_store is not None:
             context = _RunActionContext(
@@ -862,12 +984,14 @@ def run_action(
                 job_store=job_store,
                 action=invocation.action,
             )
+            payload = _build_error_payload(exc, action=invocation.action)
             context.append_log(
                 level="ERROR",
                 message="action_failed",
-                payload={"error": normalize_gui_error(exc)},
+                payload={"error": normalize_gui_error(exc), **payload},
             )
-        return GuiRunResult(success=False, message=normalize_gui_error(exc), payload={})
+        payload = _build_error_payload(exc, action=invocation.action)
+        return GuiRunResult(success=False, message=normalize_gui_error(exc), payload=payload)
 
 
 def submit_run_job(invocation: RunInvocation) -> GuiJobResult:
@@ -944,6 +1068,40 @@ def cancel_run_job(job_id: str) -> GuiJobResult:
         job_id=canceled.job_id,
         status=canceled.status,
         message=f"Job {canceled.job_id} status updated to {canceled.status}.",
+    )
+
+
+def retry_run_job(job_id: str) -> GuiJobResult:
+    source = get_gui_job_store().get_job(_require(job_id, "job_id"))
+    if source is None:
+        raise VeldraValidationError(f"Job not found: {job_id}")
+    if source.status not in {"failed", "canceled"}:
+        raise VeldraValidationError(
+            f"Retry is allowed only for failed/canceled jobs (status={source.status})."
+        )
+    policy = source.invocation.retry_policy or RetryPolicy()
+    retried = get_gui_job_store().create_retry_job(
+        source.job_id,
+        reason="manual_retry",
+        policy=policy,
+    )
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job retried",
+        run_id=retried.job_id,
+        artifact_path=retried.invocation.artifact_path,
+        task_type=retried.action,
+        event="gui job retried",
+        status=retried.status,
+        action=retried.action,
+        source_job_id=source.job_id,
+        retry_count=retried.retry_count,
+    )
+    return GuiJobResult(
+        job_id=retried.job_id,
+        status=retried.status,
+        message=f"Retry queued from {source.job_id} as {retried.job_id}.",
     )
 
 

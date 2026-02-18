@@ -15,6 +15,7 @@ from veldra.gui.types import (
     GuiJobPriority,
     GuiJobRecord,
     GuiRunResult,
+    RetryPolicy,
     RunInvocation,
 )
 
@@ -52,7 +53,20 @@ def _decode_invocation(raw: str) -> RunInvocation:
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("Invalid invocation payload in job store.")
+    retry_policy = payload.get("retry_policy")
+    if isinstance(retry_policy, dict):
+        payload["retry_policy"] = RetryPolicy(**retry_policy)
     return RunInvocation(**payload)
+
+
+def _coerce_retry_policy(policy: RetryPolicy | dict[str, Any] | None) -> RetryPolicy | None:
+    if policy is None:
+        return None
+    if isinstance(policy, RetryPolicy):
+        return policy
+    if isinstance(policy, dict):
+        return RetryPolicy(**policy)
+    return None
 
 
 def _decode_result(raw: str | None) -> GuiRunResult | None:
@@ -82,6 +96,13 @@ def _row_to_record(row: sqlite3.Row) -> GuiJobRecord:
         ),
         result=_decode_result(row["result_json"]),
         error_message=(str(row["error_message"]) if row["error_message"] is not None else None),
+        retry_count=int(row["retry_count"] or 0),
+        retry_parent_job_id=(
+            str(row["retry_parent_job_id"]) if row["retry_parent_job_id"] is not None else None
+        ),
+        last_error_kind=(
+            str(row["last_error_kind"]) if row["last_error_kind"] is not None else None
+        ),
     )
 
 
@@ -118,7 +139,10 @@ class GuiJobStore:
                     started_at_utc TEXT NULL,
                     finished_at_utc TEXT NULL,
                     result_json TEXT NULL,
-                    error_message TEXT NULL
+                    error_message TEXT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    retry_parent_job_id TEXT NULL,
+                    last_error_kind TEXT NULL
                 )
                 """
             )
@@ -130,6 +154,12 @@ class GuiJobStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN progress_pct REAL NOT NULL DEFAULT 0.0")
             if "current_step" not in column_names:
                 conn.execute("ALTER TABLE jobs ADD COLUMN current_step TEXT NULL")
+            if "retry_count" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            if "retry_parent_job_id" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN retry_parent_job_id TEXT NULL")
+            if "last_error_kind" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN last_error_kind TEXT NULL")
 
             conn.execute(
                 """
@@ -166,9 +196,10 @@ class GuiJobStore:
                 INSERT INTO jobs(
                     job_id, status, action, priority, created_at_utc, updated_at_utc,
                     invocation_json, cancel_requested, progress_pct, current_step,
-                    started_at_utc, finished_at_utc, result_json, error_message
+                    started_at_utc, finished_at_utc, result_json, error_message,
+                    retry_count, retry_parent_job_id, last_error_kind
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0.0, NULL, NULL, NULL, NULL, NULL)
+                VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0.0, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL)
                 """,
                 (
                     job_id,
@@ -329,6 +360,7 @@ class GuiJobStore:
         *,
         message: str,
         payload: dict[str, Any] | None = None,
+        error_kind: str | None = None,
     ) -> GuiJobRecord | None:
         now = _utcnow_iso()
         result = GuiRunResult(success=False, message=message, payload=payload or {})
@@ -342,10 +374,18 @@ class GuiJobStore:
                     updated_at_utc = ?,
                     finished_at_utc = ?,
                     result_json = ?,
-                    error_message = ?
+                    error_message = ?,
+                    last_error_kind = ?
                 WHERE job_id = ?
                 """,
-                (now, now, json.dumps(asdict(result), ensure_ascii=False), message, job_id),
+                (
+                    now,
+                    now,
+                    json.dumps(asdict(result), ensure_ascii=False),
+                    message,
+                    (str(error_kind).strip() if error_kind else None),
+                    job_id,
+                ),
             )
         return self.get_job(job_id)
 
@@ -363,12 +403,109 @@ class GuiJobStore:
                     updated_at_utc = ?,
                     finished_at_utc = ?,
                     result_json = ?,
-                    error_message = NULL
+                    error_message = NULL,
+                    last_error_kind = 'cancel'
                 WHERE job_id = ?
                 """,
                 (now, now, json.dumps(asdict(result), ensure_ascii=False), job_id),
             )
         return self.get_job(job_id)
+
+    def mark_canceled_from_request(
+        self,
+        job_id: str,
+        *,
+        message: str = "Canceled by user.",
+    ) -> GuiJobRecord | None:
+        return self.mark_canceled(job_id, message=message)
+
+    def is_cancel_requested(self, job_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT cancel_requested, status FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return bool(int(row["cancel_requested"])) or str(row["status"]) == "cancel_requested"
+
+    def create_retry_job(
+        self,
+        source_job_id: str,
+        *,
+        reason: str,
+        policy: RetryPolicy | None,
+    ) -> GuiJobRecord:
+        now = _utcnow_iso()
+        new_job_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source_row = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (source_job_id,),
+            ).fetchone()
+            if source_row is None:
+                conn.execute("COMMIT")
+                raise ValueError(f"Source job not found: {source_job_id}")
+            source = _row_to_record(source_row)
+            retry_invocation = RunInvocation(
+                action=source.invocation.action,
+                config_yaml=source.invocation.config_yaml,
+                config_path=source.invocation.config_path,
+                data_path=source.invocation.data_path,
+                artifact_path=source.invocation.artifact_path,
+                scenarios_path=source.invocation.scenarios_path,
+                export_format=source.invocation.export_format,
+                priority=source.invocation.priority,
+                retry_policy=(
+                    _coerce_retry_policy(policy)
+                    or _coerce_retry_policy(source.invocation.retry_policy)
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO jobs(
+                    job_id, status, action, priority, created_at_utc, updated_at_utc,
+                    invocation_json, cancel_requested, progress_pct, current_step,
+                    started_at_utc, finished_at_utc, result_json, error_message,
+                    retry_count, retry_parent_job_id, last_error_kind
+                )
+                VALUES(
+                    ?, 'queued', ?, ?, ?, ?, ?, 0, 0.0, 'retry_queued',
+                    NULL, NULL, NULL, NULL, ?, ?, NULL
+                )
+                """,
+                (
+                    new_job_id,
+                    retry_invocation.action.strip().lower(),
+                    _priority_to_int(retry_invocation.priority),
+                    now,
+                    now,
+                    json.dumps(asdict(retry_invocation), ensure_ascii=False),
+                    int(source.retry_count) + 1,
+                    source.job_id,
+                ),
+            )
+            reason_payload = json.dumps(
+                {"reason": str(reason or "manual_retry"), "next_job_id": new_job_id},
+                ensure_ascii=False,
+            )
+            conn.execute(
+                """
+                INSERT INTO job_logs(job_id, seq, created_at_utc, level, message, payload_json)
+                VALUES(
+                    ?,
+                    COALESCE((SELECT MAX(seq) + 1 FROM job_logs WHERE job_id = ?), 1),
+                    ?, 'INFO', 'retry_enqueued', ?
+                )
+                """,
+                (source.job_id, source.job_id, now, reason_payload),
+            )
+            conn.execute("COMMIT")
+        retry_job = self.get_job(new_job_id)
+        if retry_job is None:
+            raise RuntimeError("Failed to read retry job.")
+        return retry_job
 
     def update_progress(
         self,
