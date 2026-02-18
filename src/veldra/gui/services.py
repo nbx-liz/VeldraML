@@ -756,14 +756,41 @@ def export_html_report(artifact_path: str) -> str:
     cfg_text = yaml.safe_dump(_to_safe_dict(getattr(artifact, "config", {})), sort_keys=False)
     task_type = getattr(artifact, "task_type", "unknown")
     run_id = getattr(artifact, "run_id", "unknown")
+    fold_metrics = getattr(artifact, "fold_metrics", None)
+    causal_summary = load_causal_summary(artifact_path)
 
     rows = "".join(f"<tr><td>{k}</td><td>{v:.6g}</td></tr>" for k, v in sorted(metrics.items()))
+    fold_rows = ""
+    if isinstance(fold_metrics, pd.DataFrame) and not fold_metrics.empty:
+        limited = fold_metrics.head(20)
+        for _, row in limited.iterrows():
+            cells = "".join(f"<td>{row[col]}</td>" for col in limited.columns)
+            fold_rows += f"<tr>{cells}</tr>"
+
+    causal_rows = ""
+    if isinstance(causal_summary, dict):
+        keys = [
+            "method",
+            "estimand",
+            "estimate",
+            "overlap_metric",
+            "smd_max_unweighted",
+            "smd_max_weighted",
+        ]
+        for key in keys:
+            if key in causal_summary:
+                causal_rows += f"<tr><td>{key}</td><td>{causal_summary[key]}</td></tr>"
+
     html_text = (
         "<html><head><meta charset='utf-8'><title>Veldra Report</title></head><body>"
         f"<h1>Veldra Report</h1><p>Run ID: {run_id} | Task: {task_type}</p>"
         "<h2>Metrics</h2><table border='1' cellpadding='4'>"
         "<tr><th>Metric</th><th>Value</th></tr>"
         f"{rows}</table>"
+        "<h2>Fold Metrics (Preview)</h2><table border='1' cellpadding='4'>"
+        f"{fold_rows or '<tr><td>Not available</td></tr>'}</table>"
+        "<h2>Causal Diagnostics</h2><table border='1' cellpadding='4'>"
+        f"{causal_rows or '<tr><td>Not available</td></tr>'}</table>"
         "<h2>Config</h2><pre>"
         f"{cfg_text}"
         "</pre>"
@@ -780,6 +807,20 @@ def export_html_report(artifact_path: str) -> str:
     return str(output_path)
 
 
+def export_pdf_report(artifact_path: str) -> str:
+    html_path = export_html_report(artifact_path)
+    pdf_path = Path(html_path).with_suffix(".pdf")
+    try:
+        from weasyprint import HTML  # type: ignore
+    except Exception as exc:
+        raise VeldraValidationError(
+            "PDF export requires optional dependency 'weasyprint'. "
+            "Install it to enable export_pdf_report."
+        ) from exc
+    HTML(filename=str(html_path)).write_pdf(str(pdf_path))
+    return str(pdf_path)
+
+
 def _to_safe_dict(value: Any) -> dict[str, Any]:
     if is_dataclass(value):
         return asdict(value)
@@ -793,6 +834,7 @@ def _to_safe_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {"value": repr(value)}
+
 
 @dataclass(slots=True)
 class _RunActionContext:
@@ -905,6 +947,7 @@ def run_action(
             "estimate_dr",
             "export_excel",
             "export_html_report",
+            "export_pdf_report",
         }:
             raise VeldraValidationError(f"Unsupported action '{invocation.action}'.")
 
@@ -1001,6 +1044,15 @@ def run_action(
             result = {"artifact_path": artifact_path, "output_path": output_path}
             context.check_cancellation("export_html_after_runner")
             context.update_progress(95.0, "export_html_finalize")
+        elif action == "export_pdf_report":
+            context.update_progress(15.0, "load_artifact")
+            artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_pdf_after_artifact")
+            context.update_progress(55.0, "export_pdf_running")
+            output_path = export_pdf_report(artifact_path)
+            result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_pdf_after_runner")
+            context.update_progress(95.0, "export_pdf_finalize")
         else:
             context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
@@ -1259,72 +1311,127 @@ def load_job_config_yaml(job: GuiJobRecord) -> str:
 
 
 def compare_artifacts(artifact_a: str, artifact_b: str) -> dict[str, Any]:
-    art_a = Artifact.load(_require(artifact_a, "artifact_a"))
-    art_b = Artifact.load(_require(artifact_b, "artifact_b"))
+    return compare_artifacts_multi([artifact_a, artifact_b], baseline=artifact_a)
 
-    task_a = str(getattr(art_a, "task_type", "unknown"))
-    task_b = str(getattr(art_b, "task_type", "unknown"))
+
+def load_causal_summary(artifact_path: str) -> dict[str, Any] | None:
+    base = Path(_require(artifact_path, "artifact_path"))
+    candidates: list[Path] = []
+    direct = base / "dr_summary.json"
+    if direct.exists():
+        candidates.append(direct)
+    parent = base.parent
+    causal_root = parent / "causal"
+    if causal_root.exists() and causal_root.is_dir():
+        for summary in causal_root.glob("*/dr_summary.json"):
+            candidates.append(summary)
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def compare_artifacts_multi(artifacts: list[str], baseline: str) -> dict[str, Any]:
+    selected = [str(p) for p in artifacts if str(p).strip()]
+    if not selected:
+        raise VeldraValidationError("At least one artifact is required.")
+    if len(selected) > 5:
+        raise VeldraValidationError("At most 5 artifacts can be compared.")
+    if baseline not in selected:
+        baseline = selected[0]
+
+    loaded = {path: Artifact.load(path) for path in selected}
     checks: list[dict[str, str]] = []
-    if task_a == task_b:
-        checks.append({"level": "ok", "message": f"Same task type: {task_a}"})
-    else:
-        checks.append(
-            {
-                "level": "warning",
-                "message": f"Different task types: {task_a} vs {task_b}",
-            }
+    task_types = {
+        path: str(
+            getattr(
+                art,
+                "task_type",
+                getattr(getattr(art, "manifest", None), "task_type", "unknown"),
+            )
         )
-
-    cfg_a = _to_safe_dict(getattr(art_a, "config", {}))
-    cfg_b = _to_safe_dict(getattr(art_b, "config", {}))
-    data_a = ((cfg_a.get("data") or {}) if isinstance(cfg_a, dict) else {}).get("path")
-    data_b = ((cfg_b.get("data") or {}) if isinstance(cfg_b, dict) else {}).get("path")
-    if data_a and data_b and data_a != data_b:
+        for path, art in loaded.items()
+    }
+    if len(set(task_types.values())) == 1:
         checks.append(
             {
-                "level": "warning",
-                "message": "Different data sources. Row-level prediction diff is disabled.",
+                "level": "ok",
+                "message": f"Same task type: {next(iter(task_types.values()))}",
             }
         )
     else:
-        checks.append({"level": "ok", "message": "Data source appears consistent."})
+        checks.append({"level": "warning", "message": "Different task types detected."})
 
-    split_a = ((cfg_a.get("split") or {}) if isinstance(cfg_a, dict) else {}).get("type")
-    split_b = ((cfg_b.get("split") or {}) if isinstance(cfg_b, dict) else {}).get("type")
-    if split_a and split_b and split_a != split_b:
-        checks.append(
-            {
-                "level": "info",
-                "message": f"Split differs: {split_a} vs {split_b}",
-            }
-        )
+    cfg_yamls: dict[str, str] = {}
+    cfg_payloads: dict[str, dict[str, Any]] = {}
+    metrics_map: dict[str, dict[str, float]] = {}
+    for path, art in loaded.items():
+        cfg_obj = _to_safe_dict(getattr(art, "config", {}) or getattr(art, "run_config", {}))
+        cfg_payloads[path] = cfg_obj if isinstance(cfg_obj, dict) else {}
+        cfg_yamls[path] = yaml.safe_dump(cfg_obj, sort_keys=False)
+        metrics_map[path] = _flatten_numeric_metrics(getattr(art, "metrics", {}) or {})
 
-    metrics_a = _flatten_numeric_metrics(getattr(art_a, "metrics", {}) or {})
-    metrics_b = _flatten_numeric_metrics(getattr(art_b, "metrics", {}) or {})
-    keys = sorted(set(metrics_a) | set(metrics_b))
-    metric_rows = []
-    for key in keys:
-        va = metrics_a.get(key)
-        vb = metrics_b.get(key)
-        delta = None
-        if va is not None and vb is not None:
-            delta = va - vb
-        metric_rows.append(
-            {
-                "metric": key,
-                "run_a": va,
-                "run_b": vb,
-                "delta": delta,
-            }
-        )
+    baseline_cfg = cfg_payloads.get(baseline, {})
+    baseline_data_obj = (
+        (baseline_cfg.get("data") or {}) if isinstance(baseline_cfg, dict) else {}
+    )
+    baseline_data = baseline_data_obj.get("path")
+    baseline_split = (
+        (baseline_cfg.get("split") or {}) if isinstance(baseline_cfg, dict) else {}
+    ).get("type")
+    for path in selected:
+        if path == baseline:
+            continue
+        cfg_obj = cfg_payloads.get(path, {})
+        data_path = ((cfg_obj.get("data") or {}) if isinstance(cfg_obj, dict) else {}).get("path")
+        split_type = ((cfg_obj.get("split") or {}) if isinstance(cfg_obj, dict) else {}).get("type")
+        if baseline_data and data_path and baseline_data != data_path:
+            checks.append(
+                {
+                    "level": "warning",
+                    "message": "Different data sources. Row-level prediction diff is disabled.",
+                }
+            )
+        if baseline_split and split_type and baseline_split != split_type:
+            checks.append(
+                {
+                    "level": "info",
+                    "message": f"Split differs: {baseline_split} vs {split_type}",
+                }
+            )
 
-    yaml_a = yaml.safe_dump(cfg_a, sort_keys=False)
-    yaml_b = yaml.safe_dump(cfg_b, sort_keys=False)
+    all_metrics = sorted({k for m in metrics_map.values() for k in m.keys()})
+    baseline_metrics = metrics_map.get(baseline, {})
+    metric_rows: list[dict[str, Any]] = []
+    for metric in all_metrics:
+        base_val = baseline_metrics.get(metric)
+        for path in selected:
+            cur_val = metrics_map[path].get(metric)
+            delta = None
+            if isinstance(cur_val, (int, float)) and isinstance(base_val, (int, float)):
+                delta = float(cur_val) - float(base_val)
+            metric_rows.append(
+                {
+                    "metric": metric,
+                    "artifact": path,
+                    "value": cur_val,
+                    "baseline": base_val,
+                    "delta_from_baseline": delta,
+                }
+            )
+
+    first = selected[0]
     return {
         "checks": checks,
-        "metrics_a": metrics_a,
-        "metrics_b": metrics_b,
+        "baseline": baseline,
+        "artifacts": selected,
+        "metrics_map": metrics_map,
         "metric_rows": metric_rows,
-        "config_yaml_a": yaml_a,
-        "config_yaml_b": yaml_b,
+        "config_yaml_a": cfg_yamls.get(first, ""),
+        "config_yaml_b": cfg_yamls.get(baseline, ""),
+        "config_yamls": cfg_yamls,
     }

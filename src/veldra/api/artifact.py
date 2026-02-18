@@ -43,6 +43,7 @@ class Artifact:
         threshold: dict[str, Any] | None = None,
         threshold_curve: pd.DataFrame | None = None,
         training_history: dict[str, Any] | None = None,
+        fold_metrics: pd.DataFrame | None = None,
         observation_table: pd.DataFrame | None = None,
     ) -> None:
         self.run_config = run_config
@@ -56,6 +57,7 @@ class Artifact:
         self.threshold = threshold or {"policy": "fixed", "value": 0.5}
         self.threshold_curve = threshold_curve
         self.training_history = training_history
+        self.fold_metrics = fold_metrics
         self.observation_table = observation_table
         self._booster: lgb.Booster | None = None
 
@@ -73,6 +75,7 @@ class Artifact:
         threshold: dict[str, Any] | None = None,
         threshold_curve: pd.DataFrame | None = None,
         training_history: dict[str, Any] | None = None,
+        fold_metrics: pd.DataFrame | None = None,
         observation_table: pd.DataFrame | None = None,
     ) -> "Artifact":
         """Construct an artifact object from training outputs.
@@ -110,6 +113,7 @@ class Artifact:
             threshold=threshold,
             threshold_curve=threshold_curve,
             training_history=training_history,
+            fold_metrics=fold_metrics,
             observation_table=observation_table,
         )
 
@@ -145,6 +149,7 @@ class Artifact:
             threshold=extras.get("threshold"),
             threshold_curve=extras.get("threshold_curve"),
             training_history=extras.get("training_history"),
+            fold_metrics=extras.get("fold_metrics"),
             observation_table=extras.get("observation_table"),
         )
 
@@ -174,6 +179,7 @@ class Artifact:
             threshold=self.threshold,
             threshold_curve=self.threshold_curve,
             training_history=self.training_history,
+            fold_metrics=self.fold_metrics,
             observation_table=self.observation_table,
         )
 

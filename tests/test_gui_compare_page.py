@@ -33,8 +33,8 @@ def test_compare_layout_has_ids() -> None:
     layout = compare_page.layout()
     ids: set[str] = set()
     _collect_ids(layout, ids)
-    assert "compare-artifact-a" in ids
-    assert "compare-artifact-b" in ids
+    assert "compare-artifacts" in ids
+    assert "compare-baseline" in ids
     assert "compare-metrics-table" in ids
 
 
@@ -48,24 +48,29 @@ def test_populate_compare_options(monkeypatch) -> None:
         "/compare", {"compare_selection": ["artifacts/r1", "artifacts/r2"]}
     )
     assert len(opts_a) == 1
-    assert va == "artifacts/r1"
-    assert vb == "artifacts/r2"
+    assert va == ["artifacts/r1", "artifacts/r2"]
+    assert vb == "artifacts/r1"
 
 
 def test_compare_runs_callback(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module,
-        "compare_artifacts",
-        lambda *_a: {
+        "compare_artifacts_multi",
+        lambda *_a, **_k: {
             "checks": [{"level": "ok", "message": "ok"}],
-            "metrics_a": {"auc": 0.8},
-            "metrics_b": {"auc": 0.7},
-            "metric_rows": [{"metric": "auc", "run_a": 0.8, "run_b": 0.7, "delta": 0.1}],
-            "config_yaml_a": "a: 1\n",
-            "config_yaml_b": "a: 2\n",
+            "metric_rows": [
+                {
+                    "metric": "auc",
+                    "artifact": "a",
+                    "value": 0.8,
+                    "baseline": 0.7,
+                    "delta_from_baseline": 0.1,
+                }
+            ],
+            "config_yamls": {"a": "a: 1\n", "b": "a: 2\n"},
         },
     )
-    checks, rows, fig, diff = app_module._cb_compare_runs("a", "b")
+    checks, rows, fig, diff = app_module._cb_compare_runs(["a", "b"], "b")
     assert rows[0]["metric"] == "auc"
     assert hasattr(fig, "to_dict")
-    assert "Run A" in str(diff)
+    assert "a: 1" in str(diff)

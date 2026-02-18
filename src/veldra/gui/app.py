@@ -20,10 +20,14 @@ import yaml
 from dash import Input, Output, State, callback_context, dcc, html
 
 from veldra.gui.components.charts import (
+    plot_causal_smd,
     plot_comparison_bar,
+    plot_feature_drilldown,
     plot_feature_importance,
+    plot_fold_metric_timeline,
     plot_learning_curves,
     plot_metrics_bar,
+    plot_multi_artifact_comparison,
 )
 from veldra.gui.components.guardrail import render_guardrails
 from veldra.gui.components.help_texts import HELP_TEXTS
@@ -48,7 +52,7 @@ from veldra.gui.services import (
     GuardRailChecker,
     GuardRailResult,
     cancel_run_job,
-    compare_artifacts,
+    compare_artifacts_multi,
     delete_run_jobs,
     get_run_job,
     infer_task_type,
@@ -57,6 +61,7 @@ from veldra.gui.services import (
     list_run_job_logs,
     list_run_jobs,
     list_run_jobs_filtered,
+    load_causal_summary,
     load_config_yaml,
     load_job_config_yaml,
     migrate_config_file_via_gui,
@@ -1290,9 +1295,15 @@ def create_app() -> dash.Dash:
 
     app.callback(
         Output("result-learning-curve", "figure"),
+        Output("result-fold-metrics", "figure"),
+        Output("result-causal-diagnostics", "figure"),
+        Output("result-drilldown-feature", "options"),
+        Output("result-feature-drilldown", "figure"),
         Output("result-config-view", "children"),
         Output("result-overview-summary", "children"),
         Input("artifact-select", "value"),
+        Input("result-drilldown-feature", "value"),
+        Input("result-drilldown-topn", "value"),
     )(_cb_update_result_extras)
 
     app.callback(
@@ -1310,6 +1321,7 @@ def create_app() -> dash.Dash:
         Output("artifact-evaluate-btn", "className"),
         Output("result-export-excel-btn", "className"),
         Output("result-export-html-btn", "className"),
+        Output("result-export-pdf-btn", "className"),
         Input("workflow-state", "data"),
         Input("url", "pathname"),
     )(_cb_result_shortcut_highlight)
@@ -1321,6 +1333,7 @@ def create_app() -> dash.Dash:
         Output("result-export-poll-interval", "n_intervals"),
         Input("result-export-excel-btn", "n_clicks"),
         Input("result-export-html-btn", "n_clicks"),
+        Input("result-export-pdf-btn", "n_clicks"),
         State("artifact-select", "value"),
         prevent_initial_call=True,
     )(_cb_result_export_actions)
@@ -1377,10 +1390,10 @@ def create_app() -> dash.Dash:
     )(_cb_runs_actions)
 
     app.callback(
-        Output("compare-artifact-a", "options"),
-        Output("compare-artifact-b", "options"),
-        Output("compare-artifact-a", "value"),
-        Output("compare-artifact-b", "value"),
+        Output("compare-artifacts", "options"),
+        Output("compare-baseline", "options"),
+        Output("compare-artifacts", "value"),
+        Output("compare-baseline", "value"),
         Input("url", "pathname"),
         State("workflow-state", "data"),
     )(_cb_populate_compare_options)
@@ -1390,8 +1403,8 @@ def create_app() -> dash.Dash:
         Output("compare-metrics-table", "data"),
         Output("compare-chart", "figure"),
         Output("compare-config-diff", "children"),
-        Input("compare-artifact-a", "value"),
-        Input("compare-artifact-b", "value"),
+        Input("compare-artifacts", "value"),
+        Input("compare-baseline", "value"),
     )(_cb_compare_runs)
 
     # --- Preset Synchronization Callbacks ---
@@ -3428,13 +3441,38 @@ def _cb_evaluate_artifact_action(_n_clicks: int, artifact_path: str, data_path: 
         return f"Evaluation failed: {exc}"
 
 
-def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
+def _cb_update_result_extras(
+    artifact_path: str | None,
+    drilldown_feature: str | None = None,
+    drilldown_topn: int | None = None,
+) -> tuple[Any, Any, Any, list[dict[str, str]], Any, str, Any]:
     if not artifact_path:
-        return go.Figure(), "", "Select artifact to view details."
+        empty = go.Figure()
+        return empty, empty, empty, [], empty, "", "Select artifact to view details."
     try:
         art = Artifact.load(artifact_path)
         history = getattr(art, "training_history", None)
         curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
+        fold_metrics = getattr(art, "fold_metrics", None)
+        fold_fig = plot_fold_metric_timeline(
+            fold_metrics if isinstance(fold_metrics, pd.DataFrame) else None
+        )
+        causal_summary = load_causal_summary(artifact_path)
+        causal_fig = plot_causal_smd(causal_summary)
+        obs_table = getattr(art, "observation_table", None)
+        feature_options: list[dict[str, str]] = []
+        if isinstance(obs_table, pd.DataFrame):
+            excluded = {"fold_id", "in_out_label", "y_true", "prediction", "residual", "label_pred"}
+            feature_options = [
+                {"label": str(col), "value": str(col)}
+                for col in obs_table.columns
+                if str(col) not in excluded
+            ][:100]
+        drilldown_fig = plot_feature_drilldown(
+            obs_table if isinstance(obs_table, pd.DataFrame) else None,
+            drilldown_feature,
+            top_n=int(drilldown_topn or 20),
+        )
         cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
         cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
 
@@ -3447,15 +3485,17 @@ def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
             ],
             className="mb-0",
         )
-        return curve_fig, cfg_text, summary
+        return curve_fig, fold_fig, causal_fig, feature_options, drilldown_fig, cfg_text, summary
     except Exception as exc:
-        return go.Figure(), f"Error: {exc}", f"Error: {exc}"
+        empty = go.Figure()
+        return empty, empty, empty, [], empty, f"Error: {exc}", f"Error: {exc}"
 
 
 def _cb_result_export_help() -> str:
     return (
         "Excel: feature importance, predictions, residual views by sheets. "
-        "HTML: self-contained shareable report."
+        "HTML: self-contained shareable report. "
+        "PDF: optional weasyprint-based static report."
     )
 
 
@@ -3496,27 +3536,40 @@ def _cb_result_eval_precheck(artifact_path: str | None, data_path: str | None) -
 def _cb_result_shortcut_highlight(
     state: dict[str, Any] | None,
     pathname: str | None,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     if pathname != "/results":
-        return "w-100 mb-3", "me-2 result-export-btn", "me-2 result-export-btn"
+        return (
+            "w-100 mb-3",
+            "me-2 result-export-btn",
+            "me-2 result-export-btn",
+            "me-2 result-export-btn",
+        )
     current = _ensure_workflow_state_defaults(state)
     focus = current.get("results_shortcut_focus")
     eval_class = "w-100 mb-3"
     excel_class = "me-2 result-export-btn"
     html_class = "me-2 result-export-btn"
+    pdf_class = "me-2 result-export-btn"
     if focus == "evaluate":
         eval_class += " border border-warning"
     if focus == "export":
         excel_class += " border border-warning"
         html_class += " border border-warning"
-    return eval_class, excel_class, html_class
+        pdf_class += " border border-warning"
+    return eval_class, excel_class, html_class, pdf_class
 
 
 def _cb_result_export_actions(
     _excel_clicks: int,
     _html_clicks: int,
-    artifact_path: str | None,
+    _pdf_clicks_or_artifact: int | str | None,
+    artifact_path: str | None = None,
 ) -> tuple[str, dict[str, str] | None, bool, int]:
+    if isinstance(_pdf_clicks_or_artifact, str) or _pdf_clicks_or_artifact is None:
+        _pdf_clicks = 0
+        artifact_path = str(_pdf_clicks_or_artifact) if _pdf_clicks_or_artifact else artifact_path
+    else:
+        _pdf_clicks = int(_pdf_clicks_or_artifact)
     if not artifact_path:
         return "Select an artifact first.", None, True, 0
     triggered = ""
@@ -3526,12 +3579,18 @@ def _cb_result_export_actions(
     except Exception:
         triggered = ""
     if not triggered:
-        triggered = (
-            "result-export-excel-btn"
-            if (_excel_clicks or 0) >= (_html_clicks or 0)
-            else "result-export-html-btn"
-        )
-    action = "export_excel" if triggered == "result-export-excel-btn" else "export_html_report"
+        clicks = {
+            "result-export-excel-btn": int(_excel_clicks or 0),
+            "result-export-html-btn": int(_html_clicks or 0),
+            "result-export-pdf-btn": int(_pdf_clicks or 0),
+        }
+        triggered = max(clicks, key=clicks.get)
+    if triggered == "result-export-excel-btn":
+        action = "export_excel"
+    elif triggered == "result-export-pdf-btn":
+        action = "export_pdf_report"
+    else:
+        action = "export_html_report"
     try:
         result = submit_run_job(RunInvocation(action=action, artifact_path=artifact_path))
         state = {"job_id": result.job_id, "action": action}
@@ -3764,23 +3823,42 @@ def _cb_populate_compare_options(
         for item in list_artifacts("artifacts")
     ]
     compare_selection = (_ensure_workflow_state_defaults(state)).get("compare_selection") or []
-    value_a = compare_selection[0] if len(compare_selection) > 0 else None
-    value_b = compare_selection[1] if len(compare_selection) > 1 else None
-    return options, options, value_a, value_b
+    selected = [str(v) for v in compare_selection if str(v).strip()][:5]
+    if not selected and options:
+        selected = [str(options[0]["value"])]
+    baseline = selected[0] if selected else None
+    return options, options, selected, baseline
 
 
 def _cb_compare_runs(
-    artifact_a: str | None, artifact_b: str | None
+    selected_artifacts: list[str] | str | None,
+    baseline: str | None,
 ) -> tuple[Any, list[dict], Any, Any]:
-    if not artifact_a or not artifact_b:
-        return "Select both artifacts.", [], go.Figure(), ""
+    if isinstance(selected_artifacts, str):
+        # Backward compatibility for legacy tests/calls that pass (artifact_a, artifact_b).
+        if baseline and baseline != selected_artifacts:
+            selected = [selected_artifacts, baseline]
+        else:
+            selected = [selected_artifacts]
+    else:
+        selected = [str(v) for v in (selected_artifacts or []) if str(v).strip()]
+    if len(selected) < 2:
+        return "Select at least 2 artifacts.", [], go.Figure(), ""
+    if len(selected) > 5:
+        return "Select up to 5 artifacts.", [], go.Figure(), ""
+    chosen_baseline = baseline if baseline in selected else selected[0]
     try:
-        payload = compare_artifacts(artifact_a, artifact_b)
+        payload = compare_artifacts_multi(selected, chosen_baseline)
         checks = render_guardrails(payload.get("checks", []))
-        fig = plot_comparison_bar(
-            payload.get("metrics_a", {}), payload.get("metrics_b", {}), "Run A", "Run B"
+        fig = plot_multi_artifact_comparison(
+            payload.get("metric_rows", []),
+            metric_key="delta_from_baseline",
         )
-        diff = render_yaml_diff(payload.get("config_yaml_a", ""), payload.get("config_yaml_b", ""))
+        first = selected[0]
+        diff = render_yaml_diff(
+            payload.get("config_yamls", {}).get(first, ""),
+            payload.get("config_yamls", {}).get(chosen_baseline, ""),
+        )
         return checks, payload.get("metric_rows", []), fig, diff
     except Exception as exc:
         return f"Compare failed: {exc}", [], go.Figure(), ""

@@ -1689,3 +1689,31 @@
 - `uv run ruff check src/veldra/gui/app.py src/veldra/gui/services.py src/veldra/gui/template_service.py src/veldra/gui/components/config_library.py src/veldra/gui/components/config_wizard.py src/veldra/gui/pages/train_page.py src/veldra/gui/pages/config_page.py tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py` を通過。
 - `uv run pytest -q tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py tests/test_gui_app_callbacks_config.py tests/test_gui_train_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_validation_train_edge.py` を実施（`28 passed`）。
 - `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`201 passed`）。
+
+### 2026-02-18（作業/PR: phase31-advanced-visualization-and-multi-artifact-compare）
+**背景**
+- Phase31 の要件（fold時系列可視化、因果診断、複数Artifact比較、レポート拡張）を GUI adapter 中心で実装する必要があった。
+- Stable API と既存Artifact互換を維持したまま、可視化情報量を増やす設計が必要だった。
+
+**変更内容**
+- `src/veldra/api/artifact.py` / `src/veldra/artifact/store.py` / `src/veldra/api/runner.py` を更新し、optional `fold_metrics`（`fold_metrics.parquet`）の保存・読込・fit連携を追加（既存Artifactは後方互換）。
+- `src/veldra/gui/components/charts.py` に `plot_fold_metric_timeline` / `plot_causal_smd` / `plot_multi_artifact_comparison` / `plot_feature_drilldown` を追加し、空データ時プレースホルダを統一。
+- `src/veldra/gui/pages/results_page.py` / `src/veldra/gui/pages/compare_page.py` を更新し、Results の 3 新タブ（Fold Metrics / Causal Diagnostics / Feature Drilldown）と Compare の multi-select（max 5）+ baseline UI を追加。
+- `src/veldra/gui/services.py` を拡張し、`compare_artifacts_multi` / `load_causal_summary` / `export_pdf_report` を追加、`export_html_report` を fold/causal情報込みへ拡張、`run_action` に `export_pdf_report` を統合。
+- `src/veldra/gui/app.py` の callback 群を更新し、Results拡張出力・Compare多件比較・PDF export ボタン導線を既存ジョブキュー経由で接続。
+- テストを更新/追加（`tests/test_gui_components.py`, `tests/test_gui_compare_page.py`, `tests/test_gui_app_callbacks_results_edge.py`, `tests/test_gui_results_enhanced.py`, `tests/test_gui_app_callbacks_runs_edge.py`, `tests/test_gui_export_pdf.py`）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Artifact拡張は optional `fold_metrics` の追加に限定し、`manifest_version=1` を維持する。
+  - 理由: 過去Artifactの読み込み互換と公開契約の非破壊を両立するため。
+  - 影響範囲: `src/veldra/api/artifact.py`, `src/veldra/artifact/store.py`, `src/veldra/api/runner.py`
+- Decision: confirmed（確定）
+  - 内容: レポートは HTML を基準実装とし、PDF は optional dependency（`weasyprint`）前提で提供する。
+  - 理由: 実行環境差による失敗を局所化しつつ、共有可能なレポート品質を確保するため。
+  - 影響範囲: `src/veldra/gui/services.py`, `src/veldra/gui/app.py`, `src/veldra/gui/pages/results_page.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/api/artifact.py src/veldra/artifact/store.py src/veldra/api/runner.py src/veldra/gui/components/charts.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/compare_page.py src/veldra/gui/services.py src/veldra/gui/app.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_results_enhanced.py tests/test_gui_components.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を通過。
+- `uv run pytest -q tests/test_gui_components.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_app_results_flow.py tests/test_gui_results_enhanced.py tests/test_gui_export_html.py tests/test_gui_services_edge_cases.py tests/test_gui_export_excel.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を実施（`46 passed`）。
+- `uv run pytest -q tests/test_gui_*` を実施（`200 passed`）。

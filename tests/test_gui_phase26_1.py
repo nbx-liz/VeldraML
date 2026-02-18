@@ -87,7 +87,7 @@ def test_export_job_poll_success_triggers_download(monkeypatch, tmp_path) -> Non
         lambda _inv: SimpleNamespace(job_id="job-export-1"),
     )
     status, state, disabled, n_intervals = app_module._cb_result_export_actions(
-        0, 1, "artifacts/run-1"
+        0, 1, 0, "artifacts/run-1"
     )
     assert "生成中..." in status
     assert state == {"job_id": "job-export-1", "action": "export_html_report"}

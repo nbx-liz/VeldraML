@@ -145,6 +145,7 @@ def fit(config: RunConfig | dict[str, Any], *, cancellation_hook: CancelHook = N
         threshold=getattr(training_output, "threshold", None),
         threshold_curve=getattr(training_output, "threshold_curve", None),
         training_history=getattr(training_output, "training_history", None),
+        fold_metrics=getattr(training_output, "cv_results", None),
         observation_table=getattr(training_output, "observation_table", None),
     )
     artifact.save(artifact_path)
@@ -464,6 +465,7 @@ def _build_ephemeral_artifact_from_config(config: RunConfig) -> Artifact:
         calibration_curve=getattr(training_output, "calibration_curve", None),
         threshold=getattr(training_output, "threshold", None),
         threshold_curve=getattr(training_output, "threshold_curve", None),
+        fold_metrics=getattr(training_output, "cv_results", None),
         observation_table=getattr(training_output, "observation_table", None),
     )
 

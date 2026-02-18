@@ -57,8 +57,14 @@ def test_update_result_extras(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(app_module, "Artifact", SimpleNamespace(load=lambda _p: fake_art))
 
-    fig, cfg, summary = app_module._cb_update_result_extras(str(artifact_path))
+    fig, fold, causal, options, drill, cfg, summary = app_module._cb_update_result_extras(
+        str(artifact_path)
+    )
     assert hasattr(fig, "to_dict")
+    assert hasattr(fold, "to_dict")
+    assert hasattr(causal, "to_dict")
+    assert isinstance(options, list)
+    assert hasattr(drill, "to_dict")
     assert "task" in cfg.lower()
     assert "Features" in str(summary)
 

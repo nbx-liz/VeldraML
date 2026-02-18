@@ -742,6 +742,23 @@ pytest tests/ -v --tb=short
 
 ---
 
+### 実装結果（2026-02-18）
+* Artifact を非破壊拡張し、optional `fold_metrics` を追加（`fold_metrics.parquet` 保存/読込、既存 Artifact は互換維持）。
+* Results に `Fold Metrics` / `Causal Diagnostics` / `Feature Drilldown` タブを追加し、`training_history`・`fold_metrics`・`dr_summary.json`・`observation_table` を可視化導線へ統合。
+* Compare を multi-select（最大5件）へ拡張し、baseline 差分（`delta_from_baseline`）をテーブル/グラフで表示。
+* レポート出力を拡張し、HTML に metrics/fold/causal/config を収載。PDF（`export_pdf_report`）を追加し、依存未導入時は明示ガイダンスで安全退化。
+* GUI job action に `export_pdf_report` を追加し、既存キュー実行フローで処理。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: Artifact 拡張は optional 追加（`fold_metrics`）に限定し、`manifest_version=1` を維持する。
+  * 理由: 既存 Artifact 読込互換と Stable API 非破壊を両立するため。
+* Decision: confirmed
+  * 内容: レポート出力は HTML を基準実装とし、PDF は optional dependency 前提で同 Phase 内に追加する。
+  * 理由: 環境差異による失敗を局所化しつつ共有品質を担保するため。
+
+---
+
 ### 対象ファイル
 * `src/veldra/gui/components/charts.py` - 時系列チャート、SMDプロットの新規実装
 * `src/veldra/gui/pages/results_page.py` - Artifact比較UI、レポートエクスポート機能の統合
