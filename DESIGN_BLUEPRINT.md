@@ -684,6 +684,22 @@ pytest tests/ -v --tb=short
 * ユーザーが独自のカスタムConfigを保存し、いつでも再読込できること
 * 新規ユーザーがウィザードを使用して2分以内に有効なConfigを完成させられること
 
+### 実装結果（2026-02-18）
+* `src/veldra/gui/templates/` に 5 テンプレート（`regression_baseline`, `binary_balanced`, `multiclass_standard`, `causal_dr_panel`, `tuning_standard`）を追加。
+* `src/veldra/gui/template_service.py` を新設し、テンプレート読込/検証、localStorage スロット（max 10, save/load/clone, LRU）管理、YAML 変更キー数カウントを実装。
+* `src/veldra/gui/components/config_library.py` と `src/veldra/gui/components/config_wizard.py` を追加し、`/train` と `/config` 双方に同等導線を統合。
+* `workflow-state` に `template_id`, `template_origin`, `custom_config_slots`, `wizard_state`, `last_validation`, `config_diff_base_yaml` を追加。
+* `validate_config_with_guidance()` を導入し、Validate 時のパス付きエラー表示と next-step ガイダンスを提供。
+* `run-execute` 前に RunConfig 形式の YAML を検証し、不正時は投入をブロック（既存モック契約と両立する条件付きゲート）。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: テンプレート/保存/ウィザード機能は GUI adapter 内で完結し、Core RunConfig schema は `config_version=1` を維持する。
+  * 理由: Stable API と Artifact 契約への影響を避けつつ運用改善を達成するため。
+* Decision: confirmed
+  * 内容: `/train` と `/config` は UI を分けつつ同一コールバック関数を再利用し、機能差分を禁止する。
+  * 理由: 導線互換と保守性（重複実装回避）を両立するため。
+
 ---
 
 ### 対象ファイル

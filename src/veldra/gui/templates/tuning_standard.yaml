@@ -1,0 +1,31 @@
+config_version: 1
+task:
+  type: regression
+data:
+  path: examples/data/causal_dr_tune_demo.csv
+  target: target
+  drop_cols:
+    - treatment
+split:
+  type: kfold
+  n_splits: 5
+  seed: 42
+train:
+  num_boost_round: 300
+  lgb_params:
+    learning_rate: 0.05
+    num_leaves: 31
+    max_depth: -1
+    min_child_samples: 20
+    subsample: 1.0
+    colsample_bytree: 1.0
+    reg_alpha: 0.0
+    reg_lambda: 0.0
+  early_stopping_rounds: 100
+  seed: 42
+tuning:
+  enabled: true
+  preset: standard
+  n_trials: 30
+export:
+  artifact_dir: artifacts

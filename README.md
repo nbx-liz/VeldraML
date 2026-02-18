@@ -83,7 +83,12 @@ Implemented:
   - Run console async queue (`fit/evaluate/tune/simulate/export/estimate_dr`)
   - Results explorer with learning curves and config view
   - Async report export (`export_excel`, `export_html_report`)
-  - `/config` route is retained as compatibility entrypoint and redirects users to new flow
+  - Phase30 config productivity features:
+    - built-in template library (`regression/binary/multiclass/causal/tuning`)
+    - custom config slots in browser `localStorage` (max 10, save/load/clone)
+    - template/slot diff viewer with changed-key count
+    - quick-start wizard and run-time config validation gate
+  - `/config` and `/train` both provide equivalent config-library and wizard workflows
 - Config migration utility:
   - `veldra config migrate --input <path> [--output <path>]`
   - strict validation + non-destructive output (`*.migrated.yaml`)

@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 import pandas as pd
 import yaml
+from pydantic import ValidationError
 
 from veldra.api.exceptions import (
     VeldraArtifactError,
@@ -318,6 +319,51 @@ def _load_config_from_yaml(yaml_text: str) -> RunConfig:
 
 def validate_config(yaml_text: str) -> RunConfig:
     return _load_config_from_yaml(yaml_text)
+
+
+def validate_config_with_guidance(yaml_text: str) -> dict[str, Any]:
+    timestamp = datetime.now(UTC).isoformat()
+    try:
+        validate_config(yaml_text)
+        return {
+            "ok": True,
+            "errors": [],
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
+    except ValidationError as exc:
+        errors: list[dict[str, Any]] = []
+        for item in exc.errors():
+            loc = item.get("loc", ())
+            path = ".".join(str(seg) for seg in loc if seg is not None) or "root"
+            msg = str(item.get("msg") or "Invalid value.")
+            errors.append(
+                {
+                    "path": path,
+                    "message": msg,
+                    "suggestions": ["設定値と型、必須キーを確認してください。"],
+                }
+            )
+        return {
+            "ok": False,
+            "errors": errors,
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
+    except Exception as exc:
+        kind = classify_gui_error(exc)
+        return {
+            "ok": False,
+            "errors": [
+                {
+                    "path": "root",
+                    "message": normalize_gui_error(exc),
+                    "suggestions": build_next_steps(kind),
+                }
+            ],
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
 
 
 def load_config_yaml(path: str) -> str:

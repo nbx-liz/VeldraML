@@ -35,6 +35,7 @@ from veldra.gui.components.toast import make_toast, toast_container
 from veldra.gui.components.yaml_diff import render_yaml_diff
 from veldra.gui.pages import (
     compare_page,
+    config_page,
     data_page,
     results_page,
     run_page,
@@ -66,6 +67,15 @@ from veldra.gui.services import (
     set_run_job_priority,
     submit_run_job,
     validate_config,
+    validate_config_with_guidance,
+)
+from veldra.gui.template_service import (
+    clone_custom_slot,
+    count_yaml_changes,
+    custom_slot_options,
+    load_builtin_template_yaml,
+    load_custom_slot_yaml,
+    save_custom_slot,
 )
 from veldra.gui.types import RunInvocation
 
@@ -239,6 +249,15 @@ def _ensure_workflow_state_defaults(state: dict[str, Any] | None) -> dict[str, A
         current["tuning_config"] = _default_tuning_config()
     current.setdefault("artifact_dir", "artifacts")
     current.setdefault("config_yaml", "")
+    current.setdefault("template_id", "regression_baseline")
+    current.setdefault("template_origin", "builtin")
+    current.setdefault("custom_config_slots", [])
+    current.setdefault("wizard_state", {"step": 1, "draft_payload": {}, "completed_steps": []})
+    current.setdefault(
+        "last_validation",
+        {"ok": False, "errors": [], "warnings": [], "timestamp_utc": None},
+    )
+    current.setdefault("config_diff_base_yaml", "")
     current.setdefault("last_job_succeeded", False)
     current.setdefault("results_shortcut_focus", None)
     current.setdefault("run_action_override", {"mode": "auto", "action": None})
@@ -550,6 +569,7 @@ def _main_layout() -> html.Div:
             dcc.Location(id="url"),
             dcc.Store(id="workflow-state", data={}),
             dcc.Store(id="last-job-status", data={}),
+            dcc.Store(id="custom-config-slots-store", data=[], storage_type="local"),
             toast_container(),
             dbc.Row(
                 [
@@ -574,19 +594,7 @@ def render_page(pathname: str, state: dict | None = None) -> html.Div:
     if pathname == "/data" or pathname == "/":
         return data_page.layout()
     if pathname == "/config":
-        return html.Div(
-            [
-                dbc.Alert(
-                    (
-                        "The /config route is kept for compatibility. "
-                        "Please use Target/Validation/Train."
-                    ),
-                    color="info",
-                    className="mb-3",
-                ),
-                target_page.layout(state),
-            ]
-        )
+        return config_page.layout(state)
     if pathname == "/target":
         return target_page.layout(state)
     if pathname == "/validation":
@@ -1034,6 +1042,72 @@ def create_app() -> dash.Dash:
         Input("train-num-boost-round", "value"),
         State("workflow-state", "data"),
     )(_cb_train_guardrails)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("custom-config-slots-store", "data"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_sync_custom_slots_to_state)
+
+    def _register_phase30_callbacks(prefix: str, yaml_id: str) -> None:
+        app.callback(
+            Output(yaml_id, "value", allow_duplicate=True),
+            Output("custom-config-slots-store", "data", allow_duplicate=True),
+            Output(f"{prefix}-slot-select", "options"),
+            Output(f"{prefix}-diff-count", "children"),
+            Output(f"{prefix}-diff-view", "children"),
+            Output(f"{prefix}-library-message", "children"),
+            Output("workflow-state", "data", allow_duplicate=True),
+            Input(f"{prefix}-template-apply-btn", "n_clicks"),
+            Input(f"{prefix}-slot-save-btn", "n_clicks"),
+            Input(f"{prefix}-slot-load-btn", "n_clicks"),
+            Input(f"{prefix}-slot-clone-btn", "n_clicks"),
+            State(f"{prefix}-template-select", "value"),
+            State(f"{prefix}-slot-select", "value"),
+            State(f"{prefix}-slot-name", "value"),
+            State(f"{prefix}-diff-base", "value"),
+            State(yaml_id, "value"),
+            State("custom-config-slots-store", "data"),
+            State("workflow-state", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_library_actions)
+
+        app.callback(
+            Output(f"{prefix}-wizard-modal", "is_open"),
+            Input(f"{prefix}-wizard-open-btn", "n_clicks"),
+            Input(f"{prefix}-wizard-close-btn", "n_clicks"),
+            State(f"{prefix}-wizard-modal", "is_open"),
+            prevent_initial_call=True,
+        )(_cb_phase30_toggle_wizard)
+
+        app.callback(
+            Output(f"{prefix}-wizard-step", "data"),
+            Output(f"{prefix}-wizard-step-label", "children"),
+            Input(f"{prefix}-wizard-next-btn", "n_clicks"),
+            Input(f"{prefix}-wizard-prev-btn", "n_clicks"),
+            State(f"{prefix}-wizard-step", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_wizard_step)
+
+        app.callback(
+            Output(yaml_id, "value", allow_duplicate=True),
+            Output(f"{prefix}-wizard-message", "children"),
+            Output(f"{prefix}-wizard-modal", "is_open", allow_duplicate=True),
+            Output("workflow-state", "data", allow_duplicate=True),
+            Input(f"{prefix}-wizard-apply-btn", "n_clicks"),
+            State(f"{prefix}-wizard-task", "value"),
+            State(f"{prefix}-wizard-data-path", "value"),
+            State(f"{prefix}-wizard-target", "value"),
+            State(f"{prefix}-wizard-split-type", "value"),
+            State(f"{prefix}-wizard-lr", "value"),
+            State(f"{prefix}-wizard-rounds", "value"),
+            State("workflow-state", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_wizard_apply)
+
+    _register_phase30_callbacks("train", "train-config-yaml-preview")
+    _register_phase30_callbacks("config", "config-yaml")
 
     app.callback(
         Output("run-data-path", "value", allow_duplicate=True),
@@ -1491,6 +1565,22 @@ def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
     return current
 
 
+def _summarize_validation_feedback(payload: dict[str, Any]) -> str:
+    if bool(payload.get("ok")):
+        return "Configuration is valid."
+    errors = payload.get("errors") or []
+    lines: list[str] = []
+    for idx, err in enumerate(errors[:5], start=1):
+        path = str(err.get("path") or "root")
+        message = str(err.get("message") or "Invalid value.")
+        suggestions = err.get("suggestions") or []
+        hint = f" / hint: {suggestions[0]}" if suggestions else ""
+        lines.append(f"{idx}. {path}: {message}{hint}")
+    if len(errors) > 5:
+        lines.append(f"... and {len(errors) - 5} more errors.")
+    return "\n".join(lines) if lines else "Validation failed."
+
+
 def _cb_handle_config_actions(
     _validate_clicks: int,
     _load_clicks: int,
@@ -1550,6 +1640,12 @@ def _cb_handle_config_actions(
         toast = make_toast("Configuration is valid.", icon="success")
         return yaml_text, "Configuration is valid.", style_success, toast
     except Exception as exc:
+        feedback = validate_config_with_guidance(yaml_text)
+        if not feedback.get("ok"):
+            toast = make_toast("Validation failed. See details.", icon="danger")
+            detail = _summarize_validation_feedback(feedback)
+            message = f"{exc}\n{detail}" if str(exc) else detail
+            return yaml_text, message, style_error, toast
         toast = make_toast(f"Error: {str(exc)}", icon="danger")
         return yaml_text, str(exc), style_error, toast
 
@@ -2169,6 +2265,12 @@ def _cb_train_yaml_actions(
             message = f"Saved: {saved}"
         elif triggered == "train-config-validate-btn":
             validate_config(out_yaml)
+            current["last_validation"] = {
+                "ok": True,
+                "errors": [],
+                "warnings": [],
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
             message = "Config validation passed."
         elif triggered == "train-config-yaml-import-btn":
             payload = yaml.safe_load(out_yaml) or {}
@@ -2179,6 +2281,11 @@ def _cb_train_yaml_actions(
         current["config_yaml"] = out_yaml
         return out_yaml, message, current
     except Exception as exc:
+        if triggered == "train-config-validate-btn":
+            feedback = validate_config_with_guidance(out_yaml)
+            current["last_validation"] = feedback
+            if not feedback.get("ok"):
+                return out_yaml, _summarize_validation_feedback(feedback), current
         current["config_yaml"] = out_yaml
         return out_yaml, f"Error: {exc}", current
 
@@ -2196,6 +2303,174 @@ def _cb_train_guardrails(
         }
     )
     return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_sync_custom_slots_to_state(slots: list[dict] | None, state: dict | None) -> dict:
+    current = _ensure_workflow_state_defaults(state)
+    current["custom_config_slots"] = list(slots or [])
+    return current
+
+
+def _cb_phase30_library_actions(
+    _apply_clicks: int,
+    _save_clicks: int,
+    _load_clicks: int,
+    _clone_clicks: int,
+    selected_template_id: str | None,
+    selected_slot_id: str | None,
+    slot_name: str | None,
+    diff_base: str | None,
+    current_yaml: str | None,
+    slots_store: list[dict] | None,
+    state: dict | None,
+) -> tuple[str, list[dict], list[dict], str, str, str, dict]:
+    current = _ensure_workflow_state_defaults(state)
+    yaml_text = current_yaml or current.get("config_yaml") or _build_config_from_state(current)
+    slots = list(slots_store or current.get("custom_config_slots") or [])
+    message = ""
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+
+    try:
+        if triggered.endswith("template-apply-btn"):
+            template_id = str(selected_template_id or "").strip() or "regression_baseline"
+            yaml_text = load_builtin_template_yaml(template_id)
+            current["template_id"] = template_id
+            current["template_origin"] = "builtin"
+            current["config_diff_base_yaml"] = yaml_text
+            feedback = validate_config_with_guidance(yaml_text)
+            current["last_validation"] = feedback
+            message = f"Applied template: {template_id}"
+        elif triggered.endswith("slot-save-btn"):
+            slots = save_custom_slot(
+                slots,
+                name=str(slot_name or "Custom Config"),
+                yaml_text=yaml_text,
+                template_origin=str(current.get("template_origin") or "custom"),
+            )
+            current["template_origin"] = "custom"
+            message = "Saved current YAML to custom slot."
+        elif triggered.endswith("slot-load-btn"):
+            yaml_text = load_custom_slot_yaml(slots, slot_id=str(selected_slot_id or ""))
+            current["template_origin"] = "custom"
+            current["config_diff_base_yaml"] = yaml_text
+            feedback = validate_config_with_guidance(yaml_text)
+            current["last_validation"] = feedback
+            message = "Loaded selected custom slot."
+        elif triggered.endswith("slot-clone-btn"):
+            slots = clone_custom_slot(slots, slot_id=str(selected_slot_id or ""))
+            message = "Cloned selected slot."
+    except Exception as exc:
+        message = f"Error: {exc}"
+
+    slot_opts = custom_slot_options(slots)
+    base_yaml = ""
+    if str(diff_base or "template") == "slot":
+        if selected_slot_id:
+            try:
+                base_yaml = load_custom_slot_yaml(slots, slot_id=str(selected_slot_id))
+            except Exception:
+                base_yaml = ""
+    else:
+        template_id = str(
+            selected_template_id or current.get("template_id") or "regression_baseline"
+        )
+        try:
+            base_yaml = load_builtin_template_yaml(template_id)
+        except Exception:
+            base_yaml = ""
+    diff_text = (
+        render_yaml_diff(base_yaml, yaml_text).children if base_yaml else "No base selected."
+    )
+    diff_count = count_yaml_changes(base_yaml, yaml_text) if base_yaml else 0
+
+    current["custom_config_slots"] = slots
+    current["config_yaml"] = yaml_text
+    current["config_diff_base_yaml"] = base_yaml
+    return (
+        yaml_text,
+        slots,
+        slot_opts,
+        f"Changed keys: {diff_count}",
+        str(diff_text),
+        message,
+        current,
+    )
+
+
+def _cb_phase30_toggle_wizard(
+    _open_clicks: int,
+    _close_clicks: int,
+    is_open: bool,
+) -> bool:
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered.endswith("wizard-open-btn"):
+        return True
+    if triggered.endswith("wizard-close-btn"):
+        return False
+    return is_open
+
+
+def _cb_phase30_wizard_step(
+    _next_clicks: int,
+    _prev_clicks: int,
+    step: int | None,
+) -> tuple[int, str]:
+    cur = max(1, min(4, int(step or 1)))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered.endswith("wizard-next-btn"):
+        cur = min(4, cur + 1)
+    elif triggered.endswith("wizard-prev-btn"):
+        cur = max(1, cur - 1)
+    return cur, f"Step {cur}/4"
+
+
+def _cb_phase30_wizard_apply(
+    _apply_clicks: int,
+    task_type: str | None,
+    data_path: str | None,
+    target_col: str | None,
+    split_type: str | None,
+    learning_rate: float | None,
+    rounds: int | None,
+    state: dict | None,
+) -> tuple[str, str, bool, dict]:
+    current = _ensure_workflow_state_defaults(state)
+    split = _default_split_for_task(str(task_type or "regression"))
+    split["type"] = str(split_type or split["type"])
+    train = _default_train_config()
+    train["learning_rate"] = float(learning_rate or 0.05)
+    train["num_boost_round"] = int(rounds or 300)
+    current["task_type"] = str(task_type or "regression")
+    current["data_path"] = str(data_path or "")
+    current["target_col"] = str(target_col or "")
+    current["split_config"] = split
+    current["train_config"] = train
+    yaml_text = _build_config_from_state(current)
+    feedback = validate_config_with_guidance(yaml_text)
+    current["last_validation"] = feedback
+    current["config_yaml"] = yaml_text
+    current["template_origin"] = "custom"
+    msg = (
+        "Wizard applied and configuration validated."
+        if feedback.get("ok")
+        else _summarize_validation_feedback(feedback)
+    )
+    return yaml_text, msg, False, current
 
 
 def _cb_save_run_action_override(
@@ -2636,6 +2911,39 @@ def _cb_enqueue_run_job(
     try:
         c_path = _ensure_default_run_config(config_path_state or "configs/gui_run.yaml")
         d_path = data_path_state
+        act = str(action or "").strip().lower()
+        if act in {"fit", "tune", "estimate_dr", "evaluate"}:
+            yaml_source = (config_yaml or "").strip()
+            should_validate = False
+            if yaml_source:
+                parsed = yaml.safe_load(yaml_source)
+                if isinstance(parsed, dict):
+                    should_validate = any(
+                        key in parsed
+                        for key in (
+                            "config_version",
+                            "task",
+                            "data",
+                            "split",
+                            "train",
+                            "tuning",
+                            "export",
+                            "causal",
+                        )
+                    )
+                if not should_validate and not (c_path or "").strip():
+                    should_validate = True
+            elif (c_path or "").strip():
+                yaml_source = load_config_yaml(c_path)
+                should_validate = True
+
+            if should_validate:
+                feedback = validate_config_with_guidance(yaml_source)
+                if not feedback.get("ok"):
+                    return (
+                        "[ERROR] Validation blocked run:\n"
+                        f"{_summarize_validation_feedback(feedback)}"
+                    )
 
         result = submit_run_job(
             RunInvocation(
@@ -2664,9 +2972,7 @@ def _cb_refresh_run_jobs(
 ) -> tuple[html.Div, Any, dict, dict, str]:
     jobs = list_run_jobs(limit=100)
     priority_rank = {"high": 0, "normal": 1, "low": 2}
-    queued_jobs = [
-        job for job in jobs if job.status == "queued"
-    ]
+    queued_jobs = [job for job in jobs if job.status == "queued"]
     queued_jobs.sort(key=lambda job: (priority_rank.get(job.priority, 1), job.created_at_utc))
     non_queued_jobs = [job for job in jobs if job.status != "queued"]
     jobs = queued_jobs + non_queued_jobs
@@ -2836,9 +3142,7 @@ def _cb_show_selected_job_detail(
         )
 
     logs = list_run_job_logs(job.job_id, limit=next_log_limit)
-    details_elems.append(
-        html.Label("Live Logs", className="fw-bold mt-3")
-    )
+    details_elems.append(html.Label("Live Logs", className="fw-bold mt-3"))
     details_elems.append(
         render_progress_viewer(
             progress_pct=job.progress_pct,

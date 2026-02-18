@@ -1660,3 +1660,32 @@
 **検証結果**
 - `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/api/runner.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を通過。
 - `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を実施（`37 passed`）。
+
+### 2026-02-18（作業/PR: phase30-config-template-library-and-wizard）
+**背景**
+- Phase30 の要件（テンプレート、事前検証、localStorage 保存、diff、クイックスタートウィザード）を GUI adapter 内で一括実装する必要があった。
+- `/train` と `/config` の導線差分が残ると運用時の誤操作リスクが増えるため、共通コールバック化が必要だった。
+
+**変更内容**
+- `src/veldra/gui/templates/` に 5 種テンプレート（`regression_baseline`, `binary_balanced`, `multiclass_standard`, `causal_dr_panel`, `tuning_standard`）を追加。
+- `src/veldra/gui/template_service.py` を新設し、テンプレート検証、localStorage スロット管理（max 10 / save/load/clone / LRU）、YAML 変更キー数算出を実装。
+- `src/veldra/gui/components/config_library.py` / `src/veldra/gui/components/config_wizard.py` を追加し、`src/veldra/gui/pages/train_page.py` と `src/veldra/gui/pages/config_page.py` に統合。
+- `src/veldra/gui/app.py` に共通 Phase30 コールバック群（template apply/save/load/clone/diff, wizard open/step/apply）を追加し、`custom-config-slots-store`（localStorage）を導入。
+- `src/veldra/gui/services.py` に `validate_config_with_guidance` を追加し、パス付きエラー + next-step を返す検証導線を実装。
+- Run 投入前ゲートを強化し、RunConfig 形式 YAML のみ厳密検証して invalid 投入をブロック（既存モック互換を保持）。
+- ドキュメントを更新（`DESIGN_BLUEPRINT.md`, `README.md`）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase30 機能は GUI adapter に閉じ、Core `RunConfig` schema (`config_version=1`) と `veldra.api.*` の公開契約は非変更とする。
+  - 理由: Stable API 互換と運用改善を両立するため。
+  - 影響範囲: `src/veldra/gui/*`, `src/veldra/gui/templates/*`, docs
+- Decision: confirmed（確定）
+  - 内容: `/train` と `/config` は UI 分岐を許容しつつ、機能ロジックは `app.py` の共通コールバックへ集約する。
+  - 理由: 乖離防止と保守コスト削減のため。
+  - 影響範囲: `src/veldra/gui/app.py`, `src/veldra/gui/pages/{train_page.py,config_page.py}`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/app.py src/veldra/gui/services.py src/veldra/gui/template_service.py src/veldra/gui/components/config_library.py src/veldra/gui/components/config_wizard.py src/veldra/gui/pages/train_page.py src/veldra/gui/pages/config_page.py tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py` を通過。
+- `uv run pytest -q tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py tests/test_gui_app_callbacks_config.py tests/test_gui_train_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_validation_train_edge.py` を実施（`28 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`201 passed`）。
