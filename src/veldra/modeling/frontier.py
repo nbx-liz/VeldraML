@@ -12,11 +12,11 @@ from sklearn.metrics import mean_absolute_error
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling._cv_runner import TaskSpec, booster_iteration_stats, run_cv_training
 from veldra.modeling.utils import (
     resolve_auto_num_leaves,
     resolve_feature_weights,
     resolve_ratio_params,
-    split_for_early_stopping,
 )
 from veldra.split import iter_cv_splits
 
@@ -32,14 +32,7 @@ class FrontierTrainingOutput:
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
-    current_iteration_fn = getattr(booster, "current_iteration", None)
-    current_iteration = (
-        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
-    )
-    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
-    if best_iteration <= 0:
-        best_iteration = current_iteration
-    return best_iteration, current_iteration
+    return booster_iteration_stats(booster, fallback_rounds)
 
 
 def _build_feature_frame(config: RunConfig, data: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
@@ -160,124 +153,117 @@ def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTra
     splits = iter_cv_splits(config, data, x)
     alpha = float(config.frontier.alpha)
 
-    oof_pred = np.full(len(x), np.nan, dtype=float)
-    fold_ids = np.full(len(x), -1, dtype=int)
-    fold_records: list[dict[str, float | int]] = []
-    history_folds: list[dict[str, Any]] = []
-
-    for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-        if len(train_idx) == 0 or len(valid_idx) == 0:
-            raise VeldraValidationError("Encountered an empty train/valid split.")
-        x_fold_train = x.iloc[train_idx]
-        y_fold_train = y.iloc[train_idx]
-        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
-            x_fold_train, y_fold_train, config
+    def _fit_booster(
+        x_train: pd.DataFrame,
+        y_train: pd.Series,
+        x_valid: pd.DataFrame,
+        y_valid: pd.Series,
+        cfg: RunConfig,
+        _ctx: dict[str, Any],
+        evaluation_history: dict[str, Any],
+    ) -> lgb.Booster:
+        return _train_single_booster(
+            x_train=x_train,
+            y_train=y_train,
+            x_valid=x_valid,
+            y_valid=y_valid,
+            config=cfg,
+            evaluation_history=evaluation_history,
         )
-        eval_history: dict[str, Any] = {}
 
-        booster = _train_single_booster(
-            x_train=x_es_train,
-            y_train=y_es_train,
-            x_valid=x_es_valid,
-            y_valid=y_es_valid,
-            config=config,
-            evaluation_history=eval_history,
-        )
+    def _predict_valid(
+        booster: lgb.Booster,
+        x_valid: pd.DataFrame,
+        _ctx: dict[str, Any],
+    ) -> np.ndarray:
         pred = np.asarray(
-            booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration),
+            booster.predict(x_valid, num_iteration=booster.best_iteration),
             dtype=float,
         )
         if pred.ndim == 0:
-            pred = np.full(len(valid_idx), float(pred))
-        if pred.size == 1 and len(valid_idx) > 1:
-            pred = np.full(len(valid_idx), float(pred.item()))
-        if pred.shape[0] != len(valid_idx):
+            pred = np.full(len(x_valid), float(pred))
+        if pred.size == 1 and len(x_valid) > 1:
+            pred = np.full(len(x_valid), float(pred.item()))
+        if pred.shape[0] != len(x_valid):
             raise VeldraValidationError(
                 "Frontier prediction output length does not match validation rows."
             )
-        oof_pred[valid_idx] = pred
-        fold_ids[valid_idx] = fold_idx
+        return pred
 
-        fold_metrics = _frontier_metrics(y.iloc[valid_idx].to_numpy(), pred, alpha)
-        best_iteration, num_iterations = _booster_iteration_stats(
-            booster, config.train.num_boost_round
-        )
-        history_folds.append(
+    def _fold_metrics(
+        y_valid: pd.Series,
+        pred: np.ndarray,
+        ctx: dict[str, Any],
+    ) -> dict[str, float]:
+        return _frontier_metrics(y_valid.to_numpy(), pred, float(ctx["alpha"]))
+
+    def _fold_record(
+        fold_idx: int,
+        metrics: dict[str, float],
+        n_train: int,
+        n_valid: int,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float | int]:
+        return {
+            "fold": fold_idx,
+            "pinball": metrics["pinball"],
+            "mae": metrics["mae"],
+            "mean_u_hat": metrics["mean_u_hat"],
+            "coverage": metrics["coverage"],
+            "n_train": n_train,
+            "n_valid": n_valid,
+        }
+
+    def _mean_metrics(y_all: pd.Series, oof: np.ndarray, ctx: dict[str, Any]) -> dict[str, float]:
+        return _frontier_metrics(y_all.to_numpy(), oof, float(ctx["alpha"]))
+
+    def _observation_table(
+        fold_ids: np.ndarray,
+        y_all: pd.Series,
+        oof: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> pd.DataFrame:
+        y_true = y_all.to_numpy(dtype=float)
+        denominator = np.where(np.abs(oof) < 1e-12, np.nan, oof)
+        return pd.DataFrame(
             {
-                "fold": fold_idx,
-                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
-                "num_iterations": num_iterations,
-                "eval_history": eval_history.get("valid_0", eval_history),
+                "fold_id": fold_ids,
+                "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+                "y_true": y_true,
+                "prediction": oof,
+                "efficiency": y_true / denominator,
             }
         )
-        fold_records.append(
-            {
-                "fold": fold_idx,
-                "pinball": fold_metrics["pinball"],
-                "mae": fold_metrics["mae"],
-                "mean_u_hat": fold_metrics["mean_u_hat"],
-                "coverage": fold_metrics["coverage"],
-                "n_train": int(len(train_idx)),
-                "n_valid": int(len(valid_idx)),
-            }
-        )
 
-    if np.isnan(oof_pred).any():
-        raise VeldraValidationError(
-            "OOF predictions contain missing values. Check split configuration."
-        )
-
-    mean_metrics = _frontier_metrics(y.to_numpy(), oof_pred, alpha)
-    cv_results = pd.DataFrame.from_records(fold_records)
-
-    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
-        x, y, config
-    )
-    final_eval_history: dict[str, Any] = {}
-    final_model = _train_single_booster(
-        x_train=x_final_train,
-        y_train=y_final_train,
-        x_valid=x_final_valid,
-        y_valid=y_final_valid,
+    cv_out = run_cv_training(
         config=config,
-        evaluation_history=final_eval_history,
+        x=x,
+        y=y,
+        splits=splits,
+        spec=TaskSpec(
+            fit_booster=_fit_booster,
+            predict_valid=_predict_valid,
+            fold_metrics=_fold_metrics,
+            fold_record=_fold_record,
+            mean_metrics=_mean_metrics,
+            observation_table=_observation_table,
+            init_oof=lambda n_rows, _ctx: np.full(n_rows, np.nan, dtype=float),
+        ),
+        context={"alpha": alpha},
     )
-    final_best_iteration, final_num_iterations = _booster_iteration_stats(
-        final_model, config.train.num_boost_round
-    )
-    training_history = {
-        "folds": history_folds,
-        "final_model": {
-            "best_iteration": (
-                final_best_iteration if final_best_iteration > 0 else final_num_iterations
-            ),
-            "num_iterations": final_num_iterations,
-            "eval_history": final_eval_history.get("valid_0", final_eval_history),
-        },
-    }
 
-    metrics = {"folds": fold_records, "mean": mean_metrics}
+    metrics = {"folds": cv_out.fold_records, "mean": cv_out.mean_metrics}
     feature_schema = {
         "feature_names": x.columns.tolist(),
         "target": config.data.target,
         "task_type": config.task.type,
         "frontier_alpha": alpha,
     }
-    denominator = np.where(np.abs(oof_pred) < 1e-12, np.nan, oof_pred)
-    observation_table = pd.DataFrame(
-        {
-            "fold_id": fold_ids,
-            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
-            "y_true": y.to_numpy(dtype=float),
-            "prediction": oof_pred,
-            "efficiency": y.to_numpy(dtype=float) / denominator,
-        }
-    )
     return FrontierTrainingOutput(
-        model_text=final_model.model_to_string(),
+        model_text=cv_out.final_model.model_to_string(),
         metrics=metrics,
-        cv_results=cv_results,
+        cv_results=cv_out.cv_results,
         feature_schema=feature_schema,
-        training_history=training_history,
-        observation_table=observation_table,
+        training_history=cv_out.training_history,
+        observation_table=cv_out.observation_table,
     )

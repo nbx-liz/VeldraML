@@ -22,11 +22,11 @@ from sklearn.metrics import (
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
+from veldra.modeling._cv_runner import TaskSpec, booster_iteration_stats, run_cv_training
 from veldra.modeling.utils import (
     resolve_auto_num_leaves,
     resolve_feature_weights,
     resolve_ratio_params,
-    split_for_early_stopping,
 )
 from veldra.split import iter_cv_splits
 
@@ -46,14 +46,7 @@ class BinaryTrainingOutput:
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
-    current_iteration_fn = getattr(booster, "current_iteration", None)
-    current_iteration = (
-        int(current_iteration_fn()) if callable(current_iteration_fn) else int(fallback_rounds)
-    )
-    best_iteration = int(getattr(booster, "best_iteration", 0) or current_iteration)
-    if best_iteration <= 0:
-        best_iteration = current_iteration
-    return best_iteration, current_iteration
+    return booster_iteration_stats(booster, fallback_rounds)
 
 
 def _to_python_scalar(value: Any) -> Any:
@@ -266,63 +259,95 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
     x, y, target_classes = _build_feature_frame(config, data)
     splits = iter_cv_splits(config, data, x, y)
 
-    oof_raw = np.full(len(x), np.nan, dtype=float)
-    fold_ids = np.full(len(x), -1, dtype=int)
-    fold_records: list[dict[str, float | int]] = []
-    history_folds: list[dict[str, Any]] = []
+    def _fit_booster(
+        x_train: pd.DataFrame,
+        y_train: pd.Series,
+        x_valid: pd.DataFrame,
+        y_valid: pd.Series,
+        cfg: RunConfig,
+        _ctx: dict[str, Any],
+        evaluation_history: dict[str, Any],
+    ) -> lgb.Booster:
+        return _train_single_booster(
+            x_train=x_train,
+            y_train=y_train,
+            x_valid=x_valid,
+            y_valid=y_valid,
+            config=cfg,
+            evaluation_history=evaluation_history,
+        )
 
-    for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-        if len(train_idx) == 0 or len(valid_idx) == 0:
-            raise VeldraValidationError("Encountered an empty train/valid split.")
-        x_fold_train = x.iloc[train_idx]
-        y_fold_train = y.iloc[train_idx]
-        x_es_train, x_es_valid, y_es_train, y_es_valid = split_for_early_stopping(
-            x_fold_train, y_fold_train, config
-        )
-        eval_history: dict[str, Any] = {}
-        booster = _train_single_booster(
-            x_train=x_es_train,
-            y_train=y_es_train,
-            x_valid=x_es_valid,
-            y_valid=y_es_valid,
-            config=config,
-            evaluation_history=eval_history,
-        )
+    def _predict_valid(
+        booster: lgb.Booster,
+        x_valid: pd.DataFrame,
+        _ctx: dict[str, Any],
+    ) -> np.ndarray:
         pred_raw = np.asarray(
-            booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration),
+            booster.predict(x_valid, num_iteration=booster.best_iteration),
             dtype=float,
         )
-        pred_raw = np.clip(pred_raw, 1e-7, 1 - 1e-7)
-        oof_raw[valid_idx] = pred_raw
-        fold_ids[valid_idx] = fold_idx
+        return np.clip(pred_raw, 1e-7, 1 - 1e-7)
 
-        fold_metrics = _binary_metrics(y.iloc[valid_idx].to_numpy(), pred_raw)
-        best_iteration, num_iterations = _booster_iteration_stats(
-            booster, config.train.num_boost_round
-        )
-        history_folds.append(
+    def _fold_metrics(
+        y_valid: pd.Series,
+        pred: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float]:
+        return _binary_metrics(y_valid.to_numpy(), pred)
+
+    def _fold_record(
+        fold_idx: int,
+        metrics: dict[str, float],
+        n_train: int,
+        n_valid: int,
+        _ctx: dict[str, Any],
+    ) -> dict[str, float | int]:
+        return {
+            "fold": fold_idx,
+            "auc": metrics["auc"],
+            "logloss": metrics["logloss"],
+            "brier": metrics["brier"],
+            "n_train": n_train,
+            "n_valid": n_valid,
+        }
+
+    def _mean_metrics(y_all: pd.Series, oof: np.ndarray, _ctx: dict[str, Any]) -> dict[str, float]:
+        return _binary_metrics(y_all.to_numpy(), oof)
+
+    def _observation_table(
+        fold_ids: np.ndarray,
+        y_all: pd.Series,
+        oof: np.ndarray,
+        _ctx: dict[str, Any],
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
             {
-                "fold": fold_idx,
-                "best_iteration": best_iteration if best_iteration > 0 else num_iterations,
-                "num_iterations": num_iterations,
-                "eval_history": eval_history.get("valid_0", eval_history),
+                "fold_id": fold_ids,
+                "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+                "y_true": y_all.to_numpy(dtype=int),
+                "score_raw": oof,
             }
         )
-        fold_records.append(
-            {
-                "fold": fold_idx,
-                "auc": fold_metrics["auc"],
-                "logloss": fold_metrics["logloss"],
-                "brier": fold_metrics["brier"],
-                "n_train": int(len(train_idx)),
-                "n_valid": int(len(valid_idx)),
-            }
-        )
 
-    if np.isnan(oof_raw).any():
-        raise VeldraValidationError(
-            "OOF predictions contain missing values. Check split configuration."
-        )
+    cv_out = run_cv_training(
+        config=config,
+        x=x,
+        y=y,
+        splits=splits,
+        spec=TaskSpec(
+            fit_booster=_fit_booster,
+            predict_valid=_predict_valid,
+            fold_metrics=_fold_metrics,
+            fold_record=_fold_record,
+            mean_metrics=_mean_metrics,
+            observation_table=_observation_table,
+            init_oof=lambda n_rows, _ctx: np.full(n_rows, np.nan, dtype=float),
+        ),
+    )
+    oof_raw = np.asarray(cv_out.oof, dtype=float)
+    fold_ids = cv_out.fold_ids
+    fold_records = cv_out.fold_records
+    cv_results = cv_out.cv_results
 
     calibrator = LogisticRegression(
         solver="lbfgs",
@@ -335,7 +360,6 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
     y_true = y.to_numpy()
     mean_raw = _binary_metrics(y_true, oof_raw)
     mean_cal = _binary_metrics(y_true, oof_cal)
-    cv_results = pd.DataFrame.from_records(fold_records)
 
     prob_true, prob_pred = calibration_curve(
         y.to_numpy(),
@@ -349,32 +373,6 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
             "prob_true": prob_true.astype(float),
         }
     )
-
-    x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping(
-        x, y, config
-    )
-    final_eval_history: dict[str, Any] = {}
-    final_model = _train_single_booster(
-        x_train=x_final_train,
-        y_train=y_final_train,
-        x_valid=x_final_valid,
-        y_valid=y_final_valid,
-        config=config,
-        evaluation_history=final_eval_history,
-    )
-    final_best_iteration, final_num_iterations = _booster_iteration_stats(
-        final_model, config.train.num_boost_round
-    )
-    training_history = {
-        "folds": history_folds,
-        "final_model": {
-            "best_iteration": (
-                final_best_iteration if final_best_iteration > 0 else final_num_iterations
-            ),
-            "num_iterations": final_num_iterations,
-            "eval_history": final_eval_history.get("valid_0", final_eval_history),
-        },
-    }
 
     feature_schema = {
         "feature_names": x.columns.tolist(),
@@ -423,7 +421,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
     )
 
     return BinaryTrainingOutput(
-        model_text=final_model.model_to_string(),
+        model_text=cv_out.final_model.model_to_string(),
         metrics=metrics,
         cv_results=cv_results,
         feature_schema=feature_schema,
@@ -431,6 +429,6 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         calibration_curve=calibration_df,
         threshold=threshold,
         threshold_curve=threshold_curve,
-        training_history=training_history,
+        training_history=cv_out.training_history,
         observation_table=observation_table,
     )

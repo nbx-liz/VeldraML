@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
@@ -22,6 +21,14 @@ from sklearn.model_selection import GroupKFold, KFold
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.causal.diagnostics import max_standardized_mean_difference, overlap_metric
+from veldra.causal.learners import (
+    OutcomeFactory,
+    OutcomeLearner,
+    PropensityFactory,
+    PropensityLearner,
+    default_outcome_factory,
+    default_propensity_factory,
+)
 from veldra.config.models import RunConfig
 
 
@@ -48,7 +55,7 @@ class _ConstantModel:
 
 
 def _feature_importance_from_model(
-    model: lgb.LGBMClassifier | lgb.LGBMRegressor | _ConstantModel,
+    model: PropensityLearner | OutcomeLearner | _ConstantModel,
     feature_names: list[str],
 ) -> dict[str, float]:
     if isinstance(model, _ConstantModel) or not hasattr(model, "feature_importances_"):
@@ -146,24 +153,17 @@ def _fit_propensity_model(
     t: pd.Series,
     seed: int,
     params: dict[str, Any],
-) -> lgb.LGBMClassifier | _ConstantModel:
+    propensity_factory: PropensityFactory | None = None,
+) -> PropensityLearner | _ConstantModel:
     rate = float(t.mean())
     if rate <= 0.0 or rate >= 1.0:
         return _ConstantModel(rate)
-    model = lgb.LGBMClassifier(
-        objective="binary",
-        n_estimators=150,
-        learning_rate=0.05,
-        num_leaves=31,
-        random_state=seed,
-        verbosity=-1,
-        **params,
-    )
+    model = (propensity_factory or default_propensity_factory)(seed, params)
     model.fit(x, t)
     return model
 
 
-def _predict_propensity(model: lgb.LGBMClassifier | _ConstantModel, x: pd.DataFrame) -> np.ndarray:
+def _predict_propensity(model: PropensityLearner | _ConstantModel, x: pd.DataFrame) -> np.ndarray:
     if isinstance(model, _ConstantModel):
         return model.predict(x)
     return np.asarray(model.predict_proba(x)[:, 1], dtype=float)
@@ -174,20 +174,13 @@ def _fit_outcome_model(
     y: pd.Series,
     seed: int,
     params: dict[str, Any],
-) -> lgb.LGBMRegressor | _ConstantModel:
+    outcome_factory: OutcomeFactory | None = None,
+) -> OutcomeLearner | _ConstantModel:
     if len(y) == 0:
         raise VeldraValidationError("Outcome model training set is empty.")
     if np.isclose(float(y.std(ddof=0)), 0.0):
         return _ConstantModel(float(y.iloc[0]))
-    model = lgb.LGBMRegressor(
-        objective="regression",
-        n_estimators=200,
-        learning_rate=0.05,
-        num_leaves=31,
-        random_state=seed,
-        verbosity=-1,
-        **params,
-    )
+    model = (outcome_factory or default_outcome_factory)(seed, params)
     model.fit(x, y)
     return model
 
@@ -198,7 +191,8 @@ def _fit_outcome_with_fallback(
     subgroup_mask: pd.Series,
     seed: int,
     params: dict[str, Any],
-) -> lgb.LGBMRegressor | _ConstantModel:
+    outcome_factory: OutcomeFactory | None = None,
+) -> OutcomeLearner | _ConstantModel:
     if subgroup_mask.sum() == 0:
         return _ConstantModel(float(y_train.mean()))
     return _fit_outcome_model(
@@ -206,10 +200,11 @@ def _fit_outcome_with_fallback(
         y_train.loc[subgroup_mask],
         seed,
         params,
+        outcome_factory,
     )
 
 
-def _predict_outcome(model: lgb.LGBMRegressor | _ConstantModel, x: pd.DataFrame) -> np.ndarray:
+def _predict_outcome(model: OutcomeLearner | _ConstantModel, x: pd.DataFrame) -> np.ndarray:
     if isinstance(model, _ConstantModel):
         return model.predict(x)
     return np.asarray(model.predict(x), dtype=float)
@@ -249,7 +244,13 @@ def _ate_score(
     return m1 - m0 + t * (y - m1) / e - (1.0 - t) * (y - m0) / (1.0 - e)
 
 
-def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOutput:
+def run_dr_estimation(
+    config: RunConfig,
+    frame: pd.DataFrame,
+    *,
+    propensity_factory: PropensityFactory | None = None,
+    outcome_factory: OutcomeFactory | None = None,
+) -> DREstimationOutput:
     """Run doubly robust estimation using cross-fitting and calibrated propensity.
 
     Notes
@@ -275,6 +276,8 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
 
     propensity_params = _nuisance_params(config, "propensity")
     outcome_params = _nuisance_params(config, "outcome")
+    resolved_propensity_factory = propensity_factory or default_propensity_factory
+    resolved_outcome_factory = outcome_factory or default_outcome_factory
 
     e_raw = np.full(n_rows, np.nan, dtype=float)
     m1_hat = np.full(n_rows, np.nan, dtype=float)
@@ -322,7 +325,11 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
             y_train = y.iloc[train_idx]
 
             prop_model = _fit_propensity_model(
-                x_train, t_train, config.train.seed, propensity_params
+                x_train,
+                t_train,
+                config.train.seed,
+                propensity_params,
+                resolved_propensity_factory,
             )
             e_raw[valid_idx] = _predict_propensity(prop_model, x_valid)
             propensity_importance_snapshots.append(
@@ -337,6 +344,7 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
                 treated_mask,
                 config.train.seed,
                 outcome_params,
+                resolved_outcome_factory,
             )
             m0_model = _fit_outcome_with_fallback(
                 x_train,
@@ -344,6 +352,7 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
                 control_mask,
                 config.train.seed,
                 outcome_params,
+                resolved_outcome_factory,
             )
             m1_hat[valid_idx] = _predict_outcome(m1_model, x_valid)
             m0_hat[valid_idx] = _predict_outcome(m0_model, x_valid)
@@ -354,16 +363,30 @@ def run_dr_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimationOut
                 _feature_importance_from_model(m0_model, feature_names)
             )
     else:
-        prop_model = _fit_propensity_model(x, t, config.train.seed, propensity_params)
+        prop_model = _fit_propensity_model(
+            x,
+            t,
+            config.train.seed,
+            propensity_params,
+            resolved_propensity_factory,
+        )
         e_raw[:] = _predict_propensity(prop_model, x)
         propensity_importance_snapshots.append(
             _feature_importance_from_model(prop_model, feature_names)
         )
         m1_model = _fit_outcome_model(
-            x.loc[t == 1], y.loc[t == 1], config.train.seed, outcome_params
+            x.loc[t == 1],
+            y.loc[t == 1],
+            config.train.seed,
+            outcome_params,
+            resolved_outcome_factory,
         )
         m0_model = _fit_outcome_model(
-            x.loc[t == 0], y.loc[t == 0], config.train.seed, outcome_params
+            x.loc[t == 0],
+            y.loc[t == 0],
+            config.train.seed,
+            outcome_params,
+            resolved_outcome_factory,
         )
         m1_hat[:] = _predict_outcome(m1_model, x)
         m0_hat[:] = _predict_outcome(m0_model, x)

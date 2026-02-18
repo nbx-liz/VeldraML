@@ -1491,3 +1491,46 @@
 - `uv run ruff check tests/test_*edge*.py tests/test_split_time_series.py tests/test_data_loader_edge.py tests/test_tune_edge_cases.py` を通過。
 - `uv run pytest -q tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py tests/test_tune_edge_cases.py tests/test_data_loader_edge.py tests/test_split_time_series.py` を実施（`31 passed, 1 warning`）。
 - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`658 passed, 11 deselected, 1 warning`）。
+
+### 2026-02-18（作業/PR: phase26.7-core-refactor-step1-3）
+**背景**
+- modeling 4タスク実装・RunConfig cross-field 検証・causal DR nuisance learner に構造的重複が残り、保守/拡張コストが高止まりしていた。
+- Stable API と Artifact 契約を維持したまま、段階的リファクタ（Step1/2/3）を実施する必要があった。
+
+**実施計画**
+- 3PRで実施（Step1: RunConfig分離、Step2: causal learner抽象化、Step3: CVループ統合）。
+- Step3 は baseline capture + 完全一致パリティテストでゲートする。
+
+**変更内容**
+- Step1（RunConfigバリデーション分離）:
+  - `src/veldra/config/models.py` の `SplitConfig`/`TrainConfig` に `@model_validator(mode=\"after\")` を追加。
+  - `_validate_cross_fields` から split/train の自己完結検証を除去し、task横断・サブコンフィグ横断検証に集約。
+- Step2（causal learner 抽象化）:
+  - `src/veldra/causal/learners.py` を新設し、`PropensityLearner`/`OutcomeLearner` Protocol と default factory を追加。
+  - `src/veldra/causal/dr.py` の LightGBM 直接生成を factory 経由へ変更し、`run_dr_estimation(..., *, propensity_factory=None, outcome_factory=None)` を後方互換で拡張。
+- Step3（CVループ統合）:
+  - `src/veldra/modeling/_cv_runner.py` を新設し、`TaskSpec` + `run_cv_training` + `booster_iteration_stats` を実装。
+  - `src/veldra/modeling/{regression,binary,multiclass,frontier}.py` の CV fold loop / final model 学習 / training_history 組み立てを共通ランナーへ移行。
+  - private helper 互換として各 task module に `_booster_iteration_stats` を薄い委譲として維持。
+- 完全一致パリティ:
+  - baseline を `tests/fixtures/phase267_parity/*.pkl` に保存（4 task）。
+  - `tests/test_phase267_output_parity.py` を追加し、`metrics/cv_results/training_history/observation_table/feature_schema/model_text`（binary は `threshold/calibration_curve` を追加）を完全一致比較。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26.7 は 3PR 分割で実施し、同等性判定は「完全一致」を採用する（非決定メタ項目は除外）。
+  - 理由: 大規模リファクタの回帰リスクを局所化し、既存契約を機械的に担保するため。
+  - 影響範囲: config/models, causal/dr, modeling/*, parity tests, DESIGN_BLUEPRINT
+- Decision: confirmed（確定）
+  - 内容: Step1→Step2→Step3 の順序、3PR分割、完全一致ゲートを実装し、Stable API/Artifact 契約を維持したまま完了する。
+  - 理由: 設計上の保守性改善と既存運用の安全性を両立できるため。
+  - 影響範囲: `src/veldra/config/models.py`, `src/veldra/causal/{dr.py,learners.py}`, `src/veldra/modeling/{_cv_runner.py,binary.py,multiclass.py,regression.py,frontier.py}`, `tests/test_phase267_output_parity.py`, `tests/fixtures/phase267_parity/`
+
+**検証結果**
+- `uv run ruff check src/veldra/config/models.py tests/test_runconfig_validation.py tests/test_config_train_fields.py tests/test_config_cross_field.py tests/test_tune_validation.py tests/test_early_stopping_validation.py` を通過。
+- `uv run pytest -q tests/test_runconfig_validation.py tests/test_config_train_fields.py tests/test_config_cross_field.py tests/test_tune_validation.py tests/test_early_stopping_validation.py` を実施（`55 passed`）。
+- `uv run ruff check src/veldra/causal/learners.py src/veldra/causal/dr.py tests/test_dr_internal.py tests/test_causal_dr.py tests/test_dr_validation.py tests/test_drdid_validation.py tests/test_drdid_binary_validation.py tests/test_drdid_smoke_panel.py` を通過。
+- `uv run pytest -q tests/test_dr_internal.py tests/test_causal_dr.py tests/test_dr_validation.py tests/test_drdid_validation.py tests/test_drdid_binary_validation.py tests/test_drdid_smoke_panel.py` を実施（`28 passed`）。
+- `uv run ruff check src/veldra/modeling/_cv_runner.py src/veldra/modeling/regression.py src/veldra/modeling/binary.py src/veldra/modeling/multiclass.py src/veldra/modeling/frontier.py tests/test_phase267_output_parity.py` を通過。
+- `uv run pytest -q tests/test_regression_internal.py tests/test_binary_internal.py tests/test_multiclass_internal.py tests/test_frontier_internal.py tests/test_observation_table.py tests/test_training_history.py tests/test_top_k_precision.py tests/test_num_boost_round.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py tests/test_phase267_output_parity.py tests/test_early_stopping_validation.py` を実施（`48 passed`）。
+- `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`704 passed, 11 deselected`）。

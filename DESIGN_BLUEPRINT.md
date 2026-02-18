@@ -1466,6 +1466,185 @@ uv run pytest -q -m "not gui_e2e and not notebook_e2e"
 - 影響範囲: tests/ 配下全体, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
 
 
+## 13.7 Phase26.7: コアロジック構造改善リファクタリング
+
+最終更新: 2026-02-18
+
+### 目的
+コアロジックの長期的な保守性・拡張性・テスト容易性を向上させる。GUI および大規模データ処理（分散処理等）はスコープ外とし、モデリング層・設定層・因果推論層の構造改善に焦点を当てる。
+
+### 背景
+モデリング層の4学習ファイル（binary/regression/multiclass/frontier）間で90%以上のコード重複が確認された。`_booster_iteration_stats`は4箇所で完全コピー、CVループ本体・最終モデル学習ブロック・OOF初期化も構造的に同一。また`config/models.py`の`_validate_cross_fields`が310行に肥大化し、`causal/dr.py`ではLightGBMが直接インスタンス化されている。
+
+当初提案7項目を批判的に精査し、3項目を採用、4項目を却下/延期とした。
+
+### 却下・延期した提案
+
+**却下: Artifact保存DTO化** — `Artifact`クラス自体が既にDTOとして機能。中間層は不要。Step 3完了後に`getattr`フォールバックが自然解消する。
+
+**却下: 前処理パイプライン化** — `_build_feature_frame`の共通部分は約15-20行。タスク固有のバリデーションと戻り値型が異なる（2-tupleと3-tuple）。Step 3のCVRunner統合で共通部分は自然に吸収されるため独立パッケージは過剰。
+
+**却下: 定数のEnum化** — Pydantic `Literal`型が既にPydantic v2のイディオムに沿い型安全性を提供済み。`StrEnum`変換は全型注釈の書き換え・YAML直列化変更・安定API契約破壊を伴い、コスト対効果が合わない。
+
+**延期: ユーティリティ関数の再配置** — Step 3完了後に`_cv_runner.py`の内部詳細となるため、先に移動すると二重作業になる。
+
+### Step 1: RunConfigバリデーションの分離（低リスク・小規模）
+
+**対象ファイル:** `src/veldra/config/models.py`
+
+**方針:** `_validate_cross_fields`（L209-518, 310行）から、単一サブコンフィグ内で完結するバリデーションを各モデルの`@model_validator(mode="after")`へ移動する。クロスコンフィグ検証（task×split, task×tuning等）はRunConfigに残す。
+
+**`SplitConfig`へ移動（現L214-257, 約44行）:**
+- timeseries → time_col必須、group → group_col必須
+- timeseries固有: gap>=0, embargo>=0, test_size>=1, blocked→train_size必須
+- 非timeseries: timeseries専用フィールドがデフォルト以外なら拒否
+
+**`TrainConfig`へ移動（現L273-326から自己完結部分, 約30行）:**
+- num_boost_round >= 1
+- early_stopping_validation_fractionの範囲 (0, 1)
+- auto_num_leaves有効時のnum_leaves_ratio範囲 (0, 1]
+- min_data_in_leaf_ratio / min_data_in_bin_ratioの範囲とlgb_params競合チェック
+- feature_weightsの値 > 0
+
+**RunConfigに残すもの:** task.type依存の検証全て（metrics許可リスト、top_k、class_weight、postprocess、tuning、causal）
+
+**効果:** `_validate_cross_fields`が約310行→約230行に縮小。バリデーションがフィールド定義の近くに移動し可読性向上。
+
+**検証:**
+```bash
+pytest tests/test_config*.py tests/test_api_surface.py -v
+```
+
+### Step 2: 因果推論の学習器抽象化（低リスク・小規模）
+
+**対象ファイル:**
+- 新規: `src/veldra/causal/learners.py`
+- 修正: `src/veldra/causal/dr.py`
+
+**方針:** `typing.Protocol`でnuisanceモデルのインターフェースを定義し、ファクトリ関数でデフォルト実装を提供する。ABCではなくProtocolを使用（コードベース全体が構造的型付けを採用しているため）。
+
+```python
+# src/veldra/causal/learners.py
+class PropensityLearner(Protocol):
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None: ...
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
+
+class OutcomeLearner(Protocol):
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None: ...
+    def predict(self, X: pd.DataFrame) -> np.ndarray: ...
+
+def default_propensity_factory(seed: int, params: dict) -> lgb.LGBMClassifier: ...
+def default_outcome_factory(seed: int, params: dict) -> lgb.LGBMRegressor: ...
+```
+
+**変更箇所:**
+- `_fit_propensity_model`（dr.py L144-163）: ファクトリ関数経由でインスタンス化
+- `_fit_outcome_model`（dr.py L172-192）: 同上
+- `run_dr_estimation`シグネチャに`propensity_factory`/`outcome_factory`オプション引数を追加（デフォルトは現行動作を保持）
+- `dr_did.py`は`dr.py`に委譲しているため自動的に恩恵を受ける
+
+**効果:** テスト時に軽量ダミーモデルを注入可能。将来のアルゴリズム差し替え（XGBoost, Ridge等）が容易に。
+
+**検証:**
+```bash
+pytest tests/test_causal*.py -v
+```
+
+### Step 3: CVループの統合（高リスク・大規模）
+
+**対象ファイル:**
+- 新規: `src/veldra/modeling/_cv_runner.py`
+- 修正: `src/veldra/modeling/binary.py`
+- 修正: `src/veldra/modeling/regression.py`
+- 修正: `src/veldra/modeling/multiclass.py`
+- 修正: `src/veldra/modeling/frontier.py`
+- 修正: `src/veldra/modeling/utils.py`
+
+**設計方針:** ABC継承ではなく、**dataclassベースのStrategy + 共通ランナー関数**を採用する。理由: コードベースにABCは一切なく、フラットなdataclass + 関数が一貫したパターンであるため。
+
+```python
+# src/veldra/modeling/_cv_runner.py
+@dataclass(slots=True)
+class TaskSpec:
+    build_features: Callable[[RunConfig, pd.DataFrame], tuple]
+    build_lgb_params: Callable[[RunConfig, int], dict]
+    init_oof: Callable[[int, ...], np.ndarray]    # 1D or 2D
+    extract_fold_pred: Callable[[Any, pd.DataFrame, int], np.ndarray]
+    compute_fold_metrics: Callable[[np.ndarray, np.ndarray, ...], dict]
+    build_output: Callable[..., Any]               # タスク固有のTrainingOutput
+
+def run_cv_training(config: RunConfig, data: pd.DataFrame, spec: TaskSpec) -> Any:
+    """全タスク共通のCV学習フロー"""
+    # 1. timeseries sort (共通)
+    # 2. spec.build_features() でX, y（+α）取得
+    # 3. iter_cv_splits() でfold分割
+    # 4. OOF配列初期化 (spec.init_oof)
+    # 5. fold loop: early stopping split → _train_single_booster → predict → metrics
+    # 6. final model training
+    # 7. training_history組み立て
+    # 8. spec.build_output() でタスク固有の出力生成
+```
+
+**共通化される重複コード:**
+- `_booster_iteration_stats`: 4ファイル完全同一 → `_cv_runner.py`へ統合
+- `_train_single_booster`: 4ファイルほぼ同一（multiclassのnum_classのみ差分） → パラメータ化して統合
+- CVループ本体: fold iteration, early stopping split, 推論, 履歴記録
+- 最終モデル学習ブロック: 4ファイル95%同一
+- `_build_feature_frame`の共通部分（target検証, drop_cols除外, feature選択）
+
+**タスク固有のロジック（各ファイルに残る）:**
+- `binary.py`: TaskSpec定義 + calibration/threshold後処理
+- `multiclass.py`: TaskSpec定義（2D OOF, num_class, softmax正規化）
+- `frontier.py`: TaskSpec定義（alpha, quantile metrics）
+- `regression.py`: TaskSpec定義（最もシンプル）
+
+**見込み:** 各タスクファイルが260-436行 → 60-100行に削減。共通ランナーは約300-400行。
+
+**リスク軽減策:**
+1. 実装前に全テスト（28+ファイル）をパスすることを確認
+2. golden output比較テストを追加: 現行コードの出力をキャプチャし、リファクタ後に完全一致を検証
+3. 段階的に実装: まずregressionのみ統合→テスト→他タスクを順次移行
+
+**検証:**
+```bash
+pytest tests/ -v --tb=short
+```
+全テストパス。特にsmoke test（binary/regression/multiclass/frontier）のmetrics値・OOF形状・training_history構造が完全一致すること。
+
+### 互換性方針
+- `veldra.api.*` の公開シグネチャは変更しない。
+- 各`TrainingOutput`のフィールド構造は維持する。
+- Artifact の保存形式・読み込み互換性は変更しない。
+
+### 成功基準
+- 全既存テスト（234テスト）がパスすること
+- `_validate_cross_fields`が310行→230行以下に縮小
+- `_booster_iteration_stats`の重複が4箇所→1箇所に統合
+- CVループの構造的重複が解消されること
+- `causal/dr.py`のLightGBM直接インスタンス化が排除されること
+
+### 実装計画確定（2026-02-18）
+- 実装順序は Step1 → Step2 → Step3 で固定する。
+- 実行粒度は 3PR（Step1/Step2/Step3 分離）で固定する。
+- Step3 の同等性判定は「完全一致」を採用し、`run_id` / `artifact_path` / ファイル時刻など非決定項目のみ比較対象外とする。
+- PR3 着手前に baseline capture を実施し、`tests/test_phase267_output_parity.py` で4 task（regression/binary/multiclass/frontier）を一括検証する。
+
+### Decision（provisional）
+- 内容: Phase26.7 は 3PR + 完全一致ゲートで実装し、各PRで ruff/対象pytest、最終で `-m "not gui_e2e and not notebook_e2e"` 回帰を必須化する。
+- 理由: 大規模リファクタの回帰リスクを段階分離しつつ、既存契約の非破壊を機械的に担保するため。
+- 影響範囲: `src/veldra/config/models.py`, `src/veldra/causal/dr.py`, `src/veldra/causal/learners.py`, `src/veldra/modeling/_cv_runner.py`, `src/veldra/modeling/{binary,regression,multiclass,frontier}.py`, `tests/test_phase267_output_parity.py`, `HISTORY.md`
+
+### Decision（confirmed）
+- 内容: Step1/2/3 を実装し、`run_dr_estimation` の後方互換を維持したまま learner factory 注入を導入、modeling のCV共通化を `_cv_runner.py` へ集約した。
+- 理由: コード重複削減と拡張性向上を達成しつつ、Stable API と Artifact 契約を非破壊で維持できたため。
+- 影響範囲: `src/veldra/config/models.py`, `src/veldra/causal/{dr.py,learners.py}`, `src/veldra/modeling/{_cv_runner.py,binary.py,regression.py,multiclass.py,frontier.py}`, `tests/test_phase267_output_parity.py`
+
+### 実装結果（2026-02-18）
+- Step1: Split/Train の自己完結バリデーションを各 config へ移管し、`_validate_cross_fields` をクロス検証中心へ縮小。
+- Step2: nuisance learner Protocol + default factory を追加し、DR の LightGBM 直接生成を排除。
+- Step3: CVループ/履歴/final学習を共通ランナーへ統合し、4 task の出力契約を維持。
+- 検証: `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` で `704 passed, 11 deselected`。
+
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム
 
 **目的:** 優先度ベースのジョブスケジューリングと並列worker実行により、スループットとユーザー制御を向上させる。
