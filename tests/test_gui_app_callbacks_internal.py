@@ -51,6 +51,7 @@ def test_duplicate_run_result_log_callbacks_are_distinguishable() -> None:
 
     has_enqueue = False
     has_cancel = False
+    has_retry = False
     for cb in matches:
         inputs = cb.get("inputs", [])
         ids = {entry.get("id") for entry in inputs}
@@ -58,6 +59,9 @@ def test_duplicate_run_result_log_callbacks_are_distinguishable() -> None:
             has_enqueue = True
         if "run-cancel-job-btn" in ids:
             has_cancel = True
+        if "run-retry-job-btn" in ids:
+            has_retry = True
 
     assert has_enqueue is True
     assert has_cancel is True
+    assert has_retry is True

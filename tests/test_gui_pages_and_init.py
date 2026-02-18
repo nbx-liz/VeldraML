@@ -40,8 +40,12 @@ def test_page_layouts_have_expected_component_ids() -> None:
     assert "config-yaml" in ids
     assert "config-migrate-preview-btn" in ids
     assert "run-action" in ids
+    assert "run-priority" in ids
+    assert "run-set-priority-btn" in ids
     assert "run-job-select" in ids
     assert "artifact-root-path" in ids
+    assert "artifact-page" in ids
+    assert "artifact-total" in ids
 
 
 def test_gui_init_create_app_proxy(monkeypatch) -> None:

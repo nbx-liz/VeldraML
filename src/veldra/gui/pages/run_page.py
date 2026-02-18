@@ -172,6 +172,16 @@ def layout(state: dict | None = None) -> html.Div:
                                                         ],
                                                         value="python",
                                                     ),
+                                                    html.Label("Queue Priority", className="mt-2"),
+                                                    dbc.Select(
+                                                        id="run-priority",
+                                                        options=[
+                                                            {"label": "High", "value": "high"},
+                                                            {"label": "Normal", "value": "normal"},
+                                                            {"label": "Low", "value": "low"},
+                                                        ],
+                                                        value="normal",
+                                                    ),
                                                     html.Label(
                                                         "Config YAML Override", className="mt-2"
                                                     ),
@@ -280,11 +290,30 @@ def layout(state: dict | None = None) -> html.Div:
                                     dcc.Interval(
                                         id="run-jobs-interval", interval=2000, n_intervals=0
                                     ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.Select(
+                                                    id="run-jobs-page-size",
+                                                    options=[
+                                                        {"label": "25", "value": 25},
+                                                        {"label": "50", "value": 50},
+                                                        {"label": "100", "value": 100},
+                                                    ],
+                                                    value=50,
+                                                ),
+                                                width=2,
+                                            ),
+                                        ],
+                                        className="mb-2 g-2",
+                                    ),
                                     html.Div(
                                         id="run-jobs-table-container",
                                         children=task_table("run-jobs", []),  # Initial empty table
                                         style={"minHeight": "200px"},
                                     ),
+                                    dcc.Store(id="run-jobs-page", data=0),
+                                    dcc.Store(id="run-jobs-total", data=0),
                                     html.Hr(className="border-secondary my-4"),
                                     html.H5("Task Details", className="mb-3"),
                                     html.Div(
@@ -293,6 +322,14 @@ def layout(state: dict | None = None) -> html.Div:
                                                 "Cancel Task",
                                                 id="run-cancel-job-btn",
                                                 color="danger",
+                                                size="sm",
+                                                className="me-2",
+                                                disabled=True,
+                                            ),
+                                            dbc.Button(
+                                                "Retry Task",
+                                                id="run-retry-job-btn",
+                                                color="warning",
                                                 size="sm",
                                                 className="me-2",
                                                 disabled=True,
@@ -315,19 +352,37 @@ def layout(state: dict | None = None) -> html.Div:
                                         ],
                                         className="mb-3",
                                     ),
-                                    html.Pre(
-                                        id="run-job-detail",
-                                        style={
-                                            "height": "250px",
-                                            "overflowY": "auto",
-                                            "backgroundColor": "#0d0d0d",
-                                            "padding": "12px",
-                                            "borderRadius": "8px",
-                                            "border": "1px solid rgba(148, 163, 184, 0.1)",
-                                        },
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.Select(
+                                                id="run-queue-priority",
+                                                options=[
+                                                    {"label": "High", "value": "high"},
+                                                    {"label": "Normal", "value": "normal"},
+                                                    {"label": "Low", "value": "low"},
+                                                ],
+                                                value="normal",
+                                            ),
+                                            dbc.Button(
+                                                "Set Priority",
+                                                id="run-set-priority-btn",
+                                                color="secondary",
+                                                size="sm",
+                                            ),
+                                        ],
+                                        className="mb-3",
                                     ),
+                                    dbc.Button(
+                                        "Load More Logs",
+                                        id="run-log-load-more-btn",
+                                        color="secondary",
+                                        size="sm",
+                                        className="mb-2",
+                                    ),
+                                    html.Div(id="run-job-detail", className="small"),
                                     # Hidden store for selection state
                                     dcc.Store(id="run-job-select"),
+                                    dcc.Store(id="run-log-limit", data=200),
                                 ],
                                 className="glass-card h-100",
                             )

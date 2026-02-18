@@ -1554,3 +1554,271 @@
 **検証結果**
 - ドキュメント整合性を目視確認（`## 13.6` から `## 13.7` への接続、見出し整合、更新日反映）。
 - コード変更なしのため、テスト実行は未実施。
+
+### 2026-02-18（作業/PR: phase27-priority-queue-worker-pool）
+**背景**
+- GUI ジョブキューは single worker + FIFO で運用しており、優先度制御と並列実行が未対応だった。
+- queued ジョブの実運用上の順序変更手段がなく、重要ジョブを先行させる手段が必要だった。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase27 は strict priority（`high=90`, `normal=50`, `low=10`）を採用し、queued 並び替えは priority 変更操作で実現する。
+  - 理由: 既存契約を壊さず最小変更で制御性とスループットを向上できるため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,worker.py,server.py,services.py,app.py,pages/run_page.py,components/task_table.py}`, `tests/test_gui_*`, `tests/e2e_playwright/test_uc01_regression_flow.py`, `DESIGN_BLUEPRINT.md`
+- Decision: confirmed（確定）
+  - 内容: strict priority + worker pool + queued reprioritize UI を実装し、既定 `worker_count=1` の後方互換を維持した。
+  - 理由: スループットと運用制御を改善しつつ、既存GUI契約と安定動作を維持できたため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,worker.py,server.py,services.py,app.py,pages/run_page.py,components/task_table.py}`, `tests/test_gui_job_store.py`, `tests/test_gui_worker_pool.py`, `tests/test_gui_server.py`, `tests/test_gui_run_page.py`, `tests/test_gui_pages_and_init.py`, `tests/test_gui_app_job_flow.py`, `tests/test_new_ux.py`, `tests/test_gui_services_edge_cases.py`, `tests/e2e_playwright/test_uc01_regression_flow.py`, `README.md`, `DESIGN_BLUEPRINT.md`
+
+**変更内容**
+- `RunInvocation` / `GuiJobRecord` に `priority` を追加（`low|normal|high`, default `normal`）。
+- `GuiJobStore` に priority 列 migration（`PRAGMA table_info` + `ALTER TABLE`）と `(status, priority DESC, created_at_utc ASC)` インデックスを追加。
+- `claim_next_job()` を `ORDER BY priority DESC, created_at_utc ASC` へ変更し、`set_job_priority()`（queued限定）を実装。
+- `GuiWorkerPool` を追加し、`GuiWorker` 複数管理による並列実行と graceful shutdown を実装。
+- `veldra-gui` に `--worker-count` / `VELDRA_GUI_WORKER_COUNT` を追加し、起動ログに `worker_count` を記録。
+- Runページに `run-priority`（投入時）と `run-queue-priority` + `run-set-priority-btn`（queued再優先付け）を追加。
+- Runジョブテーブルに Priority 列を追加し、queued を priority順で表示。
+- `services.set_run_job_priority()` と `app._cb_set_job_priority()` を追加。
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/server.py src/veldra/gui/pages/run_page.py src/veldra/gui/components/task_table.py src/veldra/gui/app.py tests/test_gui_job_store.py tests/test_gui_worker_pool.py tests/test_gui_server.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_new_ux.py tests/test_gui_app_job_flow.py tests/test_gui_services_edge_cases.py tests/e2e_playwright/test_uc01_regression_flow.py README.md DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_server.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_job_flow.py tests/test_gui_services_edge_cases.py tests/test_gui_run_async.py tests/test_gui_app_callbacks_internal.py tests/test_new_ux.py` を実施（`41 passed`）。
+- `uv run pytest -q tests/e2e_playwright/test_uc01_regression_flow.py -m gui_e2e` を実施（`1 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`182 passed`）。
+
+### 2026-02-18（作業/PR: phase28-realtime-progress-and-streaming-logs）
+**背景**
+- Phase27 時点の GUI run queue は状態遷移（queued/running/succeeded/failed）のみで、実行中ジョブの進捗とログ可視性が不足していた。
+- Core/API 契約を維持したまま、GUI adapter 層だけでリアルタイム観測性を強化する必要があった。
+
+**変更内容**
+- `GuiJobRecord` に `progress_pct` / `current_step` を追加し、`GuiJobStore` の `jobs` テーブルへ後方互換 migration を実装。
+- `job_logs` テーブル（`job_id`, `seq`, `created_at_utc`, `level`, `message`, `payload_json`）を新設し、`append_job_log` / `list_job_logs` / `update_progress` を実装。
+- ログ保持上限を 10,000 行/job とし、上限超過時は古いログを FIFO で削除して `log_retention_applied` を記録。
+- `run_action` に job 文脈（`job_id`, `job_store`）を導入し、action別ステップ進捗と失敗ログを永続化。
+- `tune` 実行では runner trial 完了ログ（`n_trials_done`）を取り込み、`n_trials` ベースで進捗率を更新。
+- `GuiWorker` で started/completed ログ記録と進捗初期化を追加。
+- Run UI を更新し、ジョブテーブルに Progress 列、Job detail に `progress_viewer`（進捗バー + レベル色分けログ + Load More）を追加。
+- `README.md` / `DESIGN_BLUEPRINT.md` を Phase28 実装状態へ同期。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase28 は polling 継続（`run-jobs-interval`）+ SQLite 永続化で実装し、WebSocket/SSE は導入しない。
+  - 理由: 既存GUI契約を壊さず最小変更で可視化を強化できるため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,worker.py,app.py,pages/run_page.py,components/progress_viewer.py}`
+- Decision: confirmed（確定）
+  - 内容: 上記方式で実装を完了し、ログ保持上限は 10,000 行/job（FIFO削除）で固定する。
+  - 理由: UI応答性とDB肥大抑制を両立しつつ、運用に必要な履歴を維持できるため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,services.py,worker.py,app.py,pages/run_page.py,components/task_table.py,components/progress_viewer.py}`, `tests/test_gui_*`, `README.md`, `DESIGN_BLUEPRINT.md`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/components/task_table.py src/veldra/gui/components/progress_viewer.py src/veldra/gui/pages/run_page.py src/veldra/gui/app.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py tests/test_gui_services_run_dispatch.py tests/test_gui_services_core.py` を実施（`51 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`184 passed`）。
+
+### 2026-02-18（作業/PR: phase29-cancel-retry-and-error-recovery）
+**背景**
+- Phase28 時点では `cancel_requested` が実行フローへ十分反映されず、running ジョブが成功確定へ上書きされる競合余地が残っていた。
+- failed ジョブの再実行は再投入手順が手作業で、ジョブ詳細からの復旧導線と失敗診断（Next Step）が不足していた。
+
+**変更内容**
+- `src/veldra/gui/types.py`
+  - `RetryPolicy` dataclass を追加し、`RunInvocation.retry_policy` を新設。
+  - `GuiJobRecord` に `retry_count` / `retry_parent_job_id` / `last_error_kind` を追加。
+- `src/veldra/gui/job_store.py`
+  - `jobs` テーブルへ後方互換 migration（`retry_count`, `retry_parent_job_id`, `last_error_kind`）を追加。
+  - `is_cancel_requested()` / `mark_canceled_from_request()` / `create_retry_job()` を実装。
+  - `mark_failed(..., error_kind=...)` へ拡張。
+- `src/veldra/gui/services.py`
+  - `CanceledByUser` を導入し、`run_action()` に協調キャンセル checkpoint を追加。
+  - `classify_gui_error()` / `build_next_steps()` を追加し、失敗 payload に `error_kind` / `next_steps` を保存。
+  - `retry_run_job()` を追加（failed/canceled の手動リトライ）。
+- `src/veldra/gui/worker.py`
+  - `CanceledByUser` を `canceled` で終端化。
+  - 成功直前の cancel 競合時に `canceled` を優先。
+  - `RetryPolicy` に基づく自動リトライ枠（指数バックオフ）を追加（既定 `max_retries=0` で無効）。
+- `src/veldra/gui/pages/run_page.py` / `src/veldra/gui/app.py`
+  - Job Detail に `Retry Task` ボタンを追加。
+  - failed/canceled 時のボタン活性制御を追加し、`next_steps` を Job Detail に表示。
+- `src/veldra/api/runner.py`
+  - `fit` / `tune` / `estimate_dr` に optional keyword-only `cancellation_hook` を追加（後方互換）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: `RetryPolicy` は GUI adapter の `RunInvocation` に限定し、Core `RunConfig` には追加しない。
+  - 理由: Core の責務境界と Stable API 互換を維持するため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,services.py,worker.py,app.py,pages/run_page.py}`
+- Decision: confirmed（確定）
+  - 内容: 自動リトライ既定は `max_retries=0`（手動中心）とし、バックオフ実装は将来有効化に備えて先行導入する。
+  - 理由: 不要な自動再実行リスクを抑えるため。
+  - 影響範囲: `src/veldra/gui/{types.py,worker.py,services.py,job_store.py}`
+- Decision: confirmed（確定）
+  - 内容: Next Step は既知エラー分類に限定して表示し、未知エラーは原文優先とする。
+  - 理由: 過剰な汎用ヒントによる誤誘導を避けるため。
+  - 影響範囲: `src/veldra/gui/services.py`, `src/veldra/gui/app.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/api/runner.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_run_async.py tests/test_gui_services_core.py tests/test_gui_app_job_flow.py tests/test_gui_app_callbacks_internal.py tests/test_gui_phase26_1.py` を実施（`37 passed`）。
+
+### 2026-02-18（作業/PR: phase30-config-template-library-and-wizard）
+**背景**
+- Phase30 の要件（テンプレート、事前検証、localStorage 保存、diff、クイックスタートウィザード）を GUI adapter 内で一括実装する必要があった。
+- `/train` と `/config` の導線差分が残ると運用時の誤操作リスクが増えるため、共通コールバック化が必要だった。
+
+**変更内容**
+- `src/veldra/gui/templates/` に 5 種テンプレート（`regression_baseline`, `binary_balanced`, `multiclass_standard`, `causal_dr_panel`, `tuning_standard`）を追加。
+- `src/veldra/gui/template_service.py` を新設し、テンプレート検証、localStorage スロット管理（max 10 / save/load/clone / LRU）、YAML 変更キー数算出を実装。
+- `src/veldra/gui/components/config_library.py` / `src/veldra/gui/components/config_wizard.py` を追加し、`src/veldra/gui/pages/train_page.py` と `src/veldra/gui/pages/config_page.py` に統合。
+- `src/veldra/gui/app.py` に共通 Phase30 コールバック群（template apply/save/load/clone/diff, wizard open/step/apply）を追加し、`custom-config-slots-store`（localStorage）を導入。
+- `src/veldra/gui/services.py` に `validate_config_with_guidance` を追加し、パス付きエラー + next-step を返す検証導線を実装。
+- Run 投入前ゲートを強化し、RunConfig 形式 YAML のみ厳密検証して invalid 投入をブロック（既存モック互換を保持）。
+- ドキュメントを更新（`DESIGN_BLUEPRINT.md`, `README.md`）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase30 機能は GUI adapter に閉じ、Core `RunConfig` schema (`config_version=1`) と `veldra.api.*` の公開契約は非変更とする。
+  - 理由: Stable API 互換と運用改善を両立するため。
+  - 影響範囲: `src/veldra/gui/*`, `src/veldra/gui/templates/*`, docs
+- Decision: confirmed（確定）
+  - 内容: `/train` と `/config` は UI 分岐を許容しつつ、機能ロジックは `app.py` の共通コールバックへ集約する。
+  - 理由: 乖離防止と保守コスト削減のため。
+  - 影響範囲: `src/veldra/gui/app.py`, `src/veldra/gui/pages/{train_page.py,config_page.py}`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/app.py src/veldra/gui/services.py src/veldra/gui/template_service.py src/veldra/gui/components/config_library.py src/veldra/gui/components/config_wizard.py src/veldra/gui/pages/train_page.py src/veldra/gui/pages/config_page.py tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py` を通過。
+- `uv run pytest -q tests/test_gui_template_service.py tests/test_gui_config_localstore.py tests/test_gui_config_validation_guidance.py tests/test_gui_config_diff.py tests/test_gui_app_callbacks_config_phase30.py tests/test_gui_app_callbacks_config.py tests/test_gui_train_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_validation_train_edge.py` を実施（`28 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`201 passed`）。
+
+### 2026-02-18（作業/PR: phase31-advanced-visualization-and-multi-artifact-compare）
+**背景**
+- Phase31 の要件（fold時系列可視化、因果診断、複数Artifact比較、レポート拡張）を GUI adapter 中心で実装する必要があった。
+- Stable API と既存Artifact互換を維持したまま、可視化情報量を増やす設計が必要だった。
+
+**変更内容**
+- `src/veldra/api/artifact.py` / `src/veldra/artifact/store.py` / `src/veldra/api/runner.py` を更新し、optional `fold_metrics`（`fold_metrics.parquet`）の保存・読込・fit連携を追加（既存Artifactは後方互換）。
+- `src/veldra/gui/components/charts.py` に `plot_fold_metric_timeline` / `plot_causal_smd` / `plot_multi_artifact_comparison` / `plot_feature_drilldown` を追加し、空データ時プレースホルダを統一。
+- `src/veldra/gui/pages/results_page.py` / `src/veldra/gui/pages/compare_page.py` を更新し、Results の 3 新タブ（Fold Metrics / Causal Diagnostics / Feature Drilldown）と Compare の multi-select（max 5）+ baseline UI を追加。
+- `src/veldra/gui/services.py` を拡張し、`compare_artifacts_multi` / `load_causal_summary` / `export_pdf_report` を追加、`export_html_report` を fold/causal情報込みへ拡張、`run_action` に `export_pdf_report` を統合。
+- `src/veldra/gui/app.py` の callback 群を更新し、Results拡張出力・Compare多件比較・PDF export ボタン導線を既存ジョブキュー経由で接続。
+- テストを更新/追加（`tests/test_gui_components.py`, `tests/test_gui_compare_page.py`, `tests/test_gui_app_callbacks_results_edge.py`, `tests/test_gui_results_enhanced.py`, `tests/test_gui_app_callbacks_runs_edge.py`, `tests/test_gui_export_pdf.py`）。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Artifact拡張は optional `fold_metrics` の追加に限定し、`manifest_version=1` を維持する。
+  - 理由: 過去Artifactの読み込み互換と公開契約の非破壊を両立するため。
+  - 影響範囲: `src/veldra/api/artifact.py`, `src/veldra/artifact/store.py`, `src/veldra/api/runner.py`
+- Decision: confirmed（確定）
+  - 内容: レポートは HTML を基準実装とし、PDF は optional dependency（`weasyprint`）前提で提供する。
+  - 理由: 実行環境差による失敗を局所化しつつ、共有可能なレポート品質を確保するため。
+  - 影響範囲: `src/veldra/gui/services.py`, `src/veldra/gui/app.py`, `src/veldra/gui/pages/results_page.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/api/artifact.py src/veldra/artifact/store.py src/veldra/api/runner.py src/veldra/gui/components/charts.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/compare_page.py src/veldra/gui/services.py src/veldra/gui/app.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_results_enhanced.py tests/test_gui_components.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を通過。
+- `uv run pytest -q tests/test_gui_components.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_app_results_flow.py tests/test_gui_results_enhanced.py tests/test_gui_export_html.py tests/test_gui_services_edge_cases.py tests/test_gui_export_excel.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を実施（`46 passed`）。
+- `uv run pytest -q tests/test_gui_*` を実施（`200 passed`）。
+
+### 2026-02-18（作業/PR: phase32-performance-and-scalability）
+**背景**
+- 大規模運用（jobs 10,000件、artifacts 1,000件、preview 100,000行）時に、GUI一覧取得とプレビュー描画の応答性能を維持する必要があった。
+- 既存実装は全件取得 + クライアント側ページング寄りで、運用規模拡大時の劣化リスクが高かった。
+
+**変更内容**
+- `GuiJobStore` に `list_jobs_page(limit, offset, status, action, query)` を追加し、`OFFSET/LIMIT` + total count を提供。
+- `GuiJobStore` に `jobs_archive` テーブル、`archive_jobs`、`purge_archived_jobs` を追加し、TTLベース保守の基盤を実装。
+- クエリ計測と slow query warning（100ms閾値）を `job_store`/`services` に追加。
+- `services` に `PaginatedResult` ベースの `list_run_jobs_page` / `list_artifacts_page` / `load_data_preview_page` を追加。
+- Run / Runs / Results ページをサーバー側ページング化（page/page_size/total ストア + Prev/Next UI）。
+- Data ページを AG Grid 優先構成へ拡張し、列指定付きの遅延読込 callback を追加。
+- housekeeping interval を追加し、archive/purge を定期実行する運用導線を実装。
+- `pyproject.toml` の GUI optional dependency に `dash-ag-grid` を追加。
+- テストを更新・追加（`test_gui_job_store_perf.py` を新規追加）。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase32 は 2段階（Phase32.1: ページング/DB最適化/AG Grid、Phase32.2: archive/purge/監視）で実施する。
+  - 理由: 破壊範囲を段階化し、UI回帰とデータ整合性リスクを制御するため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,app.py,pages/*,components/*}`, tests, docs
+- Decision: provisional（暫定）
+  - 内容: Data プレビューは Dash AG Grid を標準方式として採用し、遅延読込/仮想スクロールを実装する。
+  - 理由: 大規模データ表示時のDOM負荷とメモリ使用量を抑えるため。
+  - 影響範囲: `src/veldra/gui/pages/data_page.py`, `src/veldra/gui/app.py`, `src/veldra/gui/services.py`, `pyproject.toml`
+- Decision: confirmed（確定）
+  - 内容: 上記方針で Phase32.1（ページング + AG Grid）と Phase32.2（archive/purge + 監視）の最小実装を同PR内で完了した。
+  - 理由: Stable API 非破壊のまま、運用スケール要件に対応する導線を確立できたため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,app.py,pages/*,components/task_table.py,types.py}`, `pyproject.toml`, `tests/test_gui_*`, `DESIGN_BLUEPRINT.md`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/runs_page.py src/veldra/gui/pages/data_page.py src/veldra/gui/components/task_table.py src/veldra/gui/types.py tests/test_gui_job_store.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_job_store_perf.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_job_store_perf.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py` を実施（`50 passed`）。
+- `uv run pytest -q tests/test_gui_app_callbacks_internal.py tests/test_gui_results_enhanced.py tests/test_gui_pages_logic.py tests/test_gui_data_enhanced.py tests/test_gui_services_unit.py tests/test_gui_app_helpers.py` を実施（`14 passed`）。
+
+### 2026-02-18（作業/PR: phase33-gui-lazy-runtime-contract-and-marker-hardening）
+**背景**
+- GUI import 時のメモリ回帰を再発させないため、既存 lazy import を「実装依存」から「契約依存」へ固定する必要があった。
+- `gui_e2e` が `-m "not gui"` 側に混入しうる収集条件が残っており、core/gui 分離運用を厳密化する必要があった。
+
+**変更内容**
+- `src/veldra/gui/_lazy_runtime.py` を新設し、`Artifact` / runner関数 / data loader の遅延解決ロジックを共通化。
+- `src/veldra/gui/app.py` / `src/veldra/gui/services.py` の lazy 解決経路を共通ヘルパーへ寄せ、`Artifact` や `fit/evaluate` など既存 monkeypatch ポイントは維持。
+- `tests/test_gui_lazy_import_contract.py` を追加し、`import veldra.gui.app` / `import veldra.gui.services` 直後に
+  `veldra.api.runner`, `veldra.api.artifact`, `veldra.data`, `lightgbm`, `optuna`, `sklearn` が未ロードであることを subprocess で検証。
+- `tests/conftest.py` の収集フックを更新し、`tests/e2e_playwright/*` または `gui_e2e` marker を持つテストへ `gui` marker を自動付与。
+- `README.md` の Development セクションを更新し、coverage 実行を
+  `core`（`not gui and not notebook_e2e`）→`gui`（`gui and not gui_e2e and not notebook_e2e`）の2段階手順へ標準化。
+- `DESIGN_BLUEPRINT.md` の Phase33 を提案から実施計画へ更新し、DoD と provisional decision を明記。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase33 は新規機能追加ではなく、既存 lazy import 契約の固定化と marker 分離の厳密化を主目的とする。
+  - 理由: Stable API を維持しつつ、メモリ回帰とテスト運用の曖昧さを同時に抑制するため。
+  - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`, `tests/test_gui_lazy_import_contract.py`, `README.md`, `DESIGN_BLUEPRINT.md`
+- Decision: confirmed（確定）
+  - 内容: lazy runtime 共通化、cold import 契約テスト追加、`gui_e2e` の `gui` 内包、coverage 2段階運用の文書化を完了した。
+  - 理由: 既存 GUI 互換性を保ったまま、Phase33 DoD を満たせたため。
+  - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/{conftest.py,test_gui_lazy_import_contract.py}`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check src/veldra/gui/_lazy_runtime.py src/veldra/gui/app.py src/veldra/gui/services.py tests/conftest.py tests/test_gui_lazy_import_contract.py README.md DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_gui_lazy_import_contract.py tests/test_gui_services_core.py tests/test_gui_app_additional_branches.py tests/test_gui_services_edge_cases.py` を実施（`31 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest --collect-only -q -m "not gui" tests/e2e_playwright` を実施（`no tests collected (14 deselected)`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest --collect-only -q -m "gui"` を実施（`224/754 collected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "gui and not gui_e2e and not notebook_e2e"` を実施（`210 passed, 544 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`739 passed, 15 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/e2e_playwright -m "gui_e2e"` を実施（`14 skipped`）。
+
+### 2026-02-18（作業/PR: test-warning-suppression-joblib-serial-mode）
+**背景**
+- テスト実行環境で `joblib` の multiprocessing 初期化が権限制約により `UserWarning` を出力し、回帰確認ログのノイズになっていた。
+
+**変更内容**
+- `pyproject.toml` の `tool.pytest.ini_options.filterwarnings` に
+  `joblib will operate in serial mode` の `UserWarning` 抑制ルールを追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 環境依存で非機能的な `joblib` 警告は pytest 設定で抑制する。
+  - 理由: 実害のないノイズ警告を除去し、テストログの可読性を維持するため。
+  - 影響範囲: `pyproject.toml`, テスト実行ログ
+
+**検証結果**
+- `.venv/bin/pytest -q tests/test_multiclass_edge_cases.py tests/test_gui_services_core.py` を実施（`9 passed`、該当 warning 非表示）。
+
+### 2026-02-18（作業/PR: test-io-load-reduction-system-tmp-path）
+**背景**
+- テスト実行時に CSV/Artifact の書き込みが多く、ワークスペース配下 I/O 負荷が高くなっていた。
+
+**変更内容**
+- `tests/conftest.py` の `tmp_path` fixture を更新し、既定書き込み先を system temp dir（`tempfile.gettempdir()`）配下へ変更。
+- system temp dir が利用不可な環境向けに、既存の `.pytest_tmp/cases` へフォールバックする分岐を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: テストの一時ファイルは system temp dir を優先し、妥当性を維持したまま I/O 負荷を軽減する。
+  - 理由: テスト検証内容を変えずに、重い書き込みを高速な一時領域へ寄せるため。
+  - 影響範囲: `tests/conftest.py`, テスト実行時の一時ファイル配置
+
+**検証結果**
+- `.venv/bin/pytest -q tests/test_runner_fit_happy.py tests/test_runner_tune_happy.py tests/test_gui_job_store.py` を実施（`21 passed`）。
+- `.venv/bin/pytest -q tests/test_artifact_store.py tests/test_tune_artifacts.py tests/test_observation_table.py` を実施（`9 passed`）。
+- `.venv/bin/ruff check tests/conftest.py` を通過。

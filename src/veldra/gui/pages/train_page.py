@@ -5,8 +5,11 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from veldra.gui.components.config_library import render_config_library
 from veldra.gui.components.config_summary import render_config_summary
+from veldra.gui.components.config_wizard import render_config_wizard
 from veldra.gui.components.help_ui import help_icon
+from veldra.gui.template_service import custom_slot_options, template_options
 
 
 def layout(state: dict | None = None) -> html.Div:
@@ -14,9 +17,13 @@ def layout(state: dict | None = None) -> html.Div:
     train = state.get("train_config") or {}
     tune = state.get("tuning_config") or {}
     yaml_text = state.get("config_yaml") or ""
+    tpl_options = template_options()
+    slot_options = custom_slot_options(state.get("custom_config_slots"))
 
     builder = html.Div(
         [
+            render_config_library("train", template_options=tpl_options, slot_options=slot_options),
+            render_config_wizard("train"),
             dbc.Row(
                 [
                     dbc.Col(

@@ -10,7 +10,7 @@ import os
 from veldra.api.logging import log_event
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.services import set_gui_runtime, stop_gui_runtime
-from veldra.gui.worker import GuiWorker
+from veldra.gui.worker import GuiWorkerPool
 
 LOGGER = logging.getLogger("veldra.gui")
 
@@ -33,6 +33,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(os.getenv("VELDRA_GUI_WORKER_POLL_SEC", "0.5")),
     )
+    parser.add_argument(
+        "--worker-count",
+        type=int,
+        default=int(os.getenv("VELDRA_GUI_WORKER_COUNT", "1")),
+    )
     return parser
 
 
@@ -45,7 +50,11 @@ def main() -> None:
         raise RuntimeError("GUI dependencies are not installed. Run: uv sync --extra gui") from exc
 
     store = GuiJobStore(args.job_db_path)
-    worker = GuiWorker(store, poll_interval_sec=args.worker_poll_sec)
+    worker = GuiWorkerPool(
+        store,
+        worker_count=args.worker_count,
+        poll_interval_sec=args.worker_poll_sec,
+    )
     set_gui_runtime(job_store=store, worker=worker)
     worker.start()
     atexit.register(stop_gui_runtime)
@@ -63,6 +72,7 @@ def main() -> None:
         port=args.port,
         debug=args.debug,
         job_db_path=str(args.job_db_path),
+        worker_count=max(1, int(args.worker_count)),
     )
     try:
         app.run(host=args.host, port=args.port, debug=args.debug)

@@ -83,7 +83,12 @@ Implemented:
   - Run console async queue (`fit/evaluate/tune/simulate/export/estimate_dr`)
   - Results explorer with learning curves and config view
   - Async report export (`export_excel`, `export_html_report`)
-  - `/config` route is retained as compatibility entrypoint and redirects users to new flow
+  - Phase30 config productivity features:
+    - built-in template library (`regression/binary/multiclass/causal/tuning`)
+    - custom config slots in browser `localStorage` (max 10, save/load/clone)
+    - template/slot diff viewer with changed-key count
+    - quick-start wizard and run-time config validation gate
+  - `/config` and `/train` both provide equivalent config-library and wizard workflows
 - Config migration utility:
   - `veldra config migrate --input <path> [--output <path>]`
   - strict validation + non-destructive output (`*.migrated.yaml`)
@@ -355,7 +360,9 @@ uv run python examples/run_demo_regression.py
   - GUI runtime env vars and SQLite path
 - Command example:
 ```bash
-VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3 uv run veldra-gui --host 127.0.0.1 --port 8050
+VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3 \
+VELDRA_GUI_WORKER_COUNT=2 \
+uv run veldra-gui --host 127.0.0.1 --port 8050 --worker-count 2
 ```
 - Success criteria:
   - async queue state is visible
@@ -611,14 +618,22 @@ Runtime environment options:
 ```bash
 # SQLite persistence path for async GUI jobs
 VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3
+# Worker pool size for async GUI jobs (default: 1)
+VELDRA_GUI_WORKER_COUNT=1
 # Run page polling interval (milliseconds)
 VELDRA_GUI_POLL_MS=2000
 ```
 
 GUI run behavior:
 - `/run` enqueues jobs asynchronously and keeps history in SQLite.
+- `/run` supports queue priority (`high`/`normal`/`low`) and queued-job reprioritization.
+- Job scheduling is strict priority (`high > normal > low`, FIFO within same priority).
+- `/run` shows real-time progress (`progress_pct`/`current_step`) and per-job streaming logs.
+- job logs are persisted in SQLite (`job_logs`) with retention cap `10,000` lines per job.
 - queued jobs can be canceled immediately.
-- running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
+- running jobs support cooperative cancellation checkpoints and terminate as `canceled` on request.
+- failed/canceled jobs can be retried from Job Detail (`Retry Task`), and retry lineage is persisted.
+- failure payloads include categorized `error_kind` and `next_steps` hints for known patterns.
 - Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.
 - `/runs` provides history, clone, compare, and migrate actions.
 - `/compare` shows metric/config diffs for two artifacts.
@@ -893,7 +908,8 @@ Coverage:
 
 ```bash
 uv run coverage erase
-uv run coverage run -m pytest -q
+uv run coverage run -m pytest -q -m "not gui and not notebook_e2e"
+uv run coverage run --append -m pytest -q -m "gui and not gui_e2e and not notebook_e2e"
 uv run coverage report -m
 ```
 
@@ -901,7 +917,7 @@ GUI coverage gate (app/services):
 
 ```bash
 uv run coverage erase
-uv run coverage run -m pytest -q tests/test_gui_* tests/test_new_ux.py
+uv run coverage run -m pytest -q -m "gui and not gui_e2e and not notebook_e2e"
 uv run coverage report -m src/veldra/gui/app.py src/veldra/gui/services.py
 ```
 

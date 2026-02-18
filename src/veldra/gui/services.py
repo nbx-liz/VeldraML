@@ -7,13 +7,16 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 import pandas as pd
 import yaml
+from pydantic import ValidationError
 
 from veldra.api.exceptions import (
     VeldraArtifactError,
@@ -23,12 +26,20 @@ from veldra.api.exceptions import (
 from veldra.api.logging import log_event
 from veldra.config.migrate import migrate_run_config_file, migrate_run_config_payload
 from veldra.config.models import RunConfig
+from veldra.gui._lazy_runtime import (
+    resolve_artifact_class,
+    resolve_data_loader,
+    resolve_runner_function,
+)
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.types import (
     ArtifactSummary,
+    GuiJobPriority,
     GuiJobRecord,
     GuiJobResult,
     GuiRunResult,
+    PaginatedResult,
+    RetryPolicy,
     RunInvocation,
 )
 
@@ -53,10 +64,7 @@ def _get_artifact_cls() -> Any:
     global Artifact, _ARTIFACT_CLS
     if Artifact is not _ArtifactProxy:
         return Artifact
-    if _ARTIFACT_CLS is None:
-        from veldra.api.artifact import Artifact as _Artifact
-
-        _ARTIFACT_CLS = _Artifact
+    _ARTIFACT_CLS = resolve_artifact_class(cached_class=_ARTIFACT_CLS)
     return _ARTIFACT_CLS
 
 
@@ -82,9 +90,7 @@ def _get_runner_func(name: str) -> Any:
     }.get(name)
     if current is not None:
         return current
-    from veldra.api import runner as _runner
-
-    resolved = getattr(_runner, name)
+    resolved = resolve_runner_function(name)
     if name == "evaluate":
         evaluate = resolved
     elif name == "estimate_dr":
@@ -102,10 +108,7 @@ def _get_runner_func(name: str) -> Any:
 
 def _get_load_tabular_data() -> Any:
     global load_tabular_data
-    if load_tabular_data is None:
-        from veldra.data import load_tabular_data as _load_tabular_data
-
-        load_tabular_data = _load_tabular_data
+    load_tabular_data = resolve_data_loader(current_loader=load_tabular_data)
     return load_tabular_data
 
 
@@ -166,13 +169,10 @@ def inspect_data(path: str) -> dict[str, Any]:
             "warnings": warnings,
         }
 
-        # Preview data (handle non-serializable types if any)
-        preview = df.head(10).astype(object).where(pd.notnull(df), None)
-
         return {
             "success": True,
             "stats": stats,
-            "preview": preview.to_dict(orient="records"),
+            "preview": [],
             "path": str(data_path.resolve()),
         }
     except Exception as exc:
@@ -180,6 +180,64 @@ def inspect_data(path: str) -> dict[str, Any]:
             "success": False,
             "error": str(exc),
         }
+
+
+def record_perf_metric(name: str, elapsed_ms: float, payload: dict[str, Any] | None = None) -> None:
+    data = {
+        "metric": str(name),
+        "elapsed_ms": round(float(elapsed_ms), 3),
+    }
+    if payload:
+        data.update(payload)
+    if float(elapsed_ms) >= 100.0:
+        LOGGER.warning("gui_perf_metric_slow", extra=data)
+    else:
+        LOGGER.info("gui_perf_metric", extra=data)
+
+
+def load_data_preview_page(
+    path: str,
+    *,
+    offset: int = 0,
+    limit: int = 200,
+    columns: list[str] | None = None,
+) -> PaginatedResult[dict[str, Any]]:
+    started_at = perf_counter()
+    data_path = Path(_require(path, "path"))
+    if not data_path.exists():
+        raise VeldraValidationError(f"Data file does not exist: {data_path}")
+    loader = _get_load_tabular_data()
+    df = loader(str(data_path))
+    safe_offset = max(0, int(offset))
+    safe_limit = max(1, min(int(limit), 2000))
+    selected_df = df
+    if columns:
+        keep = [str(col) for col in columns if str(col) in df.columns]
+        if keep:
+            selected_df = df.loc[:, keep]
+    sliced = selected_df.iloc[safe_offset : safe_offset + safe_limit]
+    payload = (
+        sliced.astype(object).where(pd.notnull(sliced), None).to_dict(orient="records")
+        if not sliced.empty
+        else []
+    )
+    result = PaginatedResult[dict[str, Any]](
+        items=payload,
+        total_count=int(len(selected_df)),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    record_perf_metric(
+        "load_data_preview_page",
+        (perf_counter() - started_at) * 1000.0,
+        {
+            "path": str(data_path),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "total_count": result.total_count,
+        },
+    )
+    return result
 
 
 def default_job_db_path() -> Path:
@@ -211,6 +269,21 @@ def stop_gui_runtime() -> None:
         worker.stop()
 
 
+def run_housekeeping_cycle(
+    *,
+    archive_ttl_days: int = 30,
+    purge_ttl_days: int = 90,
+    batch_size: int = 200,
+) -> dict[str, int]:
+    now = datetime.now(UTC)
+    archive_cutoff = (now - timedelta(days=max(1, int(archive_ttl_days)))).isoformat()
+    purge_cutoff = (now - timedelta(days=max(1, int(purge_ttl_days)))).isoformat()
+    store = get_gui_job_store()
+    moved = store.archive_jobs(cutoff_utc=archive_cutoff, batch_size=batch_size)
+    purged = store.purge_archived_jobs(cutoff_utc=purge_cutoff, batch_size=batch_size)
+    return {"archived_jobs": int(moved), "purged_archived_jobs": int(purged)}
+
+
 def _start_worker_if_needed() -> None:
     with _RUNTIME_LOCK:
         worker = _JOB_WORKER
@@ -228,6 +301,78 @@ def normalize_gui_error(exc: Exception) -> str:
     return f"{exc.__class__.__name__}: {exc}"
 
 
+def classify_gui_error(exc: Exception) -> str:
+    if isinstance(exc, CanceledByUser):
+        return "cancel"
+    if isinstance(exc, VeldraValidationError):
+        return "validation"
+    if isinstance(exc, FileNotFoundError):
+        return "file_not_found"
+    if isinstance(exc, PermissionError):
+        return "permission"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, MemoryError):
+        return "memory"
+    msg = str(exc).lower()
+    if "not found" in msg or "does not exist" in msg:
+        return "file_not_found"
+    if "permission" in msg or "access denied" in msg:
+        return "permission"
+    if "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if "busy" in msg or "database is locked" in msg:
+        return "resource_busy"
+    if "temporar" in msg or "connection reset" in msg:
+        return "io_transient"
+    return "unknown"
+
+
+def build_next_steps(error_kind: str, *, action: str | None = None) -> list[str]:
+    if error_kind == "validation":
+        return ["設定値と入力パスを確認し、RunConfig を再検証してください。"]
+    if error_kind == "file_not_found":
+        return ["対象ファイルの存在と相対/絶対パスを確認してください。"]
+    if error_kind == "permission":
+        return ["ファイル権限と書き込み先ディレクトリ権限を確認してください。"]
+    if error_kind == "memory":
+        return ["データ量や `num_boost_round` を下げるか、分割数を減らして再実行してください。"]
+    if error_kind == "timeout":
+        return ["環境負荷を下げて再実行し、必要ならリトライ回数を増やしてください。"]
+    if error_kind == "cancel":
+        return ["処理はユーザーキャンセルで停止しました。必要なら Retry Task を実行してください。"]
+    if error_kind in {"resource_busy", "io_transient"}:
+        return ["一時的障害の可能性があります。少し待ってから再実行してください。"]
+    if action:
+        return [f"ジョブログを確認し、`{action}` の入力と依存関係を再確認してください。"]
+    return []
+
+
+def _build_error_payload(exc: Exception, *, action: str | None = None) -> dict[str, Any]:
+    kind = classify_gui_error(exc)
+    return {
+        "error_kind": kind,
+        "next_steps": build_next_steps(kind, action=action),
+    }
+
+
+class CanceledByUser(RuntimeError):
+    """Raised when cooperative cancellation is requested for a running GUI job."""
+
+
+def _invoke_runner_with_optional_hook(
+    fn: Any,
+    *args: Any,
+    cancellation_hook: Any,
+) -> Any:
+    try:
+        return fn(*args, cancellation_hook=cancellation_hook)
+    except TypeError as exc:
+        if "unexpected keyword argument 'cancellation_hook'" in str(exc):
+            return fn(*args)
+        raise
+
+
 def _require(value: str | None, field_name: str) -> str:
     if value is None or not value.strip():
         raise VeldraValidationError(f"{field_name} is required.")
@@ -243,6 +388,51 @@ def _load_config_from_yaml(yaml_text: str) -> RunConfig:
 
 def validate_config(yaml_text: str) -> RunConfig:
     return _load_config_from_yaml(yaml_text)
+
+
+def validate_config_with_guidance(yaml_text: str) -> dict[str, Any]:
+    timestamp = datetime.now(UTC).isoformat()
+    try:
+        validate_config(yaml_text)
+        return {
+            "ok": True,
+            "errors": [],
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
+    except ValidationError as exc:
+        errors: list[dict[str, Any]] = []
+        for item in exc.errors():
+            loc = item.get("loc", ())
+            path = ".".join(str(seg) for seg in loc if seg is not None) or "root"
+            msg = str(item.get("msg") or "Invalid value.")
+            errors.append(
+                {
+                    "path": path,
+                    "message": msg,
+                    "suggestions": ["設定値と型、必須キーを確認してください。"],
+                }
+            )
+        return {
+            "ok": False,
+            "errors": errors,
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
+    except Exception as exc:
+        kind = classify_gui_error(exc)
+        return {
+            "ok": False,
+            "errors": [
+                {
+                    "path": "root",
+                    "message": normalize_gui_error(exc),
+                    "suggestions": build_next_steps(kind),
+                }
+            ],
+            "warnings": [],
+            "timestamp_utc": timestamp,
+        }
 
 
 def load_config_yaml(path: str) -> str:
@@ -635,14 +825,41 @@ def export_html_report(artifact_path: str) -> str:
     cfg_text = yaml.safe_dump(_to_safe_dict(getattr(artifact, "config", {})), sort_keys=False)
     task_type = getattr(artifact, "task_type", "unknown")
     run_id = getattr(artifact, "run_id", "unknown")
+    fold_metrics = getattr(artifact, "fold_metrics", None)
+    causal_summary = load_causal_summary(artifact_path)
 
     rows = "".join(f"<tr><td>{k}</td><td>{v:.6g}</td></tr>" for k, v in sorted(metrics.items()))
+    fold_rows = ""
+    if isinstance(fold_metrics, pd.DataFrame) and not fold_metrics.empty:
+        limited = fold_metrics.head(20)
+        for _, row in limited.iterrows():
+            cells = "".join(f"<td>{row[col]}</td>" for col in limited.columns)
+            fold_rows += f"<tr>{cells}</tr>"
+
+    causal_rows = ""
+    if isinstance(causal_summary, dict):
+        keys = [
+            "method",
+            "estimand",
+            "estimate",
+            "overlap_metric",
+            "smd_max_unweighted",
+            "smd_max_weighted",
+        ]
+        for key in keys:
+            if key in causal_summary:
+                causal_rows += f"<tr><td>{key}</td><td>{causal_summary[key]}</td></tr>"
+
     html_text = (
         "<html><head><meta charset='utf-8'><title>Veldra Report</title></head><body>"
         f"<h1>Veldra Report</h1><p>Run ID: {run_id} | Task: {task_type}</p>"
         "<h2>Metrics</h2><table border='1' cellpadding='4'>"
         "<tr><th>Metric</th><th>Value</th></tr>"
         f"{rows}</table>"
+        "<h2>Fold Metrics (Preview)</h2><table border='1' cellpadding='4'>"
+        f"{fold_rows or '<tr><td>Not available</td></tr>'}</table>"
+        "<h2>Causal Diagnostics</h2><table border='1' cellpadding='4'>"
+        f"{causal_rows or '<tr><td>Not available</td></tr>'}</table>"
         "<h2>Config</h2><pre>"
         f"{cfg_text}"
         "</pre>"
@@ -657,6 +874,20 @@ def export_html_report(artifact_path: str) -> str:
         pass
     output_path.write_text(html_text, encoding="utf-8")
     return str(output_path)
+
+
+def export_pdf_report(artifact_path: str) -> str:
+    html_path = export_html_report(artifact_path)
+    pdf_path = Path(html_path).with_suffix(".pdf")
+    try:
+        from weasyprint import HTML  # type: ignore
+    except Exception as exc:
+        raise VeldraValidationError(
+            "PDF export requires optional dependency 'weasyprint'. "
+            "Install it to enable export_pdf_report."
+        ) from exc
+    HTML(filename=str(html_path)).write_pdf(str(pdf_path))
+    return str(pdf_path)
 
 
 def _to_safe_dict(value: Any) -> dict[str, Any]:
@@ -674,9 +905,108 @@ def _to_safe_dict(value: Any) -> dict[str, Any]:
     return {"value": repr(value)}
 
 
-def run_action(invocation: RunInvocation) -> GuiRunResult:
+@dataclass(slots=True)
+class _RunActionContext:
+    job_id: str | None = None
+    job_store: GuiJobStore | None = None
+    action: str | None = None
+    tune_total_trials: int | None = None
+
+    def update_progress(self, pct: float, step: str) -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        self.job_store.update_progress(self.job_id, pct, step=step)
+
+    def append_log(
+        self,
+        *,
+        level: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        self.job_store.append_job_log(
+            self.job_id,
+            level=level,
+            message=message,
+            payload=payload,
+        )
+
+    def on_runner_payload(self, level: str, message: str, payload: dict[str, Any]) -> None:
+        self.append_log(level=level, message=message, payload=payload)
+        if (
+            self.action == "tune"
+            and self.tune_total_trials is not None
+            and self.tune_total_trials > 0
+            and "n_trials_done" in payload
+        ):
+            done = int(payload.get("n_trials_done", 0))
+            total = int(self.tune_total_trials)
+            pct = 20.0 + (70.0 * max(0, min(done, total)) / float(total))
+            self.update_progress(pct, f"tuning_trials_{done}/{total}")
+
+    def check_cancellation(self, step: str = "checkpoint") -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        if self.job_store.is_cancel_requested(self.job_id):
+            self.update_progress(100.0, "canceled")
+            self.append_log(
+                level="WARNING",
+                message="action_canceled",
+                payload={"step": step},
+            )
+            raise CanceledByUser("Canceled by user request.")
+
+    def cancellation_hook(self) -> None:
+        self.check_cancellation("runner_hook")
+
+
+class _RunnerLogCapture(logging.Handler):
+    def __init__(self, context: _RunActionContext) -> None:
+        super().__init__()
+        self._context = context
+
+    def emit(self, record: logging.LogRecord) -> None:
+        payload: dict[str, Any] = {}
+        raw = record.getMessage()
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except Exception:
+            payload = {"raw": raw}
+        message = str(getattr(record, "event_message", "runner_event"))
+        self._context.on_runner_payload(record.levelname, message, payload)
+
+
+@contextmanager
+def _capture_runner_logs(context: _RunActionContext):
+    logger = logging.getLogger("veldra")
+    handler = _RunnerLogCapture(context)
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+
+
+def run_action(
+    invocation: RunInvocation,
+    *,
+    job_id: str | None = None,
+    job_store: GuiJobStore | None = None,
+) -> GuiRunResult:
     try:
         action = invocation.action.strip().lower()
+        context = _RunActionContext(
+            job_id=job_id,
+            job_store=job_store,
+            action=action,
+        )
+        context.update_progress(5.0, "validating")
+        context.append_log(level="INFO", message="action_started", payload={"action": action})
+        context.check_cancellation("validated")
         if action not in {
             "fit",
             "evaluate",
@@ -686,56 +1016,149 @@ def run_action(invocation: RunInvocation) -> GuiRunResult:
             "estimate_dr",
             "export_excel",
             "export_html_report",
+            "export_pdf_report",
         }:
             raise VeldraValidationError(f"Unsupported action '{invocation.action}'.")
 
         if action == "fit":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("fit")(config)
+            context.check_cancellation("fit_after_config")
+            context.update_progress(20.0, "fit_running")
+            with _capture_runner_logs(context):
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("fit"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("fit_after_runner")
+            context.update_progress(95.0, "fit_finalize")
         elif action == "tune":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("tune")(config)
+            context.tune_total_trials = int(config.tuning.n_trials)
+            context.check_cancellation("tune_after_config")
+            context.update_progress(20.0, "tune_running")
+            with _capture_runner_logs(context):
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("tune"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("tune_after_runner")
+            context.update_progress(95.0, "tune_finalize")
         elif action == "estimate_dr":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("estimate_dr")(config)
+            context.check_cancellation("estimate_after_config")
+            context.update_progress(20.0, "estimate_running")
+            with _capture_runner_logs(context):
+                result = _invoke_runner_with_optional_hook(
+                    _get_runner_func("estimate_dr"),
+                    config,
+                    cancellation_hook=context.cancellation_hook,
+                )
+            context.check_cancellation("estimate_after_runner")
+            context.update_progress(95.0, "estimate_finalize")
         elif action == "evaluate":
+            context.update_progress(12.0, "load_data")
             data_path = _require(invocation.data_path, "data_path")
             frame = _get_load_tabular_data()(data_path)
+            context.check_cancellation("evaluate_after_data")
             if invocation.artifact_path and invocation.artifact_path.strip():
+                context.update_progress(30.0, "load_artifact")
                 artifact = Artifact.load(invocation.artifact_path.strip())
-                result = _get_runner_func("evaluate")(artifact, frame)
+                context.check_cancellation("evaluate_after_artifact")
+                context.update_progress(45.0, "evaluate_running")
+                with _capture_runner_logs(context):
+                    result = _get_runner_func("evaluate")(artifact, frame)
             else:
+                context.update_progress(30.0, "load_config")
                 config = _resolve_config(invocation)
-                result = _get_runner_func("evaluate")(config, frame)
+                context.check_cancellation("evaluate_after_config")
+                context.update_progress(45.0, "evaluate_running")
+                with _capture_runner_logs(context):
+                    result = _get_runner_func("evaluate")(config, frame)
+            context.check_cancellation("evaluate_after_runner")
+            context.update_progress(95.0, "evaluate_finalize")
         elif action == "simulate":
+            context.update_progress(12.0, "load_inputs")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             data_path = _require(invocation.data_path, "data_path")
             scenarios_path = _require(invocation.scenarios_path, "scenarios_path")
             artifact = Artifact.load(artifact_path)
             frame = _get_load_tabular_data()(data_path)
             scenarios = _load_scenarios(scenarios_path)
-            result = _get_runner_func("simulate")(artifact, frame, scenarios)
+            context.check_cancellation("simulate_after_inputs")
+            context.update_progress(45.0, "simulate_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("simulate")(artifact, frame, scenarios)
+            context.check_cancellation("simulate_after_runner")
+            context.update_progress(95.0, "simulate_finalize")
         elif action == "export_excel":
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_excel_after_artifact")
+            context.update_progress(55.0, "export_excel_running")
             output_path = export_excel_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_excel_after_runner")
+            context.update_progress(95.0, "export_excel_finalize")
         elif action == "export_html_report":
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_html_after_artifact")
+            context.update_progress(55.0, "export_html_running")
             output_path = export_html_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_html_after_runner")
+            context.update_progress(95.0, "export_html_finalize")
+        elif action == "export_pdf_report":
+            context.update_progress(15.0, "load_artifact")
+            artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.check_cancellation("export_pdf_after_artifact")
+            context.update_progress(55.0, "export_pdf_running")
+            output_path = export_pdf_report(artifact_path)
+            result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.check_cancellation("export_pdf_after_runner")
+            context.update_progress(95.0, "export_pdf_finalize")
         else:
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             artifact = Artifact.load(artifact_path)
             export_format = (invocation.export_format or "python").strip().lower()
-            result = _get_runner_func("export")(artifact, format=export_format)
+            context.check_cancellation("export_after_artifact")
+            context.update_progress(55.0, "export_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("export")(artifact, format=export_format)
+            context.check_cancellation("export_after_runner")
+            context.update_progress(95.0, "export_finalize")
 
+        context.check_cancellation("before_completion")
+        context.update_progress(100.0, "completed")
+        context.append_log(level="INFO", message="action_completed", payload={"action": action})
         return GuiRunResult(
             success=True,
             message=f"{action} completed successfully.",
             payload=_result_to_payload(result),
         )
+    except CanceledByUser:
+        raise
     except Exception as exc:
-        return GuiRunResult(success=False, message=normalize_gui_error(exc), payload={})
+        if job_id and job_store is not None:
+            context = _RunActionContext(
+                job_id=job_id,
+                job_store=job_store,
+                action=invocation.action,
+            )
+            payload = _build_error_payload(exc, action=invocation.action)
+            context.append_log(
+                level="ERROR",
+                message="action_failed",
+                payload={"error": normalize_gui_error(exc), **payload},
+            )
+        payload = _build_error_payload(exc, action=invocation.action)
+        return GuiRunResult(success=False, message=normalize_gui_error(exc), payload=payload)
 
 
 def submit_run_job(invocation: RunInvocation) -> GuiJobResult:
@@ -765,7 +1188,59 @@ def get_run_job(job_id: str) -> GuiJobRecord | None:
 
 
 def list_run_jobs(*, limit: int = 100, status: str | None = None) -> list[GuiJobRecord]:
-    return get_gui_job_store().list_jobs(limit=limit, status=status)
+    rows, _total = get_gui_job_store().list_jobs_page(
+        limit=limit,
+        offset=0,
+        status=status,
+    )
+    return rows
+
+
+def list_run_jobs_page(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    action: str | None = None,
+    query: str | None = None,
+) -> PaginatedResult[GuiJobRecord]:
+    rows, total_count = get_gui_job_store().list_jobs_page(
+        limit=limit,
+        offset=offset,
+        status=status,
+        action=action,
+        query=query,
+    )
+    return PaginatedResult[GuiJobRecord](
+        items=rows,
+        total_count=total_count,
+        limit=max(1, int(limit)),
+        offset=max(0, int(offset)),
+    )
+
+
+def list_run_job_logs(
+    job_id: str,
+    *,
+    limit: int = 200,
+    after_seq: int | None = None,
+) -> list[dict[str, Any]]:
+    records = get_gui_job_store().list_job_logs(
+        _require(job_id, "job_id"),
+        limit=limit,
+        after_seq=after_seq,
+    )
+    return [
+        {
+            "job_id": row.job_id,
+            "seq": row.seq,
+            "created_at_utc": row.created_at_utc,
+            "level": row.level,
+            "message": row.message,
+            "payload": row.payload,
+        }
+        for row in records
+    ]
 
 
 def cancel_run_job(job_id: str) -> GuiJobResult:
@@ -791,14 +1266,94 @@ def cancel_run_job(job_id: str) -> GuiJobResult:
     )
 
 
+def retry_run_job(job_id: str) -> GuiJobResult:
+    source = get_gui_job_store().get_job(_require(job_id, "job_id"))
+    if source is None:
+        raise VeldraValidationError(f"Job not found: {job_id}")
+    if source.status not in {"failed", "canceled"}:
+        raise VeldraValidationError(
+            f"Retry is allowed only for failed/canceled jobs (status={source.status})."
+        )
+    policy = source.invocation.retry_policy or RetryPolicy()
+    retried = get_gui_job_store().create_retry_job(
+        source.job_id,
+        reason="manual_retry",
+        policy=policy,
+    )
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job retried",
+        run_id=retried.job_id,
+        artifact_path=retried.invocation.artifact_path,
+        task_type=retried.action,
+        event="gui job retried",
+        status=retried.status,
+        action=retried.action,
+        source_job_id=source.job_id,
+        retry_count=retried.retry_count,
+    )
+    return GuiJobResult(
+        job_id=retried.job_id,
+        status=retried.status,
+        message=f"Retry queued from {source.job_id} as {retried.job_id}.",
+    )
+
+
+def set_run_job_priority(job_id: str, priority: str | GuiJobPriority) -> GuiJobResult:
+    normalized = str(priority).strip().lower()
+    if normalized not in {"low", "normal", "high"}:
+        raise VeldraValidationError(f"Unsupported priority: {priority}")
+    updated = get_gui_job_store().set_job_priority(
+        _require(job_id, "job_id"),
+        normalized,
+    )
+    if updated is None:
+        raise VeldraValidationError(f"Job not found: {job_id}")
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job priority updated",
+        run_id=updated.job_id,
+        artifact_path=updated.invocation.artifact_path,
+        task_type=updated.action,
+        event="gui job priority updated",
+        status=updated.status,
+        action=updated.action,
+        priority=updated.priority,
+    )
+    return GuiJobResult(
+        job_id=updated.job_id,
+        status=updated.status,
+        message=f"Job {updated.job_id} priority updated to {updated.priority}.",
+    )
+
+
 def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
+    return list_artifacts_page(root_dir=root_dir, limit=10_000, offset=0).items
+
+
+def list_artifacts_page(
+    *,
+    root_dir: str,
+    limit: int = 50,
+    offset: int = 0,
+    query: str | None = None,
+) -> PaginatedResult[ArtifactSummary]:
+    started_at = perf_counter()
     root = Path(_require(root_dir, "root_dir"))
     if not root.exists():
-        return []
+        return PaginatedResult[ArtifactSummary](
+            items=[],
+            total_count=0,
+            limit=max(1, int(limit)),
+            offset=max(0, int(offset)),
+        )
     if not root.is_dir():
         raise VeldraValidationError(f"Artifact root is not a directory: {root}")
 
     summaries: list[ArtifactSummary] = []
+    q = str(query or "").strip().lower()
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
@@ -807,30 +1362,53 @@ def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            summaries.append(
-                ArtifactSummary(
-                    path=str(child),
-                    run_id=str(manifest.get("run_id", child.name)),
-                    task_type=str(manifest.get("task_type", "unknown")),
-                    created_at_utc=(
-                        str(manifest["created_at_utc"])
-                        if manifest.get("created_at_utc") is not None
-                        else None
-                    ),
-                )
+            item = ArtifactSummary(
+                path=str(child),
+                run_id=str(manifest.get("run_id", child.name)),
+                task_type=str(manifest.get("task_type", "unknown")),
+                created_at_utc=(
+                    str(manifest["created_at_utc"])
+                    if manifest.get("created_at_utc") is not None
+                    else None
+                ),
             )
         except Exception:
-            summaries.append(
-                ArtifactSummary(
-                    path=str(child),
-                    run_id=child.name,
-                    task_type="unknown",
-                    created_at_utc=None,
-                )
+            item = ArtifactSummary(
+                path=str(child),
+                run_id=child.name,
+                task_type="unknown",
+                created_at_utc=None,
             )
+        if (
+            not q
+            or q in item.run_id.lower()
+            or q in item.task_type.lower()
+            or q in item.path.lower()
+        ):
+            summaries.append(item)
 
     summaries.sort(key=lambda item: item.created_at_utc or "", reverse=True)
-    return summaries
+    safe_limit = max(1, min(int(limit), 1000))
+    safe_offset = max(0, int(offset))
+    paged = summaries[safe_offset : safe_offset + safe_limit]
+    result = PaginatedResult[ArtifactSummary](
+        items=paged,
+        total_count=len(summaries),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    record_perf_metric(
+        "list_artifacts_page",
+        (perf_counter() - started_at) * 1000.0,
+        {
+            "root_dir": str(root),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "total_count": result.total_count,
+            "query": bool(q),
+        },
+    )
+    return result
 
 
 def list_run_jobs_filtered(
@@ -840,13 +1418,19 @@ def list_run_jobs_filtered(
     action: str | None = None,
     query: str | None = None,
 ) -> list[GuiJobRecord]:
-    jobs = list_run_jobs(limit=limit, status=(status or None))
-    filtered = jobs
+    page = list_run_jobs_page(
+        limit=limit,
+        offset=0,
+        status=status,
+        action=action,
+        query=query,
+    )
+    filtered = list(page.items)
     if action:
-        action_norm = action.strip().lower()
+        action_norm = str(action).strip().lower()
         filtered = [job for job in filtered if job.action == action_norm]
     if query:
-        q = query.strip().lower()
+        q = str(query).strip().lower()
         filtered = [
             job
             for job in filtered
@@ -870,72 +1454,125 @@ def load_job_config_yaml(job: GuiJobRecord) -> str:
 
 
 def compare_artifacts(artifact_a: str, artifact_b: str) -> dict[str, Any]:
-    art_a = Artifact.load(_require(artifact_a, "artifact_a"))
-    art_b = Artifact.load(_require(artifact_b, "artifact_b"))
+    return compare_artifacts_multi([artifact_a, artifact_b], baseline=artifact_a)
 
-    task_a = str(getattr(art_a, "task_type", "unknown"))
-    task_b = str(getattr(art_b, "task_type", "unknown"))
+
+def load_causal_summary(artifact_path: str) -> dict[str, Any] | None:
+    base = Path(_require(artifact_path, "artifact_path"))
+    candidates: list[Path] = []
+    direct = base / "dr_summary.json"
+    if direct.exists():
+        candidates.append(direct)
+    parent = base.parent
+    causal_root = parent / "causal"
+    if causal_root.exists() and causal_root.is_dir():
+        for summary in causal_root.glob("*/dr_summary.json"):
+            candidates.append(summary)
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def compare_artifacts_multi(artifacts: list[str], baseline: str) -> dict[str, Any]:
+    selected = [str(p) for p in artifacts if str(p).strip()]
+    if not selected:
+        raise VeldraValidationError("At least one artifact is required.")
+    if len(selected) > 5:
+        raise VeldraValidationError("At most 5 artifacts can be compared.")
+    if baseline not in selected:
+        baseline = selected[0]
+
+    loaded = {path: Artifact.load(path) for path in selected}
     checks: list[dict[str, str]] = []
-    if task_a == task_b:
-        checks.append({"level": "ok", "message": f"Same task type: {task_a}"})
-    else:
-        checks.append(
-            {
-                "level": "warning",
-                "message": f"Different task types: {task_a} vs {task_b}",
-            }
+    task_types = {
+        path: str(
+            getattr(
+                art,
+                "task_type",
+                getattr(getattr(art, "manifest", None), "task_type", "unknown"),
+            )
         )
-
-    cfg_a = _to_safe_dict(getattr(art_a, "config", {}))
-    cfg_b = _to_safe_dict(getattr(art_b, "config", {}))
-    data_a = ((cfg_a.get("data") or {}) if isinstance(cfg_a, dict) else {}).get("path")
-    data_b = ((cfg_b.get("data") or {}) if isinstance(cfg_b, dict) else {}).get("path")
-    if data_a and data_b and data_a != data_b:
+        for path, art in loaded.items()
+    }
+    if len(set(task_types.values())) == 1:
         checks.append(
             {
-                "level": "warning",
-                "message": "Different data sources. Row-level prediction diff is disabled.",
+                "level": "ok",
+                "message": f"Same task type: {next(iter(task_types.values()))}",
             }
         )
     else:
-        checks.append({"level": "ok", "message": "Data source appears consistent."})
+        checks.append({"level": "warning", "message": "Different task types detected."})
 
-    split_a = ((cfg_a.get("split") or {}) if isinstance(cfg_a, dict) else {}).get("type")
-    split_b = ((cfg_b.get("split") or {}) if isinstance(cfg_b, dict) else {}).get("type")
-    if split_a and split_b and split_a != split_b:
-        checks.append(
-            {
-                "level": "info",
-                "message": f"Split differs: {split_a} vs {split_b}",
-            }
-        )
+    cfg_yamls: dict[str, str] = {}
+    cfg_payloads: dict[str, dict[str, Any]] = {}
+    metrics_map: dict[str, dict[str, float]] = {}
+    for path, art in loaded.items():
+        cfg_obj = _to_safe_dict(getattr(art, "config", {}) or getattr(art, "run_config", {}))
+        cfg_payloads[path] = cfg_obj if isinstance(cfg_obj, dict) else {}
+        cfg_yamls[path] = yaml.safe_dump(cfg_obj, sort_keys=False)
+        metrics_map[path] = _flatten_numeric_metrics(getattr(art, "metrics", {}) or {})
 
-    metrics_a = _flatten_numeric_metrics(getattr(art_a, "metrics", {}) or {})
-    metrics_b = _flatten_numeric_metrics(getattr(art_b, "metrics", {}) or {})
-    keys = sorted(set(metrics_a) | set(metrics_b))
-    metric_rows = []
-    for key in keys:
-        va = metrics_a.get(key)
-        vb = metrics_b.get(key)
-        delta = None
-        if va is not None and vb is not None:
-            delta = va - vb
-        metric_rows.append(
-            {
-                "metric": key,
-                "run_a": va,
-                "run_b": vb,
-                "delta": delta,
-            }
-        )
+    baseline_cfg = cfg_payloads.get(baseline, {})
+    baseline_data_obj = (baseline_cfg.get("data") or {}) if isinstance(baseline_cfg, dict) else {}
+    baseline_data = baseline_data_obj.get("path")
+    baseline_split = (
+        (baseline_cfg.get("split") or {}) if isinstance(baseline_cfg, dict) else {}
+    ).get("type")
+    for path in selected:
+        if path == baseline:
+            continue
+        cfg_obj = cfg_payloads.get(path, {})
+        data_path = ((cfg_obj.get("data") or {}) if isinstance(cfg_obj, dict) else {}).get("path")
+        split_type = ((cfg_obj.get("split") or {}) if isinstance(cfg_obj, dict) else {}).get("type")
+        if baseline_data and data_path and baseline_data != data_path:
+            checks.append(
+                {
+                    "level": "warning",
+                    "message": "Different data sources. Row-level prediction diff is disabled.",
+                }
+            )
+        if baseline_split and split_type and baseline_split != split_type:
+            checks.append(
+                {
+                    "level": "info",
+                    "message": f"Split differs: {baseline_split} vs {split_type}",
+                }
+            )
 
-    yaml_a = yaml.safe_dump(cfg_a, sort_keys=False)
-    yaml_b = yaml.safe_dump(cfg_b, sort_keys=False)
+    all_metrics = sorted({k for m in metrics_map.values() for k in m.keys()})
+    baseline_metrics = metrics_map.get(baseline, {})
+    metric_rows: list[dict[str, Any]] = []
+    for metric in all_metrics:
+        base_val = baseline_metrics.get(metric)
+        for path in selected:
+            cur_val = metrics_map[path].get(metric)
+            delta = None
+            if isinstance(cur_val, (int, float)) and isinstance(base_val, (int, float)):
+                delta = float(cur_val) - float(base_val)
+            metric_rows.append(
+                {
+                    "metric": metric,
+                    "artifact": path,
+                    "value": cur_val,
+                    "baseline": base_val,
+                    "delta_from_baseline": delta,
+                }
+            )
+
+    first = selected[0]
     return {
         "checks": checks,
-        "metrics_a": metrics_a,
-        "metrics_b": metrics_b,
+        "baseline": baseline,
+        "artifacts": selected,
+        "metrics_map": metrics_map,
         "metric_rows": metric_rows,
-        "config_yaml_a": yaml_a,
-        "config_yaml_b": yaml_b,
+        "config_yaml_a": cfg_yamls.get(first, ""),
+        "config_yaml_b": cfg_yamls.get(baseline, ""),
+        "config_yamls": cfg_yamls,
     }

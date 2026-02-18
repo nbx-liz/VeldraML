@@ -33,6 +33,7 @@ def test_save_load_roundtrip_persists_optional_payloads(tmp_path: Path) -> None:
     cv_results = pd.DataFrame({"fold": [1, 2], "rmse": [0.2, 0.3]})
     calibration_curve = pd.DataFrame({"prob_pred": [0.1, 0.8], "prob_true": [0.2, 0.7]})
     threshold_curve = pd.DataFrame({"threshold": [0.2, 0.5], "f1": [0.6, 0.7]})
+    fold_metrics = pd.DataFrame({"fold": [1, 2], "rmse": [0.2, 0.3]})
     observation_table = pd.DataFrame({"fold_id": [1, 2], "prediction": [1.2, 1.8]})
 
     save_artifact(
@@ -48,6 +49,7 @@ def test_save_load_roundtrip_persists_optional_payloads(tmp_path: Path) -> None:
         threshold={"policy": "fixed", "value": 0.5},
         threshold_curve=threshold_curve,
         training_history={"final_model": {"best_iteration": 3}},
+        fold_metrics=fold_metrics,
         observation_table=observation_table,
     )
 
@@ -63,6 +65,7 @@ def test_save_load_roundtrip_persists_optional_payloads(tmp_path: Path) -> None:
     assert extras["threshold"] == {"policy": "fixed", "value": 0.5}
     assert extras["threshold_curve"].equals(threshold_curve)
     assert extras["training_history"] == {"final_model": {"best_iteration": 3}}
+    assert extras["fold_metrics"].equals(fold_metrics)
     assert extras["observation_table"].equals(observation_table)
 
 
@@ -87,6 +90,7 @@ def test_load_artifact_returns_none_for_missing_optional_payloads(tmp_path: Path
         "threshold": None,
         "threshold_curve": None,
         "training_history": None,
+        "fold_metrics": None,
         "observation_table": None,
     }
 

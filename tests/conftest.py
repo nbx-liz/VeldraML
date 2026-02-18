@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
@@ -36,15 +37,23 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     _ = config
     for item in items:
         path = Path(str(item.fspath)).name
-        if path.startswith("test_gui_") or path in GUI_TEST_FILES:
+        is_gui_named = path.startswith("test_gui_") or path in GUI_TEST_FILES
+        is_gui_e2e = "e2e_playwright" in str(item.fspath) or item.get_closest_marker("gui_e2e")
+        if is_gui_named or is_gui_e2e:
             item.add_marker(pytest.mark.gui)
 
 
 @pytest.fixture
 def tmp_path() -> Path:
-    """Workspace-local tmp_path to avoid permission issues in this environment."""
-    temp_root = REPO_ROOT / ".pytest_tmp" / "cases"
-    temp_root.mkdir(parents=True, exist_ok=True)
+    """Fast tmp_path rooted at system temp dir to reduce repository disk I/O."""
+    base_tmp = Path(tempfile.gettempdir())
+    temp_root = base_tmp / "veldra_pytest" / "cases"
+    try:
+        temp_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Fallback for restricted environments.
+        temp_root = REPO_ROOT / ".pytest_tmp" / "cases"
+        temp_root.mkdir(parents=True, exist_ok=True)
     created = temp_root / f"case_{uuid4().hex}"
     created.mkdir(parents=True, exist_ok=False)
     try:

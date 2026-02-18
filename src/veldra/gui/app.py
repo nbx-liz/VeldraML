@@ -19,21 +19,32 @@ import plotly.graph_objs as go
 import yaml
 from dash import Input, Output, State, callback_context, dcc, html
 
+from veldra.gui._lazy_runtime import (
+    resolve_artifact_class,
+    resolve_data_loader,
+    resolve_runner_function,
+)
 from veldra.gui.components.charts import (
+    plot_causal_smd,
     plot_comparison_bar,
+    plot_feature_drilldown,
     plot_feature_importance,
+    plot_fold_metric_timeline,
     plot_learning_curves,
     plot_metrics_bar,
+    plot_multi_artifact_comparison,
 )
 from veldra.gui.components.guardrail import render_guardrails
 from veldra.gui.components.help_texts import HELP_TEXTS
 from veldra.gui.components.help_ui import context_card, guide_alert, recommendation_badge
 from veldra.gui.components.kpi_cards import kpi_card
+from veldra.gui.components.progress_viewer import render_progress_viewer
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.toast import make_toast, toast_container
 from veldra.gui.components.yaml_diff import render_yaml_diff
 from veldra.gui.pages import (
     compare_page,
+    config_page,
     data_page,
     results_page,
     run_page,
@@ -46,22 +57,37 @@ from veldra.gui.services import (
     GuardRailChecker,
     GuardRailResult,
     cancel_run_job,
-    compare_artifacts,
+    compare_artifacts_multi,
     delete_run_jobs,
     get_run_job,
     infer_task_type,
     inspect_data,
     list_artifacts,
-    list_run_jobs,
-    list_run_jobs_filtered,
+    list_artifacts_page,
+    list_run_job_logs,
+    list_run_jobs_page,
+    load_causal_summary,
     load_config_yaml,
+    load_data_preview_page,
     load_job_config_yaml,
     migrate_config_file_via_gui,
     migrate_config_from_yaml,
     normalize_gui_error,
+    retry_run_job,
+    run_housekeeping_cycle,
     save_config_yaml,
+    set_run_job_priority,
     submit_run_job,
     validate_config,
+    validate_config_with_guidance,
+)
+from veldra.gui.template_service import (
+    clone_custom_slot,
+    count_yaml_changes,
+    custom_slot_options,
+    load_builtin_template_yaml,
+    load_custom_slot_yaml,
+    save_custom_slot,
 )
 from veldra.gui.types import RunInvocation
 
@@ -78,10 +104,7 @@ def _get_artifact_cls() -> Any:
     global Artifact, _ARTIFACT_CLS
     if Artifact is not _ArtifactProxy:
         return Artifact
-    if _ARTIFACT_CLS is None:
-        from veldra.api.artifact import Artifact as _Artifact
-
-        _ARTIFACT_CLS = _Artifact
+    _ARTIFACT_CLS = resolve_artifact_class(cached_class=_ARTIFACT_CLS)
     return _ARTIFACT_CLS
 
 
@@ -98,18 +121,13 @@ Artifact: Any = _ArtifactProxy
 def _get_evaluate() -> Any:
     global evaluate
     if evaluate is None:
-        from veldra.api.runner import evaluate as _evaluate
-
-        evaluate = _evaluate
+        evaluate = resolve_runner_function("evaluate")
     return evaluate
 
 
 def _get_load_tabular_data() -> Any:
     global load_tabular_data
-    if load_tabular_data is None:
-        from veldra.data import load_tabular_data as _load_tabular_data
-
-        load_tabular_data = _load_tabular_data
+    load_tabular_data = resolve_data_loader(current_loader=load_tabular_data)
     return load_tabular_data
 
 
@@ -235,6 +253,15 @@ def _ensure_workflow_state_defaults(state: dict[str, Any] | None) -> dict[str, A
         current["tuning_config"] = _default_tuning_config()
     current.setdefault("artifact_dir", "artifacts")
     current.setdefault("config_yaml", "")
+    current.setdefault("template_id", "regression_baseline")
+    current.setdefault("template_origin", "builtin")
+    current.setdefault("custom_config_slots", [])
+    current.setdefault("wizard_state", {"step": 1, "draft_payload": {}, "completed_steps": []})
+    current.setdefault(
+        "last_validation",
+        {"ok": False, "errors": [], "warnings": [], "timestamp_utc": None},
+    )
+    current.setdefault("config_diff_base_yaml", "")
     current.setdefault("last_job_succeeded", False)
     current.setdefault("results_shortcut_focus", None)
     current.setdefault("run_action_override", {"mode": "auto", "action": None})
@@ -546,6 +573,9 @@ def _main_layout() -> html.Div:
             dcc.Location(id="url"),
             dcc.Store(id="workflow-state", data={}),
             dcc.Store(id="last-job-status", data={}),
+            dcc.Store(id="custom-config-slots-store", data=[], storage_type="local"),
+            dcc.Store(id="housekeeping-last", data={}),
+            dcc.Interval(id="housekeeping-interval", interval=300000, n_intervals=0),
             toast_container(),
             dbc.Row(
                 [
@@ -570,19 +600,7 @@ def render_page(pathname: str, state: dict | None = None) -> html.Div:
     if pathname == "/data" or pathname == "/":
         return data_page.layout()
     if pathname == "/config":
-        return html.Div(
-            [
-                dbc.Alert(
-                    (
-                        "The /config route is kept for compatibility. "
-                        "Please use Target/Validation/Train."
-                    ),
-                    color="info",
-                    className="mb-3",
-                ),
-                target_page.layout(state),
-            ]
-        )
+        return config_page.layout(state)
     if pathname == "/target":
         return target_page.layout(state)
     if pathname == "/validation":
@@ -680,6 +698,12 @@ def create_app() -> dash.Dash:
     def _render_page(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
         return render_page(pathname, state), _stepper_bar(pathname or "/", state)
 
+    app.callback(
+        Output("housekeeping-last", "data"),
+        Input("housekeeping-interval", "n_intervals"),
+        State("housekeeping-last", "data"),
+    )(_cb_housekeeping)
+
     # --- Data Page Callbacks ---
     app.callback(
         Output("data-inspection-result", "children"),
@@ -698,6 +722,21 @@ def create_app() -> dash.Dash:
         Input("data-upload-drag", "filename"),
         prevent_initial_call=True,
     )(lambda filename: _cb_update_selected_file_label(filename)[0])
+
+    app.callback(
+        Output("data-preview-grid", "rowData"),
+        Output("data-preview-grid", "columnDefs"),
+        Output("data-preview-page", "data"),
+        Output("data-preview-total", "data"),
+        Output("data-preview-page-info", "children"),
+        Input("data-preview-prev-btn", "n_clicks"),
+        Input("data-preview-next-btn", "n_clicks"),
+        Input("data-preview-page-size-select", "value"),
+        Input("data-preview-columns", "value"),
+        State("workflow-state", "data"),
+        State("data-preview-page", "data"),
+        prevent_initial_call=True,
+    )(_cb_update_data_preview_page)
 
     app.callback(
         Output("workflow-state", "data", allow_duplicate=True),
@@ -1032,6 +1071,72 @@ def create_app() -> dash.Dash:
     )(_cb_train_guardrails)
 
     app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("custom-config-slots-store", "data"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_sync_custom_slots_to_state)
+
+    def _register_phase30_callbacks(prefix: str, yaml_id: str) -> None:
+        app.callback(
+            Output(yaml_id, "value", allow_duplicate=True),
+            Output("custom-config-slots-store", "data", allow_duplicate=True),
+            Output(f"{prefix}-slot-select", "options"),
+            Output(f"{prefix}-diff-count", "children"),
+            Output(f"{prefix}-diff-view", "children"),
+            Output(f"{prefix}-library-message", "children"),
+            Output("workflow-state", "data", allow_duplicate=True),
+            Input(f"{prefix}-template-apply-btn", "n_clicks"),
+            Input(f"{prefix}-slot-save-btn", "n_clicks"),
+            Input(f"{prefix}-slot-load-btn", "n_clicks"),
+            Input(f"{prefix}-slot-clone-btn", "n_clicks"),
+            State(f"{prefix}-template-select", "value"),
+            State(f"{prefix}-slot-select", "value"),
+            State(f"{prefix}-slot-name", "value"),
+            State(f"{prefix}-diff-base", "value"),
+            State(yaml_id, "value"),
+            State("custom-config-slots-store", "data"),
+            State("workflow-state", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_library_actions)
+
+        app.callback(
+            Output(f"{prefix}-wizard-modal", "is_open"),
+            Input(f"{prefix}-wizard-open-btn", "n_clicks"),
+            Input(f"{prefix}-wizard-close-btn", "n_clicks"),
+            State(f"{prefix}-wizard-modal", "is_open"),
+            prevent_initial_call=True,
+        )(_cb_phase30_toggle_wizard)
+
+        app.callback(
+            Output(f"{prefix}-wizard-step", "data"),
+            Output(f"{prefix}-wizard-step-label", "children"),
+            Input(f"{prefix}-wizard-next-btn", "n_clicks"),
+            Input(f"{prefix}-wizard-prev-btn", "n_clicks"),
+            State(f"{prefix}-wizard-step", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_wizard_step)
+
+        app.callback(
+            Output(yaml_id, "value", allow_duplicate=True),
+            Output(f"{prefix}-wizard-message", "children"),
+            Output(f"{prefix}-wizard-modal", "is_open", allow_duplicate=True),
+            Output("workflow-state", "data", allow_duplicate=True),
+            Input(f"{prefix}-wizard-apply-btn", "n_clicks"),
+            State(f"{prefix}-wizard-task", "value"),
+            State(f"{prefix}-wizard-data-path", "value"),
+            State(f"{prefix}-wizard-target", "value"),
+            State(f"{prefix}-wizard-split-type", "value"),
+            State(f"{prefix}-wizard-lr", "value"),
+            State(f"{prefix}-wizard-rounds", "value"),
+            State("workflow-state", "data"),
+            prevent_initial_call=True,
+        )(_cb_phase30_wizard_apply)
+
+    _register_phase30_callbacks("train", "train-config-yaml-preview")
+    _register_phase30_callbacks("config", "config-yaml")
+
+    app.callback(
         Output("run-data-path", "value", allow_duplicate=True),
         Output("run-config-yaml", "value", allow_duplicate=True),
         Output("run-config-path", "value", allow_duplicate=True),
@@ -1118,6 +1223,7 @@ def create_app() -> dash.Dash:
         State("run-artifact-path", "value"),
         State("run-scenarios-path", "value"),
         State("run-export-format", "value"),
+        State("run-priority", "value"),
         prevent_initial_call=True,
     )(_cb_enqueue_run_job)
 
@@ -1127,23 +1233,34 @@ def create_app() -> dash.Dash:
         Output("last-job-status", "data"),
         Output("workflow-state", "data", allow_duplicate=True),
         Output("url", "pathname"),  # Auto-navigation
+        Output("run-jobs-page", "data"),
+        Output("run-jobs-total", "data"),
         Input("run-jobs-interval", "n_intervals"),
         Input("run-refresh-jobs-btn", "n_clicks"),
+        Input("run-jobs-prev-btn", "n_clicks"),
+        Input("run-jobs-next-btn", "n_clicks"),
+        Input("run-jobs-page-size", "value"),
         State("last-job-status", "data"),
         State("workflow-state", "data"),
         State("url", "pathname"),
         State("run-batch-mode-toggle", "value"),
+        State("run-jobs-page", "data"),
         prevent_initial_call=True,
     )(_cb_refresh_run_jobs)
 
     app.callback(
         Output("run-job-detail", "children"),
         Output("run-cancel-job-btn", "disabled"),
+        Output("run-retry-job-btn", "disabled"),
         Output("selected-job-id-display", "children"),
         Output("run-job-select", "data"),  # Store selection
+        Output("run-log-limit", "data"),
         Input("run-jobs-table", "selected_rows"),
+        Input("run-jobs-interval", "n_intervals"),
+        Input("run-log-load-more-btn", "n_clicks"),
         State("run-jobs-table", "data"),
         State("run-job-select", "data"),
+        State("run-log-limit", "data"),
         prevent_initial_call=True,
     )(_cb_show_selected_job_detail)
 
@@ -1154,13 +1271,36 @@ def create_app() -> dash.Dash:
         prevent_initial_call=True,
     )(_cb_cancel_job)
 
+    app.callback(
+        Output("run-result-log", "children", allow_duplicate=True),
+        Input("run-retry-job-btn", "n_clicks"),
+        State("run-job-select", "data"),
+        prevent_initial_call=True,
+    )(_cb_retry_job)
+
+    app.callback(
+        Output("run-result-log", "children", allow_duplicate=True),
+        Input("run-set-priority-btn", "n_clicks"),
+        State("run-job-select", "data"),
+        State("run-queue-priority", "value"),
+        prevent_initial_call=True,
+    )(_cb_set_job_priority)
+
     # --- Results Page Callbacks ---
     app.callback(
         Output("artifact-select", "options"),
         Output("artifact-select-compare", "options"),
+        Output("artifact-page", "data"),
+        Output("artifact-total", "data"),
+        Output("artifact-page-info", "children"),
         Input("artifact-refresh-btn", "n_clicks"),
         Input("url", "pathname"),  # Auto-refresh on page load
+        Input("artifact-page-prev-btn", "n_clicks"),
+        Input("artifact-page-next-btn", "n_clicks"),
+        Input("artifact-page-size-select", "value"),
+        Input("artifact-search", "value"),
         State("artifact-root-path", "value"),
+        State("artifact-page", "data"),
     )(_cb_list_artifacts)
 
     app.callback(
@@ -1191,9 +1331,15 @@ def create_app() -> dash.Dash:
 
     app.callback(
         Output("result-learning-curve", "figure"),
+        Output("result-fold-metrics", "figure"),
+        Output("result-causal-diagnostics", "figure"),
+        Output("result-drilldown-feature", "options"),
+        Output("result-feature-drilldown", "figure"),
         Output("result-config-view", "children"),
         Output("result-overview-summary", "children"),
         Input("artifact-select", "value"),
+        Input("result-drilldown-feature", "value"),
+        Input("result-drilldown-topn", "value"),
     )(_cb_update_result_extras)
 
     app.callback(
@@ -1211,6 +1357,7 @@ def create_app() -> dash.Dash:
         Output("artifact-evaluate-btn", "className"),
         Output("result-export-excel-btn", "className"),
         Output("result-export-html-btn", "className"),
+        Output("result-export-pdf-btn", "className"),
         Input("workflow-state", "data"),
         Input("url", "pathname"),
     )(_cb_result_shortcut_highlight)
@@ -1222,6 +1369,7 @@ def create_app() -> dash.Dash:
         Output("result-export-poll-interval", "n_intervals"),
         Input("result-export-excel-btn", "n_clicks"),
         Input("result-export-html-btn", "n_clicks"),
+        Input("result-export-pdf-btn", "n_clicks"),
         State("artifact-select", "value"),
         prevent_initial_call=True,
     )(_cb_result_export_actions)
@@ -1245,12 +1393,24 @@ def create_app() -> dash.Dash:
 
     # --- Runs / Compare Callbacks ---
     app.callback(
+        Output("artifact-page-size", "data"),
+        Input("artifact-page-size-select", "value"),
+    )(lambda value: int(value or 50))
+
+    app.callback(
         Output("runs-table", "data"),
+        Output("runs-page", "data"),
+        Output("runs-total", "data"),
+        Output("runs-page-info", "children"),
         Input("runs-refresh-btn", "n_clicks"),
         Input("url", "pathname"),
         Input("runs-status-filter", "value"),
         Input("runs-action-filter", "value"),
         Input("runs-search", "value"),
+        Input("runs-page-prev-btn", "n_clicks"),
+        Input("runs-page-next-btn", "n_clicks"),
+        Input("runs-page-size", "value"),
+        State("runs-page", "data"),
     )(_cb_refresh_runs_table)
 
     app.callback(
@@ -1278,10 +1438,10 @@ def create_app() -> dash.Dash:
     )(_cb_runs_actions)
 
     app.callback(
-        Output("compare-artifact-a", "options"),
-        Output("compare-artifact-b", "options"),
-        Output("compare-artifact-a", "value"),
-        Output("compare-artifact-b", "value"),
+        Output("compare-artifacts", "options"),
+        Output("compare-baseline", "options"),
+        Output("compare-artifacts", "value"),
+        Output("compare-baseline", "value"),
         Input("url", "pathname"),
         State("workflow-state", "data"),
     )(_cb_populate_compare_options)
@@ -1291,8 +1451,8 @@ def create_app() -> dash.Dash:
         Output("compare-metrics-table", "data"),
         Output("compare-chart", "figure"),
         Output("compare-config-diff", "children"),
-        Input("compare-artifact-a", "value"),
-        Input("compare-artifact-b", "value"),
+        Input("compare-artifacts", "value"),
+        Input("compare-baseline", "value"),
     )(_cb_compare_runs)
 
     # --- Preset Synchronization Callbacks ---
@@ -1411,7 +1571,8 @@ def _cb_inspect_data(
         return _ret(None, f"Error: {result.get('error')}", current_state)
 
     stats_div = data_page.render_data_stats(result["stats"])
-    preview_div = data_page.render_data_preview(result["preview"])
+    preview_page = load_data_preview_page(final_path, offset=0, limit=200)
+    preview_div = data_page.render_data_preview(preview_page.items)
 
     label = (
         f"✔ {display_name}  ({result['stats']['n_rows']} rows × {result['stats']['n_cols']} cols)"
@@ -1443,6 +1604,58 @@ def _cb_inspect_data(
     )
 
 
+def _cb_update_data_preview_page(
+    _prev_clicks: int,
+    _next_clicks: int,
+    page_size: int | None,
+    columns_text: str | None,
+    state: dict[str, Any] | None,
+    current_page: int | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int, int, str]:
+    current = _ensure_workflow_state_defaults(state)
+    data_path = str(current.get("data_path") or "").strip()
+    if not data_path:
+        return [], [], 0, 0, "0-0 / 0"
+    safe_page_size = max(1, min(int(page_size or 200), 2000))
+    page = max(0, int(current_page or 0))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "data-preview-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "data-preview-next-btn":
+        page = page + 1
+    elif triggered in {"data-preview-page-size-select", "data-preview-columns"}:
+        page = 0
+    columns = [item.strip() for item in str(columns_text or "").split(",") if item.strip()]
+    offset = page * safe_page_size
+    paged = load_data_preview_page(
+        data_path,
+        offset=offset,
+        limit=safe_page_size,
+        columns=columns or None,
+    )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = load_data_preview_page(
+            data_path,
+            offset=offset,
+            limit=safe_page_size,
+            columns=columns or None,
+        )
+    rows = paged.items
+    keys = list(rows[0].keys()) if rows else []
+    coldefs = [{"field": key, "headerName": key} for key in keys]
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(rows)
+    info = f"{start}-{end} / {paged.total_count}"
+    return rows, coldefs, page, paged.total_count, info
+
+
 def _cb_save_target_col(target_col: str, state: dict) -> dict:
     current = _ensure_workflow_state_defaults(state)
     current["target_col"] = target_col
@@ -1460,10 +1673,49 @@ def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[st
     return f"Selected: {selected}", ""
 
 
+def _cb_housekeeping(
+    _n_intervals: int,
+    current: dict[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        result = run_housekeeping_cycle(
+            archive_ttl_days=int(os.getenv("VELDRA_GUI_ARCHIVE_TTL_DAYS", "30")),
+            purge_ttl_days=int(os.getenv("VELDRA_GUI_PURGE_TTL_DAYS", "90")),
+            batch_size=int(os.getenv("VELDRA_GUI_ARCHIVE_BATCH_SIZE", "200")),
+        )
+        return {"ok": True, "result": result, "at_utc": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        payload = dict(current or {})
+        payload.update(
+            {
+                "ok": False,
+                "error": str(exc),
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        return payload
+
+
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
     current = _ensure_workflow_state_defaults(state)
     current["config_yaml"] = config_yaml or ""
     return current
+
+
+def _summarize_validation_feedback(payload: dict[str, Any]) -> str:
+    if bool(payload.get("ok")):
+        return "Configuration is valid."
+    errors = payload.get("errors") or []
+    lines: list[str] = []
+    for idx, err in enumerate(errors[:5], start=1):
+        path = str(err.get("path") or "root")
+        message = str(err.get("message") or "Invalid value.")
+        suggestions = err.get("suggestions") or []
+        hint = f" / hint: {suggestions[0]}" if suggestions else ""
+        lines.append(f"{idx}. {path}: {message}{hint}")
+    if len(errors) > 5:
+        lines.append(f"... and {len(errors) - 5} more errors.")
+    return "\n".join(lines) if lines else "Validation failed."
 
 
 def _cb_handle_config_actions(
@@ -1525,6 +1777,12 @@ def _cb_handle_config_actions(
         toast = make_toast("Configuration is valid.", icon="success")
         return yaml_text, "Configuration is valid.", style_success, toast
     except Exception as exc:
+        feedback = validate_config_with_guidance(yaml_text)
+        if not feedback.get("ok"):
+            toast = make_toast("Validation failed. See details.", icon="danger")
+            detail = _summarize_validation_feedback(feedback)
+            message = f"{exc}\n{detail}" if str(exc) else detail
+            return yaml_text, message, style_error, toast
         toast = make_toast(f"Error: {str(exc)}", icon="danger")
         return yaml_text, str(exc), style_error, toast
 
@@ -2144,6 +2402,12 @@ def _cb_train_yaml_actions(
             message = f"Saved: {saved}"
         elif triggered == "train-config-validate-btn":
             validate_config(out_yaml)
+            current["last_validation"] = {
+                "ok": True,
+                "errors": [],
+                "warnings": [],
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
             message = "Config validation passed."
         elif triggered == "train-config-yaml-import-btn":
             payload = yaml.safe_load(out_yaml) or {}
@@ -2154,6 +2418,11 @@ def _cb_train_yaml_actions(
         current["config_yaml"] = out_yaml
         return out_yaml, message, current
     except Exception as exc:
+        if triggered == "train-config-validate-btn":
+            feedback = validate_config_with_guidance(out_yaml)
+            current["last_validation"] = feedback
+            if not feedback.get("ok"):
+                return out_yaml, _summarize_validation_feedback(feedback), current
         current["config_yaml"] = out_yaml
         return out_yaml, f"Error: {exc}", current
 
@@ -2171,6 +2440,174 @@ def _cb_train_guardrails(
         }
     )
     return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_sync_custom_slots_to_state(slots: list[dict] | None, state: dict | None) -> dict:
+    current = _ensure_workflow_state_defaults(state)
+    current["custom_config_slots"] = list(slots or [])
+    return current
+
+
+def _cb_phase30_library_actions(
+    _apply_clicks: int,
+    _save_clicks: int,
+    _load_clicks: int,
+    _clone_clicks: int,
+    selected_template_id: str | None,
+    selected_slot_id: str | None,
+    slot_name: str | None,
+    diff_base: str | None,
+    current_yaml: str | None,
+    slots_store: list[dict] | None,
+    state: dict | None,
+) -> tuple[str, list[dict], list[dict], str, str, str, dict]:
+    current = _ensure_workflow_state_defaults(state)
+    yaml_text = current_yaml or current.get("config_yaml") or _build_config_from_state(current)
+    slots = list(slots_store or current.get("custom_config_slots") or [])
+    message = ""
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+
+    try:
+        if triggered.endswith("template-apply-btn"):
+            template_id = str(selected_template_id or "").strip() or "regression_baseline"
+            yaml_text = load_builtin_template_yaml(template_id)
+            current["template_id"] = template_id
+            current["template_origin"] = "builtin"
+            current["config_diff_base_yaml"] = yaml_text
+            feedback = validate_config_with_guidance(yaml_text)
+            current["last_validation"] = feedback
+            message = f"Applied template: {template_id}"
+        elif triggered.endswith("slot-save-btn"):
+            slots = save_custom_slot(
+                slots,
+                name=str(slot_name or "Custom Config"),
+                yaml_text=yaml_text,
+                template_origin=str(current.get("template_origin") or "custom"),
+            )
+            current["template_origin"] = "custom"
+            message = "Saved current YAML to custom slot."
+        elif triggered.endswith("slot-load-btn"):
+            yaml_text = load_custom_slot_yaml(slots, slot_id=str(selected_slot_id or ""))
+            current["template_origin"] = "custom"
+            current["config_diff_base_yaml"] = yaml_text
+            feedback = validate_config_with_guidance(yaml_text)
+            current["last_validation"] = feedback
+            message = "Loaded selected custom slot."
+        elif triggered.endswith("slot-clone-btn"):
+            slots = clone_custom_slot(slots, slot_id=str(selected_slot_id or ""))
+            message = "Cloned selected slot."
+    except Exception as exc:
+        message = f"Error: {exc}"
+
+    slot_opts = custom_slot_options(slots)
+    base_yaml = ""
+    if str(diff_base or "template") == "slot":
+        if selected_slot_id:
+            try:
+                base_yaml = load_custom_slot_yaml(slots, slot_id=str(selected_slot_id))
+            except Exception:
+                base_yaml = ""
+    else:
+        template_id = str(
+            selected_template_id or current.get("template_id") or "regression_baseline"
+        )
+        try:
+            base_yaml = load_builtin_template_yaml(template_id)
+        except Exception:
+            base_yaml = ""
+    diff_text = (
+        render_yaml_diff(base_yaml, yaml_text).children if base_yaml else "No base selected."
+    )
+    diff_count = count_yaml_changes(base_yaml, yaml_text) if base_yaml else 0
+
+    current["custom_config_slots"] = slots
+    current["config_yaml"] = yaml_text
+    current["config_diff_base_yaml"] = base_yaml
+    return (
+        yaml_text,
+        slots,
+        slot_opts,
+        f"Changed keys: {diff_count}",
+        str(diff_text),
+        message,
+        current,
+    )
+
+
+def _cb_phase30_toggle_wizard(
+    _open_clicks: int,
+    _close_clicks: int,
+    is_open: bool,
+) -> bool:
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered.endswith("wizard-open-btn"):
+        return True
+    if triggered.endswith("wizard-close-btn"):
+        return False
+    return is_open
+
+
+def _cb_phase30_wizard_step(
+    _next_clicks: int,
+    _prev_clicks: int,
+    step: int | None,
+) -> tuple[int, str]:
+    cur = max(1, min(4, int(step or 1)))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered.endswith("wizard-next-btn"):
+        cur = min(4, cur + 1)
+    elif triggered.endswith("wizard-prev-btn"):
+        cur = max(1, cur - 1)
+    return cur, f"Step {cur}/4"
+
+
+def _cb_phase30_wizard_apply(
+    _apply_clicks: int,
+    task_type: str | None,
+    data_path: str | None,
+    target_col: str | None,
+    split_type: str | None,
+    learning_rate: float | None,
+    rounds: int | None,
+    state: dict | None,
+) -> tuple[str, str, bool, dict]:
+    current = _ensure_workflow_state_defaults(state)
+    split = _default_split_for_task(str(task_type or "regression"))
+    split["type"] = str(split_type or split["type"])
+    train = _default_train_config()
+    train["learning_rate"] = float(learning_rate or 0.05)
+    train["num_boost_round"] = int(rounds or 300)
+    current["task_type"] = str(task_type or "regression")
+    current["data_path"] = str(data_path or "")
+    current["target_col"] = str(target_col or "")
+    current["split_config"] = split
+    current["train_config"] = train
+    yaml_text = _build_config_from_state(current)
+    feedback = validate_config_with_guidance(yaml_text)
+    current["last_validation"] = feedback
+    current["config_yaml"] = yaml_text
+    current["template_origin"] = "custom"
+    msg = (
+        "Wizard applied and configuration validated."
+        if feedback.get("ok")
+        else _summarize_validation_feedback(feedback)
+    )
+    return yaml_text, msg, False, current
 
 
 def _cb_save_run_action_override(
@@ -2606,10 +3043,44 @@ def _cb_enqueue_run_job(
     artifact_path: str,
     scenarios_path: str,
     export_format: str,
+    priority: str,
 ) -> str:
     try:
         c_path = _ensure_default_run_config(config_path_state or "configs/gui_run.yaml")
         d_path = data_path_state
+        act = str(action or "").strip().lower()
+        if act in {"fit", "tune", "estimate_dr", "evaluate"}:
+            yaml_source = (config_yaml or "").strip()
+            should_validate = False
+            if yaml_source:
+                parsed = yaml.safe_load(yaml_source)
+                if isinstance(parsed, dict):
+                    should_validate = any(
+                        key in parsed
+                        for key in (
+                            "config_version",
+                            "task",
+                            "data",
+                            "split",
+                            "train",
+                            "tuning",
+                            "export",
+                            "causal",
+                        )
+                    )
+                if not should_validate and not (c_path or "").strip():
+                    should_validate = True
+            elif (c_path or "").strip():
+                yaml_source = load_config_yaml(c_path)
+                should_validate = True
+
+            if should_validate:
+                feedback = validate_config_with_guidance(yaml_source)
+                if not feedback.get("ok"):
+                    return (
+                        "[ERROR] Validation blocked run:\n"
+                        f"{_summarize_validation_feedback(feedback)}"
+                    )
 
         result = submit_run_job(
             RunInvocation(
@@ -2620,6 +3091,7 @@ def _cb_enqueue_run_job(
                 artifact_path=artifact_path,
                 scenarios_path=scenarios_path,
                 export_format=export_format,
+                priority=str(priority or "normal"),
             )
         )
         return f"[QUEUED] {result.message} (Job ID: {result.job_id})"
@@ -2630,12 +3102,48 @@ def _cb_enqueue_run_job(
 def _cb_refresh_run_jobs(
     _n_intervals: int,
     _refresh_clicks: int,
-    last_status: dict | None,
-    workflow_state: dict | None,
-    current_path: str,
-    batch_mode: list,
-) -> tuple[html.Div, Any, dict, dict, str]:
-    jobs = list_run_jobs(limit=100)
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    last_status: dict | None = None,
+    workflow_state: dict | None = None,
+    current_path: str = "/run",
+    batch_mode: list | None = None,
+    current_page: int | None = None,
+) -> tuple[html.Div, Any, dict, dict, str, int, int]:
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    page = max(0, int(current_page or 0))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "run-jobs-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "run-jobs-next-btn":
+        page = page + 1
+    elif triggered == "run-jobs-page-size":
+        page = 0
+
+    offset = page * safe_page_size
+    paged = list_run_jobs_page(
+        limit=safe_page_size,
+        offset=offset,
+    )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = list_run_jobs_page(
+            limit=safe_page_size,
+            offset=offset,
+        )
+    jobs = paged.items
+    priority_rank = {"high": 0, "normal": 1, "low": 2}
+    queued_jobs = [job for job in jobs if job.status == "queued"]
+    queued_jobs.sort(key=lambda job: (priority_rank.get(job.priority, 1), job.created_at_utc))
+    non_queued_jobs = [job for job in jobs if job.status != "queued"]
+    jobs = queued_jobs + non_queued_jobs
 
     new_status = {}
     toast = dash.no_update
@@ -2668,39 +3176,67 @@ def _cb_refresh_run_jobs(
         {
             "job_id": job.job_id,
             "action": job.action,
+            "priority": job.priority.upper(),
+            "progress": f"{float(job.progress_pct):.1f}% | {job.current_step or '-'}",
             "status": _status_badge(job.status),
             "created_at_utc": _format_jst_timestamp(job.created_at_utc),
             "id": job.job_id,
         }
         for job in jobs
     ]
-    return task_table("run-jobs", data), toast, new_status, next_state, next_path
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(jobs)
+    page_info = f"{start}-{end} / {paged.total_count}"
+    table = task_table(
+        "run-jobs",
+        data,
+        page_info=page_info,
+        disable_prev=page <= 0,
+        disable_next=end >= paged.total_count,
+    )
+    return table, toast, new_status, next_state, next_path, page, paged.total_count
 
 
 def _cb_show_selected_job_detail(
     selected_rows: list[int] | None,
+    _n_intervals: int,
+    _load_more_clicks: int,
     data: list[dict] | None,
     selected_job_id: str | None,
-) -> tuple[str, bool, str, str | None]:
+    current_log_limit: int | None,
+) -> tuple[Any, bool, bool, str, str | None, int]:
     if not data:
-        return "Select a job to view details.", True, "", selected_job_id
+        return "Select a job to view details.", True, True, "", selected_job_id, 200
+
+    next_log_limit = max(50, int(current_log_limit or 200))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "run-log-load-more-btn":
+        next_log_limit = min(next_log_limit + 200, 10_000)
+    elif triggered == "run-jobs-table":
+        next_log_limit = 200
 
     job_id = selected_job_id
     if selected_rows:
         row_idx = selected_rows[0]
         if row_idx >= len(data):
-            return "Job not found.", True, "", selected_job_id
+            return "Job not found.", True, True, "", selected_job_id, next_log_limit
         job_id = data[row_idx]["job_id"]
 
     if not job_id:
-        return "Select a job to view details.", True, "", None
+        return "Select a job to view details.", True, True, "", None, next_log_limit
 
     job = get_run_job(job_id)
 
     if not job:
-        return "Job details unavailable.", True, "", selected_job_id
+        return "Job details unavailable.", True, True, "", selected_job_id, next_log_limit
 
     can_cancel = job.status in ["queued", "running"]
+    can_retry = job.status in ["failed", "canceled"]
     status_color = "primary"
     if job.status == "succeeded":
         status_color = "success"
@@ -2716,6 +3252,21 @@ def _cb_show_selected_job_detail(
                     job.status.upper(),
                     className=f"badge bg-{status_color}",
                 ),
+            ],
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Span("Priority: ", className="fw-bold"),
+                html.Span(job.priority.upper()),
+            ],
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Span("Progress: ", className="fw-bold"),
+                html.Span(f"{float(job.progress_pct):.1f}%"),
+                html.Span(f" | {job.current_step or 'n/a'}", className="text-muted ms-2"),
             ],
             className="mb-2",
         ),
@@ -2748,6 +3299,14 @@ def _cb_show_selected_job_detail(
                 html.Pre(job.error_message, className="mb-0"), color="danger", className="mt-3"
             )
         )
+    next_steps = []
+    if job.result and isinstance(job.result.payload, dict):
+        raw_steps = job.result.payload.get("next_steps")
+        if isinstance(raw_steps, list):
+            next_steps = [str(item) for item in raw_steps if str(item).strip()]
+    if next_steps:
+        details_elems.append(html.Label("Next Step", className="fw-bold mt-3"))
+        details_elems.append(html.Ul([html.Li(step) for step in next_steps], className="mb-2"))
 
     if job.result and job.result.payload:
         payload_str = _json_dumps(job.result.payload)
@@ -2760,9 +3319,21 @@ def _cb_show_selected_job_detail(
             )
         )
 
+    logs = list_run_job_logs(job.job_id, limit=next_log_limit)
+    details_elems.append(html.Label("Live Logs", className="fw-bold mt-3"))
+    details_elems.append(
+        render_progress_viewer(
+            progress_pct=job.progress_pct,
+            current_step=job.current_step,
+            logs=logs,
+            log_limit=next_log_limit,
+            log_total=len(logs),
+        )
+    )
+
     details = html.Div(details_elems, className="p-2")
 
-    return details, not can_cancel, f"Selected: {job_id}", job_id
+    return details, not can_cancel, not can_retry, f"Selected: {job_id}", job_id, next_log_limit
 
 
 def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:
@@ -2775,11 +3346,70 @@ def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:
         return f"[ERROR] {str(exc)}"
 
 
-def _cb_list_artifacts(
-    _n_clicks: int, _pathname: str, root_path: str
-) -> tuple[list[dict], list[dict]]:
+def _cb_retry_job(_n_clicks: int, job_id: str | None) -> str:
+    if not job_id:
+        return ""
     try:
-        items = list_artifacts(root_path or "artifacts")
+        result = retry_run_job(job_id)
+        return f"[INFO] {result.message}"
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}"
+
+
+def _cb_set_job_priority(_n_clicks: int, job_id: str | None, priority: str | None) -> str:
+    if not job_id:
+        return "[ERROR] Select a queued job first."
+    try:
+        result = set_run_job_priority(job_id, str(priority or "normal"))
+        return f"[INFO] {result.message}"
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}"
+
+
+def _cb_list_artifacts(
+    _n_clicks: int,
+    _pathname: str,
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    search: str | None = None,
+    root_path: str = "artifacts",
+    current_page: int | None = None,
+) -> tuple[list[dict], list[dict], int, int, str]:
+    if isinstance(_prev_clicks, str) and root_path == "artifacts" and search is None:
+        root_path = _prev_clicks
+        _prev_clicks = 0
+    page = max(0, int(current_page or 0))
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "artifact-page-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "artifact-page-next-btn":
+        page = page + 1
+    elif triggered in {"artifact-search", "artifact-page-size-select", "artifact-refresh-btn"}:
+        page = 0
+    offset = page * safe_page_size
+    try:
+        paged = list_artifacts_page(
+            root_dir=root_path or "artifacts",
+            limit=safe_page_size,
+            offset=offset,
+            query=search or None,
+        )
+        if paged.total_count and offset >= paged.total_count and page > 0:
+            page = max(0, (paged.total_count - 1) // safe_page_size)
+            offset = page * safe_page_size
+            paged = list_artifacts_page(
+                root_dir=root_path or "artifacts",
+                limit=safe_page_size,
+                offset=offset,
+                query=search or None,
+            )
         options = [
             {
                 "label": (
@@ -2788,11 +3418,14 @@ def _cb_list_artifacts(
                 ),
                 "value": item.path,
             }
-            for item in items
+            for item in paged.items
         ]
-        return options, options
+        start = offset + 1 if paged.total_count > 0 else 0
+        end = offset + len(paged.items)
+        info = f"{start}-{end} / {paged.total_count}"
+        return options, options, page, paged.total_count, info
     except Exception:
-        return [], []
+        return [], [], 0, 0, "0-0 / 0"
 
 
 def _cb_autoselect_artifact(
@@ -3015,13 +3648,38 @@ def _cb_evaluate_artifact_action(_n_clicks: int, artifact_path: str, data_path: 
         return f"Evaluation failed: {exc}"
 
 
-def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
+def _cb_update_result_extras(
+    artifact_path: str | None,
+    drilldown_feature: str | None = None,
+    drilldown_topn: int | None = None,
+) -> tuple[Any, Any, Any, list[dict[str, str]], Any, str, Any]:
     if not artifact_path:
-        return go.Figure(), "", "Select artifact to view details."
+        empty = go.Figure()
+        return empty, empty, empty, [], empty, "", "Select artifact to view details."
     try:
         art = Artifact.load(artifact_path)
         history = getattr(art, "training_history", None)
         curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
+        fold_metrics = getattr(art, "fold_metrics", None)
+        fold_fig = plot_fold_metric_timeline(
+            fold_metrics if isinstance(fold_metrics, pd.DataFrame) else None
+        )
+        causal_summary = load_causal_summary(artifact_path)
+        causal_fig = plot_causal_smd(causal_summary)
+        obs_table = getattr(art, "observation_table", None)
+        feature_options: list[dict[str, str]] = []
+        if isinstance(obs_table, pd.DataFrame):
+            excluded = {"fold_id", "in_out_label", "y_true", "prediction", "residual", "label_pred"}
+            feature_options = [
+                {"label": str(col), "value": str(col)}
+                for col in obs_table.columns
+                if str(col) not in excluded
+            ][:100]
+        drilldown_fig = plot_feature_drilldown(
+            obs_table if isinstance(obs_table, pd.DataFrame) else None,
+            drilldown_feature,
+            top_n=int(drilldown_topn or 20),
+        )
         cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
         cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
 
@@ -3034,15 +3692,17 @@ def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
             ],
             className="mb-0",
         )
-        return curve_fig, cfg_text, summary
+        return curve_fig, fold_fig, causal_fig, feature_options, drilldown_fig, cfg_text, summary
     except Exception as exc:
-        return go.Figure(), f"Error: {exc}", f"Error: {exc}"
+        empty = go.Figure()
+        return empty, empty, empty, [], empty, f"Error: {exc}", f"Error: {exc}"
 
 
 def _cb_result_export_help() -> str:
     return (
         "Excel: feature importance, predictions, residual views by sheets. "
-        "HTML: self-contained shareable report."
+        "HTML: self-contained shareable report. "
+        "PDF: optional weasyprint-based static report."
     )
 
 
@@ -3083,27 +3743,40 @@ def _cb_result_eval_precheck(artifact_path: str | None, data_path: str | None) -
 def _cb_result_shortcut_highlight(
     state: dict[str, Any] | None,
     pathname: str | None,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     if pathname != "/results":
-        return "w-100 mb-3", "me-2 result-export-btn", "me-2 result-export-btn"
+        return (
+            "w-100 mb-3",
+            "me-2 result-export-btn",
+            "me-2 result-export-btn",
+            "me-2 result-export-btn",
+        )
     current = _ensure_workflow_state_defaults(state)
     focus = current.get("results_shortcut_focus")
     eval_class = "w-100 mb-3"
     excel_class = "me-2 result-export-btn"
     html_class = "me-2 result-export-btn"
+    pdf_class = "me-2 result-export-btn"
     if focus == "evaluate":
         eval_class += " border border-warning"
     if focus == "export":
         excel_class += " border border-warning"
         html_class += " border border-warning"
-    return eval_class, excel_class, html_class
+        pdf_class += " border border-warning"
+    return eval_class, excel_class, html_class, pdf_class
 
 
 def _cb_result_export_actions(
     _excel_clicks: int,
     _html_clicks: int,
-    artifact_path: str | None,
+    _pdf_clicks_or_artifact: int | str | None,
+    artifact_path: str | None = None,
 ) -> tuple[str, dict[str, str] | None, bool, int]:
+    if isinstance(_pdf_clicks_or_artifact, str) or _pdf_clicks_or_artifact is None:
+        _pdf_clicks = 0
+        artifact_path = str(_pdf_clicks_or_artifact) if _pdf_clicks_or_artifact else artifact_path
+    else:
+        _pdf_clicks = int(_pdf_clicks_or_artifact)
     if not artifact_path:
         return "Select an artifact first.", None, True, 0
     triggered = ""
@@ -3113,12 +3786,18 @@ def _cb_result_export_actions(
     except Exception:
         triggered = ""
     if not triggered:
-        triggered = (
-            "result-export-excel-btn"
-            if (_excel_clicks or 0) >= (_html_clicks or 0)
-            else "result-export-html-btn"
-        )
-    action = "export_excel" if triggered == "result-export-excel-btn" else "export_html_report"
+        clicks = {
+            "result-export-excel-btn": int(_excel_clicks or 0),
+            "result-export-html-btn": int(_html_clicks or 0),
+            "result-export-pdf-btn": int(_pdf_clicks or 0),
+        }
+        triggered = max(clicks, key=clicks.get)
+    if triggered == "result-export-excel-btn":
+        action = "export_excel"
+    elif triggered == "result-export-pdf-btn":
+        action = "export_pdf_report"
+    else:
+        action = "export_html_report"
     try:
         result = submit_run_job(RunInvocation(action=action, artifact_path=artifact_path))
         state = {"job_id": result.job_id, "action": action}
@@ -3183,17 +3862,53 @@ def _cb_refresh_runs_table(
     status_filter: str | None,
     action_filter: str | None,
     query: str | None,
-) -> list[dict[str, Any]]:
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    current_page: int | None = None,
+) -> tuple[list[dict[str, Any]], int, int, str]:
     if pathname != "/runs":
-        return []
-    jobs = list_run_jobs_filtered(
-        limit=300,
+        return [], 0, 0, "0-0 / 0"
+    page = max(0, int(current_page or 0))
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "runs-page-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "runs-page-next-btn":
+        page = page + 1
+    elif triggered in {
+        "runs-page-size",
+        "runs-refresh-btn",
+        "runs-status-filter",
+        "runs-action-filter",
+        "runs-search",
+    }:
+        page = 0
+    offset = page * safe_page_size
+    paged = list_run_jobs_page(
+        limit=safe_page_size,
+        offset=offset,
         status=status_filter or None,
         action=action_filter or None,
         query=query or None,
     )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = list_run_jobs_page(
+            limit=safe_page_size,
+            offset=offset,
+            status=status_filter or None,
+            action=action_filter or None,
+            query=query or None,
+        )
     rows: list[dict[str, Any]] = []
-    for job in jobs:
+    for job in paged.items:
         artifact_path = job.invocation.artifact_path or ""
         if job.result and isinstance(job.result.payload, dict):
             artifact_path = str(job.result.payload.get("artifact_path") or artifact_path)
@@ -3210,7 +3925,10 @@ def _cb_refresh_runs_table(
                 "reeval_shortcut": "Re-evaluate",
             }
         )
-    return rows
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(rows)
+    info = f"{start}-{end} / {paged.total_count}"
+    return rows, page, paged.total_count, info
 
 
 def _cb_runs_selection_detail(
@@ -3351,23 +4069,42 @@ def _cb_populate_compare_options(
         for item in list_artifacts("artifacts")
     ]
     compare_selection = (_ensure_workflow_state_defaults(state)).get("compare_selection") or []
-    value_a = compare_selection[0] if len(compare_selection) > 0 else None
-    value_b = compare_selection[1] if len(compare_selection) > 1 else None
-    return options, options, value_a, value_b
+    selected = [str(v) for v in compare_selection if str(v).strip()][:5]
+    if not selected and options:
+        selected = [str(options[0]["value"])]
+    baseline = selected[0] if selected else None
+    return options, options, selected, baseline
 
 
 def _cb_compare_runs(
-    artifact_a: str | None, artifact_b: str | None
+    selected_artifacts: list[str] | str | None,
+    baseline: str | None,
 ) -> tuple[Any, list[dict], Any, Any]:
-    if not artifact_a or not artifact_b:
-        return "Select both artifacts.", [], go.Figure(), ""
+    if isinstance(selected_artifacts, str):
+        # Backward compatibility for legacy tests/calls that pass (artifact_a, artifact_b).
+        if baseline and baseline != selected_artifacts:
+            selected = [selected_artifacts, baseline]
+        else:
+            selected = [selected_artifacts]
+    else:
+        selected = [str(v) for v in (selected_artifacts or []) if str(v).strip()]
+    if len(selected) < 2:
+        return "Select at least 2 artifacts.", [], go.Figure(), ""
+    if len(selected) > 5:
+        return "Select up to 5 artifacts.", [], go.Figure(), ""
+    chosen_baseline = baseline if baseline in selected else selected[0]
     try:
-        payload = compare_artifacts(artifact_a, artifact_b)
+        payload = compare_artifacts_multi(selected, chosen_baseline)
         checks = render_guardrails(payload.get("checks", []))
-        fig = plot_comparison_bar(
-            payload.get("metrics_a", {}), payload.get("metrics_b", {}), "Run A", "Run B"
+        fig = plot_multi_artifact_comparison(
+            payload.get("metric_rows", []),
+            metric_key="delta_from_baseline",
         )
-        diff = render_yaml_diff(payload.get("config_yaml_a", ""), payload.get("config_yaml_b", ""))
+        first = selected[0]
+        diff = render_yaml_diff(
+            payload.get("config_yamls", {}).get(first, ""),
+            payload.get("config_yamls", {}).get(chosen_baseline, ""),
+        )
         return checks, payload.get("metric_rows", []), fig, diff
     except Exception as exc:
         return f"Compare failed: {exc}", [], go.Figure(), ""

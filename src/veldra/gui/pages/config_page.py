@@ -5,8 +5,13 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from veldra.gui.components.config_library import render_config_library
+from veldra.gui.components.config_wizard import render_config_wizard
+from veldra.gui.template_service import custom_slot_options, template_options
 
-def _render_builder_tab() -> html.Div:
+
+def _render_builder_tab(state: dict | None = None) -> html.Div:
+    state = state or {}
     return html.Div(
         [
             html.Div(id="cfg-builder-top"),
@@ -903,6 +908,12 @@ def _render_builder_tab() -> html.Div:
                 ),
                 className="mb-4 glass-card p-2",
             ),
+            render_config_library(
+                "config",
+                template_options=template_options(),
+                slot_options=custom_slot_options(state.get("custom_config_slots")),
+            ),
+            render_config_wizard("config"),
             # --- Actions ---
             html.Div(
                 [
@@ -929,7 +940,7 @@ def _render_builder_tab() -> html.Div:
     )
 
 
-def layout() -> html.Div:
+def layout(state: dict | None = None) -> html.Div:
     return html.Div(
         [
             html.H2("Configuration Builder", className="mb-4"),
@@ -938,7 +949,7 @@ def layout() -> html.Div:
                     dbc.Tab(
                         label="Builder",
                         tab_id="tab-builder",
-                        children=[html.Div(_render_builder_tab(), className="p-3")],
+                        children=[html.Div(_render_builder_tab(state), className="p-3")],
                     ),
                     dbc.Tab(
                         label="YAML Source",

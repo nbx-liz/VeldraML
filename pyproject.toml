@@ -28,6 +28,7 @@ export-onnx = [
 ]
 gui = [
     "dash==2.18.2",
+    "dash-ag-grid==31.3.1",
     "dash-bootstrap-components==1.7.1",
     "plotly==5.24.1",
     "openpyxl==3.1.5",
@@ -72,6 +73,9 @@ markers = [
     "gui_e2e: Playwright GUI end-to-end tests",
     "gui_smoke: CI smoke subset of Playwright GUI end-to-end tests",
     "notebook_e2e: Notebook execution evidence and output contract tests",
+]
+filterwarnings = [
+    "ignore:.*joblib will operate in serial mode.*:UserWarning",
 ]
 
 [tool.ruff]

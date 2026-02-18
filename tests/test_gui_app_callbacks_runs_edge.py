@@ -164,14 +164,14 @@ def test_populate_compare_options_and_compare_runs_error_paths(monkeypatch) -> N
     assert app_module._cb_populate_compare_options("/run", {}) == ([], [], None, None)
 
     msg, rows, fig, diff = app_module._cb_compare_runs(None, "b")
-    assert "Select both artifacts" in msg
+    assert "Select at least 2 artifacts" in msg
     assert rows == []
     assert hasattr(fig, "to_dict")
     assert diff == ""
 
     monkeypatch.setattr(
         app_module,
-        "compare_artifacts",
+        "compare_artifacts_multi",
         lambda _a, _b: (_ for _ in ()).throw(RuntimeError("compare boom")),
     )
     msg2, rows2, fig2, diff2 = app_module._cb_compare_runs("a", "b")

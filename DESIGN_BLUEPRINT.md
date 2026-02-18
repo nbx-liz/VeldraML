@@ -490,9 +490,13 @@ pytest tests/ -v --tb=short
 ### 技術アプローチ
 * **SQLiteスキーマ拡張:** `ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 50`
 * **ロジック変更:** `claim_next_job()` を `ORDER BY priority DESC, created_at_utc ASC` に変更
+* **優先度マップ固定:** `high=90`, `normal=50`, `low=10`（任意数値priorityは非サポート）
+* **公平性方針:** strict priority（Aging/比率制御なし）
 * **新規クラス:** `GuiWorkerPool` クラス作成（複数 `GuiWorker` インスタンス管理）
 * **排他制御:** データベースロックでthread-safeなジョブクレーム調整
 * **UI変更:** Run ページに優先度ドロップダウン追加（Low/Normal/High）
+* **並び替え方式:** queued ジョブの priority 変更で順序を制御（Move Up/Down, D&D は非採用）
+* **変更制約:** priority変更対象は `status=\"queued\"` のみ
 
 ### テスト要件
 1.  優先度ベースのクレームロジック単体テスト
@@ -505,6 +509,14 @@ pytest tests/ -v --tb=short
 * 高優先度ジョブが低優先度より先にクレームされる
 * Worker数が設定可能でGraceful shutdownが動作
 * 並行負荷下でジョブロスや破損が発生しない
+* queued以外のpriority変更が拒否され、ユーザーに明示メッセージを返す
+
+### 実装結果（2026-02-18）
+* `RunInvocation` / `GuiJobRecord` に `priority`（`low|normal|high`）を追加し、既定値を `normal` で固定。
+* `GuiJobStore` に priority 列の後方互換 migration（`PRAGMA table_info` + `ALTER TABLE`）を実装。
+* `claim_next_job()` を `priority DESC, created_at_utc ASC` に変更し、strict priority を適用。
+* `GuiWorkerPool` を導入し、`--worker-count`（既定1）で並列worker数を設定可能化。
+* Run 画面に投入priority選択（`run-priority`）と queued再優先付け（`run-queue-priority` + `run-set-priority-btn`）を追加。
 
 ---
 
@@ -550,6 +562,25 @@ pytest tests/ -v --tb=short
 
 ---
 
+### 実装結果（2026-02-18）
+* `GuiJobRecord` に `progress_pct` / `current_step` を追加し、`jobs` テーブルへ後方互換 migration を実装。
+* `job_logs` テーブル（`seq`順）を追加し、`append_job_log` / `list_job_logs` / `update_progress` を `GuiJobStore` に実装。
+* `run_action()` は `job_id` + `job_store` を受ける内部経路を追加し、action別ステップ進捗と失敗ログを永続化。
+* `tune` 実行時は runner の trial 完了ログ（`n_trials_done`）を取り込み、進捗率を段階更新。
+* `GuiWorker` は started/completed のジョブログ記録と進捗初期化を実装。
+* Run 画面は Progress 列を追加し、Job detail を `progress_viewer` ベース（進捗バー + level色分けログ）へ更新。
+* ログ上限は 10,000 行/job を採用し、超過時は古いログを削除して `log_retention_applied` を記録。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: Phase28 は polling 継続（`run-jobs-interval`）+ SQLite 永続化で進捗/ログ可視化を実装し、WebSocket/SSE は導入しない。
+  * 理由: 既存GUI契約を維持しつつ、最小変更で運用可視性を高めるため。
+* Decision: confirmed
+  * 内容: ログ保持上限は 10,000 行/job とし、超過時は FIFO で古い行を削除する。
+  * 理由: UI応答性とDB肥大抑制を両立するため。
+
+---
+
 ### 対象ファイル
 * `src/veldra/gui/job_store.py` - 進捗追跡スキーマと更新メソッド
 * `src/veldra/gui/services.py` - `run_action` 内の進捗コールバック実装
@@ -588,6 +619,29 @@ pytest tests/ -v --tb=short
 * 一時的な失敗が設定された上限回数まで自動でリトライされること
 * UIから失敗したジョブをワンクリックで手動リトライできること
 * エラーメッセージに「次のステップ」を含む有用なヒントが表示されること
+
+---
+
+### 実装結果（2026-02-18）
+* `RetryPolicy` を `RunInvocation` に追加し、`GuiJobRecord` に `retry_count` / `retry_parent_job_id` / `last_error_kind` を追加。
+* `jobs` テーブルへ後方互換 migration（`retry_count`, `retry_parent_job_id`, `last_error_kind`）を実装。
+* `GuiJobStore` に `is_cancel_requested` / `mark_canceled_from_request` / `create_retry_job` を追加。
+* `run_action()` に協調キャンセルチェックポイント（設定読込/データ読込/runner前後）を追加し、`CanceledByUser` を導入。
+* `veldra.api.runner.fit/tune/estimate_dr` に `cancellation_hook`（keyword-only, optional）を追加し、既存呼び出し互換を維持。
+* `GuiWorker` は `cancel_requested` 競合を `canceled` 終端で処理し、`RetryPolicy` を使う自動リトライ枠（既定0回）を実装。
+* Runページに `Retry Task` ボタンを追加し、failed/canceled ジョブの手動再投入をサポート。
+* 失敗ジョブ詳細に `next_steps` を表示し、エラー分類（validation/file/permission/memory/timeout/cancel等）を payload 化。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: `RetryPolicy` は GUI adapter の `RunInvocation` にのみ持たせ、Core `RunConfig` には追加しない。
+  * 理由: Core/Stable API 契約を維持しつつ、GUI運用機能を最小侵襲で拡張するため。
+* Decision: confirmed
+  * 内容: 自動リトライ既定は `max_retries=0`（手動リトライ中心）とし、将来有効化可能なバックオフ枠のみ先行実装する。
+  * 理由: 不要な自動再実行リスクを避けつつ、運用拡張余地を確保するため。
+* Decision: confirmed
+  * 内容: 失敗時の Next Step 提示は既知分類のみを対象とし、未知エラーは原文優先とする。
+  * 理由: ノイズを抑え、誤誘導を避けるため。
 
 ---
 
@@ -630,6 +684,22 @@ pytest tests/ -v --tb=short
 * ユーザーが独自のカスタムConfigを保存し、いつでも再読込できること
 * 新規ユーザーがウィザードを使用して2分以内に有効なConfigを完成させられること
 
+### 実装結果（2026-02-18）
+* `src/veldra/gui/templates/` に 5 テンプレート（`regression_baseline`, `binary_balanced`, `multiclass_standard`, `causal_dr_panel`, `tuning_standard`）を追加。
+* `src/veldra/gui/template_service.py` を新設し、テンプレート読込/検証、localStorage スロット（max 10, save/load/clone, LRU）管理、YAML 変更キー数カウントを実装。
+* `src/veldra/gui/components/config_library.py` と `src/veldra/gui/components/config_wizard.py` を追加し、`/train` と `/config` 双方に同等導線を統合。
+* `workflow-state` に `template_id`, `template_origin`, `custom_config_slots`, `wizard_state`, `last_validation`, `config_diff_base_yaml` を追加。
+* `validate_config_with_guidance()` を導入し、Validate 時のパス付きエラー表示と next-step ガイダンスを提供。
+* `run-execute` 前に RunConfig 形式の YAML を検証し、不正時は投入をブロック（既存モック契約と両立する条件付きゲート）。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: テンプレート/保存/ウィザード機能は GUI adapter 内で完結し、Core RunConfig schema は `config_version=1` を維持する。
+  * 理由: Stable API と Artifact 契約への影響を避けつつ運用改善を達成するため。
+* Decision: confirmed
+  * 内容: `/train` と `/config` は UI を分けつつ同一コールバック関数を再利用し、機能差分を禁止する。
+  * 理由: 導線互換と保守性（重複実装回避）を両立するため。
+
 ---
 
 ### 対象ファイル
@@ -669,6 +739,23 @@ pytest tests/ -v --tb=short
 * 因果推論において、SMDプロットとオーバーラップ診断による共変量バランスの確認ができること
 * 最大5つのArtifactを同一画面上で並列比較できること
 * 出力されたレポートが、そのままプレゼンや報告書として利用可能な品質であること
+
+---
+
+### 実装結果（2026-02-18）
+* Artifact を非破壊拡張し、optional `fold_metrics` を追加（`fold_metrics.parquet` 保存/読込、既存 Artifact は互換維持）。
+* Results に `Fold Metrics` / `Causal Diagnostics` / `Feature Drilldown` タブを追加し、`training_history`・`fold_metrics`・`dr_summary.json`・`observation_table` を可視化導線へ統合。
+* Compare を multi-select（最大5件）へ拡張し、baseline 差分（`delta_from_baseline`）をテーブル/グラフで表示。
+* レポート出力を拡張し、HTML に metrics/fold/causal/config を収載。PDF（`export_pdf_report`）を追加し、依存未導入時は明示ガイダンスで安全退化。
+* GUI job action に `export_pdf_report` を追加し、既存キュー実行フローで処理。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: Artifact 拡張は optional 追加（`fold_metrics`）に限定し、`manifest_version=1` を維持する。
+  * 理由: 既存 Artifact 読込互換と Stable API 非破壊を両立するため。
+* Decision: confirmed
+  * 内容: レポート出力は HTML を基準実装とし、PDF は optional dependency 前提で同 Phase 内に追加する。
+  * 理由: 環境差異による失敗を局所化しつつ共有品質を担保するため。
 
 ---
 
@@ -719,67 +806,63 @@ pytest tests/ -v --tb=short
 * `src/veldra/gui/pages/results_page.py` - ページネーション対応ArtifactリストUIへの刷新
 * `src/veldra/gui/pages/data_page.py` - 仮想スクロールを用いたデータプレビュー機能の導入
 
-## 20 Phase 33: 洗練 & プロダクション対応
+### 実施方針（2026-02-18, provisional）
+* 2段階で実施する。
+  * Phase32.1: ページネーション + DB最適化 + Dataプレビュー仮想スクロール基盤
+  * Phase32.2: アーカイブ/クリーンアップ + パフォーマンス監視/スロークエリ分析
+* Dataプレビュー方式は Dash AG Grid を採用する（GUI optional dependencyとして扱う）。
+* 内部契約として `PaginatedResult[T]`（`items`, `total_count`, `limit`, `offset`）を導入し、GUI adapter内で完結させる。
 
-**目的:** 最終的なシステムの洗練、ドキュメントの整備、およびプロダクション環境へのデプロイを容易にする機能の実装。
+### Decision（要点）
+* Decision: provisional
+  * 内容: Phase32 は 2段階実施（32.1/32.2）を採用する。
+  * 理由: UI改修とDBライフサイクル変更を分割し、回帰リスクとレビュー負荷を抑えるため。
+* Decision: provisional
+  * 内容: Dataプレビューは Dash AG Grid による遅延読込/仮想スクロールを標準方式とする。
+  * 理由: 10万行級プレビューでの描画負荷とメモリ使用量を低減するため。
 
----
+### 実装結果（2026-02-18）
+* `GuiJobStore` に `list_jobs_page`、`jobs_archive`、`archive_jobs`、`purge_archived_jobs`、slow query 計測を追加。
+* `services` に `PaginatedResult` ベースの `list_run_jobs_page` / `list_artifacts_page` / `load_data_preview_page` を追加。
+* Run / Runs / Results をサーバー側ページング化（page/page_size/total管理 + Prev/Next）。
+* Dataページを AG Grid 優先構成に拡張し、遅延読込 callback を追加。
+* housekeeping interval を追加し、archive/purge の定期実行導線を実装。
 
-### 主要成果物
-* **ドキュメント:** スクリーンショット付きのGUIユーザーガイド作成
-* **モニタリング:** 運用監視用のヘルスチェックエンドポイント実装
-* **堅牢性:** 欠落している依存関係（GPU/ONNX等）に対する優雅な退化（Graceful Degradation）の実装
-* **コンテナ化:** 本番デプロイ用の Docker テンプレート一式の提供
-* **分析機能:** 改善のための匿名利用テレメトリ（Opt-in方式）の導入
-* **操作性向上:** パワーユーザー向けのキーボードショートカット実装
+## 20 Phase 33: GUIメモリ再最適化 & テスト分離（実施計画）
 
-### 技術アプローチ
-* **マニュアル作成:** 実際のワークフローを網羅したガイドを `/docs/gui_guide.md` に作成
-* **監視API:** Workerの稼働状況とDB接続状態を返す `/health` エンドポイントを実装
-* **例外処理:** オプショナルなライブラリが不在でも、基本機能を損なわずに警告を表示する処理を追加
-* **デプロイ資産:** GUI環境を包含した `Dockerfile` および `docker-compose.yml` の作成
-* **メトリクス:** ジョブ数やタスクタイプ等の匿名データを収集するテレメトリ機能の実装
-* **UIショートカット:** `Ctrl + 1-4`（ページ移動）、`Ctrl + Enter`（ジョブ投入）などのナビゲーション実装
+### 要約
+- `src/veldra/gui/app.py` と `src/veldra/gui/services.py` の既存 lazy import を再固定し、
+  「cold import 時に重量モジュールを読まない」契約をテストで明文化する。
+- pytest の marker 運用を厳密化し、`gui_e2e` を常に `gui` に内包させる。
+- coverage 実行を `core` / `gui` の2段階手順として標準化する。
 
-### テスト要件
-1.  **ドキュメントレビュー:** 記述内容と最新のUI仕様に乖離がないかの完全性確認
-2.  **ヘルスチェック:** 異常（DBダウン、Worker停止）を正確に検知できるかの信頼性テスト
-3.  **スモークテスト:** Docker環境でコンテナ起動からジョブ完了まで一貫して動作するかの検証
-4.  **互換性テスト:** 最小構成の依存関係環境でシステムがクラッシュせずに動作するかの確認
-
-### 成功基準
-* 新規ユーザーが外部の助けを借りず、ガイドのみで一連の解析ワークフローを完遂できること
-* ヘルスエンドポイントがシステムの状態（正常・異常）を正確に報告すること
-* Dockerデプロイが設定変更なしで即座に動作すること
-* キーボードショートカットの導入により、パワーユーザーの操作効率が 20% 以上向上すること
-
----
-
-### 対象ファイル
-* `docs/gui_guide.md` - 新規ユーザーガイドドキュメントの作成
-* `src/veldra/gui/server.py` - ヘルスチェック用 API エンドポイントの実装
-* `Dockerfile`, `docker-compose.yml` - プロダクションデプロイ用設定ファイルの追加
-* `src/veldra/gui/app.py` - キーボードショートカットのイベント処理およびテレメトリ送信ロジック
-
-## 21 Phase 34: GUIメモリ再最適化 & テスト分離（提案）
-
-### Proposal
-- GUI adapter（`veldra.gui.app` / `veldra.gui.services`）で、重量級依存
-  （`veldra.api.runner`, `veldra.api.artifact`, `veldra.data`）の eager import を再度廃止し、
-  callback 実行時に遅延解決する。
-- pytest 側で GUI テストを `gui` marker で分離し、coverage 実行を
-  `core` と `gui` の2段階で実行可能にする。
-
-### 理由
-- GUI import だけで高いRSSを消費すると、`coverage run -m pytest` 実行時に
-  環境次第でOOMに到達しやすくなる。
-- テストを論理分離することで、メモリ制約環境でも再現性を維持した運用がしやすくなる。
+### 実施内容
+- 新規 `src/veldra/gui/_lazy_runtime.py` を追加し、`Artifact` / runner functions /
+  `load_tabular_data` の遅延解決ロジックを共通化する。
+- `src/veldra/gui/app.py` / `src/veldra/gui/services.py` は上記ヘルパーへ統一しつつ、
+  `Artifact`, `fit`, `evaluate` 等の monkeypatch 互換ポイントを維持する。
+- `tests/conftest.py` の収集ルールを更新し、`tests/e2e_playwright/*` または
+  `gui_e2e` marker を持つテストへ `gui` marker を必ず付与する。
+- 新規テストで `import veldra.gui.app` / `import veldra.gui.services` 直後に
+  `veldra.api.runner`, `veldra.api.artifact`, `veldra.data`, `lightgbm`, `optuna`, `sklearn`
+  が未ロードであることを検証する。
 
 ### 互換性方針
 - `veldra.api.*` の公開シグネチャは変更しない。
 - GUI機能契約（callback I/O、RunConfig共通入口）は維持する。
 
-## 22. Phase35: GUI改善
+### Definition of Done
+- cold import 契約テストが green。
+- `-m "not gui"` 実行時に Playwright E2E が収集対象から除外される。
+- README に core/gui 2段階 coverage 手順が反映される。
+
+### Decision（provisional）
+- 内容: Phase33 は「新規最適化」ではなく「既存 lazy import 契約の固定化 + marker分離の厳密化」を実施する。
+- 理由: 互換性を維持しながら OOM 再発リスクとテスト運用の曖昧さを低減するため。
+- 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`,
+  `tests/test_gui_lazy_import_contract.py`, `README.md`, `HISTORY.md`
+
+## 21. Phase34: GUI改善
 ### 目的
 - GUIのユーザビリティと安定性を向上させ、ユーザーがモデリング・チューニングプロセスをより直感的に理解し操作できるようにする。
 - 画面遷移が多すぎるため、ユーザビリティが悪化している。モデルの学習・評価を1画面で完結させ、必要に応じてモーダルやドロップダウンで詳細を表示する構成に変更する。

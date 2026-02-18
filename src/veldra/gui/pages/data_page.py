@@ -7,6 +7,11 @@ from dash import dcc, html
 
 from veldra.gui.components.kpi_cards import kpi_card
 
+try:
+    import dash_ag_grid as dag
+except Exception:  # pragma: no cover - optional dependency
+    dag = None
+
 
 def layout() -> html.Div:
     return html.Div(
@@ -67,6 +72,9 @@ def layout() -> html.Div:
                 type="dot",
                 children=[html.Div(id="data-inspection-result")],
             ),
+            dcc.Store(id="data-preview-page", data=0),
+            dcc.Store(id="data-preview-page-size", data=200),
+            dcc.Store(id="data-preview-total", data=0),
         ]
     )
 
@@ -155,10 +163,77 @@ def render_data_stats(stats: dict) -> html.Div:
 
 def render_data_preview(preview: list[dict]) -> html.Div:
     """Render data preview table."""
+    columns = list(preview[0].keys()) if preview else []
+    if dag is not None:
+        return html.Div(
+            [
+                html.H4("Data Preview", className="mb-3 mt-4"),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Input(
+                                id="data-preview-columns",
+                                placeholder="Columns (comma separated, optional)",
+                            ),
+                            width=6,
+                        ),
+                        dbc.Col(
+                            dbc.Select(
+                                id="data-preview-page-size-select",
+                                options=[
+                                    {"label": "100", "value": 100},
+                                    {"label": "200", "value": 200},
+                                    {"label": "500", "value": 500},
+                                ],
+                                value=200,
+                            ),
+                            width=2,
+                        ),
+                        dbc.Col(
+                            html.Div(
+                                id="data-preview-page-info",
+                                className="small text-muted mt-2",
+                            ),
+                            width=2,
+                        ),
+                        dbc.Col(
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        "Prev",
+                                        id="data-preview-prev-btn",
+                                        size="sm",
+                                        color="secondary",
+                                        outline=True,
+                                        className="me-1",
+                                    ),
+                                    dbc.Button(
+                                        "Next",
+                                        id="data-preview-next-btn",
+                                        size="sm",
+                                        color="secondary",
+                                        outline=True,
+                                    ),
+                                ]
+                            ),
+                            width=2,
+                        ),
+                    ],
+                    className="g-2 mb-2",
+                ),
+                dag.AgGrid(
+                    id="data-preview-grid",
+                    rowData=preview,
+                    columnDefs=[{"field": col, "headerName": col} for col in columns],
+                    defaultColDef={"resizable": True, "sortable": True, "filter": True},
+                    className="ag-theme-alpine-dark",
+                    style={"height": "420px", "width": "100%"},
+                ),
+            ],
+            className="glass-card",
+        )
     if not preview:
         return html.Div()
-
-    columns = list(preview[0].keys())
     header = html.Thead(
         html.Tr(
             [

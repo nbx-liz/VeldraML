@@ -134,7 +134,15 @@ def test_04_run_page_submission(mock_submit_run):
 
     # config_path_state fallback logic
     res = _cb_enqueue_run_job(
-        1, "train", "yaml...", "configs/gui_run.yaml", "data.csv", "artifacts", None, "zip"
+        1,
+        "train",
+        "yaml...",
+        "configs/gui_run.yaml",
+        "data.csv",
+        "artifacts",
+        None,
+        "zip",
+        "normal",
     )
 
     assert "[QUEUED]" in res

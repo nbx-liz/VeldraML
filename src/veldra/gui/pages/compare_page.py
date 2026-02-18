@@ -14,17 +14,22 @@ def layout() -> html.Div:
                 [
                     dbc.Col(
                         [
-                            html.Label("Run A"),
-                            dbc.Select(id="compare-artifact-a", options=[]),
+                            html.Label("Artifacts (max 5)"),
+                            dcc.Dropdown(
+                                id="compare-artifacts",
+                                options=[],
+                                multi=True,
+                                placeholder="Select artifacts...",
+                            ),
                         ],
-                        width=6,
+                        width=9,
                     ),
                     dbc.Col(
                         [
-                            html.Label("Run B"),
-                            dbc.Select(id="compare-artifact-b", options=[]),
+                            html.Label("Baseline"),
+                            dbc.Select(id="compare-baseline", options=[]),
                         ],
-                        width=6,
+                        width=3,
                     ),
                 ],
                 className="mb-3",
@@ -34,9 +39,10 @@ def layout() -> html.Div:
                 id="compare-metrics-table",
                 columns=[
                     {"name": "metric", "id": "metric"},
-                    {"name": "run_a", "id": "run_a"},
-                    {"name": "run_b", "id": "run_b"},
-                    {"name": "delta", "id": "delta"},
+                    {"name": "artifact", "id": "artifact"},
+                    {"name": "value", "id": "value"},
+                    {"name": "baseline", "id": "baseline"},
+                    {"name": "delta_from_baseline", "id": "delta_from_baseline"},
                 ],
                 data=[],
                 page_size=12,

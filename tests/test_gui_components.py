@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dash_bootstrap_components as dbc
+import pandas as pd
 import plotly.graph_objs as go
 from dash import html
 
@@ -87,3 +88,43 @@ def test_toast_variants_and_container() -> None:
     assert isinstance(warning, dbc.Toast)
     assert danger.icon == "danger"
     assert warning.icon == "warning"
+
+
+def test_new_phase31_chart_helpers() -> None:
+    fold_fig = charts.plot_fold_metric_timeline(
+        pd.DataFrame({"fold": [1, 2, 3], "rmse": [0.9, 0.8, 0.7], "mae": [0.4, 0.3, 0.2]})
+    )
+    assert isinstance(fold_fig, go.Figure)
+    assert len(fold_fig.data) >= 1
+
+    fold_empty = charts.plot_fold_metric_timeline(pd.DataFrame({"x": [1]}))
+    assert isinstance(fold_empty, go.Figure)
+
+    causal_fig = charts.plot_causal_smd(
+        {"smd_max_unweighted": 0.2, "smd_max_weighted": 0.08, "overlap_metric": 0.7}
+    )
+    assert isinstance(causal_fig, go.Figure)
+    assert len(causal_fig.data) == 2
+
+    compare_fig = charts.plot_multi_artifact_comparison(
+        [
+            {
+                "metric": "auc",
+                "artifact": "a",
+                "delta_from_baseline": 0.1,
+            },
+            {
+                "metric": "auc",
+                "artifact": "b",
+                "delta_from_baseline": 0.0,
+            },
+        ]
+    )
+    assert isinstance(compare_fig, go.Figure)
+    assert len(compare_fig.data) == 2
+
+    obs = pd.DataFrame({"f_num": [1.0, 2.0, 3.0], "f_cat": ["x", "x", "y"]})
+    drill_num = charts.plot_feature_drilldown(obs, "f_num")
+    assert isinstance(drill_num, go.Figure)
+    drill_cat = charts.plot_feature_drilldown(obs, "f_cat")
+    assert isinstance(drill_cat, go.Figure)

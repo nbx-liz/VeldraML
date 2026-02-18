@@ -28,8 +28,14 @@ def test_update_result_extras_error_branch(monkeypatch) -> None:
         "Artifact",
         SimpleNamespace(load=lambda _p: (_ for _ in ()).throw(RuntimeError("boom"))),
     )
-    fig, cfg, summary = app_module._cb_update_result_extras("artifacts/x")
-    assert hasattr(fig, "to_dict")
+    curve, fold, causal, opts, drill, cfg, summary = app_module._cb_update_result_extras(
+        "artifacts/x"
+    )
+    assert hasattr(curve, "to_dict")
+    assert hasattr(fold, "to_dict")
+    assert hasattr(causal, "to_dict")
+    assert opts == []
+    assert hasattr(drill, "to_dict")
     assert "Error" in cfg
     assert "Error" in summary
 
@@ -85,11 +91,16 @@ def test_result_shortcut_highlight_export_and_non_results() -> None:
         {"results_shortcut_focus": "export"}, "/results"
     )[1].endswith("border border-warning")
     non_results = app_module._cb_result_shortcut_highlight({}, "/run")
-    assert non_results == ("w-100 mb-3", "me-2 result-export-btn", "me-2 result-export-btn")
+    assert non_results == (
+        "w-100 mb-3",
+        "me-2 result-export-btn",
+        "me-2 result-export-btn",
+        "me-2 result-export-btn",
+    )
 
 
 def test_result_export_actions_and_polling_branches(monkeypatch, tmp_path) -> None:
-    no_art = app_module._cb_result_export_actions(1, 0, None)
+    no_art = app_module._cb_result_export_actions(1, 0, 0, None)
     assert "Select an artifact" in no_art[0]
 
     monkeypatch.setattr(app_module, "submit_run_job", lambda _inv: SimpleNamespace(job_id="job-1"))
@@ -100,7 +111,7 @@ def test_result_export_actions_and_polling_branches(monkeypatch, tmp_path) -> No
             return []
 
     monkeypatch.setattr(app_module, "callback_context", _NoTriggered())
-    started = app_module._cb_result_export_actions(1, 0, "artifacts/a")
+    started = app_module._cb_result_export_actions(1, 0, 0, "artifacts/a")
     assert "生成中" in started[0]
     assert started[1] == {"job_id": "job-1", "action": "export_excel"}
 
@@ -109,7 +120,7 @@ def test_result_export_actions_and_polling_branches(monkeypatch, tmp_path) -> No
         "submit_run_job",
         lambda _inv: (_ for _ in ()).throw(RuntimeError("submit failed")),
     )
-    failed = app_module._cb_result_export_actions(1, 0, "artifacts/a")
+    failed = app_module._cb_result_export_actions(1, 0, 0, "artifacts/a")
     assert failed[0].startswith("[ERROR]")
 
     assert app_module._cb_poll_result_export_job(1, None) == (

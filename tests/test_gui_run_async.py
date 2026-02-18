@@ -5,6 +5,7 @@ from veldra.gui.services import (
     cancel_run_job,
     get_run_job,
     list_run_jobs,
+    retry_run_job,
     set_gui_runtime,
     stop_gui_runtime,
     submit_run_job,
@@ -42,4 +43,9 @@ def test_submit_list_get_cancel_job(tmp_path) -> None:
     updated = get_run_job(submitted.job_id)
     assert updated is not None
     assert updated.status == "canceled"
+    retried = retry_run_job(submitted.job_id)
+    assert retried.status == "queued"
+    retried_job = get_run_job(retried.job_id)
+    assert retried_job is not None
+    assert retried_job.retry_parent_job_id == submitted.job_id
     stop_gui_runtime()

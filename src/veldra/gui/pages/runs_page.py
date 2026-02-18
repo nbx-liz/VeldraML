@@ -51,6 +51,49 @@ def layout() -> html.Div:
                 ],
                 className="mb-3",
             ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.Select(
+                            id="runs-page-size",
+                            options=[
+                                {"label": "25", "value": 25},
+                                {"label": "50", "value": 50},
+                                {"label": "100", "value": 100},
+                            ],
+                            value=50,
+                        ),
+                        width=2,
+                    ),
+                    dbc.Col(
+                        html.Div(id="runs-page-info", className="small text-muted mt-2"),
+                        width=4,
+                    ),
+                    dbc.Col(
+                        html.Div(
+                            [
+                                dbc.Button(
+                                    "Prev",
+                                    id="runs-page-prev-btn",
+                                    size="sm",
+                                    color="secondary",
+                                    outline=True,
+                                    className="me-1",
+                                ),
+                                dbc.Button(
+                                    "Next",
+                                    id="runs-page-next-btn",
+                                    size="sm",
+                                    color="secondary",
+                                    outline=True,
+                                ),
+                            ]
+                        ),
+                        width=2,
+                    ),
+                ],
+                className="mb-2 g-2",
+            ),
             dash_table.DataTable(
                 id="runs-table",
                 columns=[
@@ -66,9 +109,11 @@ def layout() -> html.Div:
                 ],
                 data=[],
                 row_selectable="multi",
-                page_size=12,
+                page_size=50,
                 style_table={"overflowX": "auto"},
             ),
+            dcc.Store(id="runs-page", data=0),
+            dcc.Store(id="runs-total", data=0),
             dcc.Store(id="runs-selection-store"),
             dbc.Row(
                 [

@@ -32,6 +32,15 @@ def layout() -> html.Div:
                     ),
                     dbc.Col(
                         dbc.Button(
+                            "Export PDF Report",
+                            id="result-export-pdf-btn",
+                            color="secondary",
+                            className="me-2 result-export-btn",
+                        ),
+                        width="auto",
+                    ),
+                    dbc.Col(
+                        dbc.Button(
                             "Download Config",
                             id="result-download-config-btn",
                             color="info",
@@ -53,6 +62,9 @@ def layout() -> html.Div:
                 n_intervals=0,
                 disabled=True,
             ),
+            dcc.Store(id="artifact-page", data=0),
+            dcc.Store(id="artifact-page-size", data=50),
+            dcc.Store(id="artifact-total", data=0),
             # Artifact Selection
             html.Div(
                 [
@@ -86,6 +98,59 @@ def layout() -> html.Div:
                                                 color="secondary",
                                             ),
                                         ]
+                                    ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.Input(
+                                                    id="artifact-search",
+                                                    placeholder="Search run_id / task_type",
+                                                ),
+                                                width=6,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Select(
+                                                    id="artifact-page-size-select",
+                                                    options=[
+                                                        {"label": "25", "value": 25},
+                                                        {"label": "50", "value": 50},
+                                                        {"label": "100", "value": 100},
+                                                    ],
+                                                    value=50,
+                                                ),
+                                                width=2,
+                                            ),
+                                            dbc.Col(
+                                                html.Div(
+                                                    id="artifact-page-info",
+                                                    className="small text-muted mt-2",
+                                                ),
+                                                width=2,
+                                            ),
+                                            dbc.Col(
+                                                html.Div(
+                                                    [
+                                                        dbc.Button(
+                                                            "Prev",
+                                                            id="artifact-page-prev-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                            className="me-1",
+                                                        ),
+                                                        dbc.Button(
+                                                            "Next",
+                                                            id="artifact-page-next-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                        ),
+                                                    ]
+                                                ),
+                                                width=2,
+                                            ),
+                                        ],
+                                        className="g-2 mt-2",
                                     ),
                                 ],
                                 width=4,
@@ -167,6 +232,60 @@ def layout() -> html.Div:
                                                     ),
                                                     label="Learning Curves",
                                                     tab_id="tab-learning-curves",
+                                                ),
+                                                dbc.Tab(
+                                                    dcc.Graph(
+                                                        id="result-fold-metrics",
+                                                        style={"height": "400px"},
+                                                    ),
+                                                    label="Fold Metrics",
+                                                    tab_id="tab-fold-metrics",
+                                                ),
+                                                dbc.Tab(
+                                                    dcc.Graph(
+                                                        id="result-causal-diagnostics",
+                                                        style={"height": "400px"},
+                                                    ),
+                                                    label="Causal Diagnostics",
+                                                    tab_id="tab-causal-diagnostics",
+                                                ),
+                                                dbc.Tab(
+                                                    html.Div(
+                                                        [
+                                                            dbc.Row(
+                                                                [
+                                                                    dbc.Col(
+                                                                        dcc.Dropdown(
+                                                                            id="result-drilldown-feature",
+                                                                            options=[],
+                                                                            placeholder=(
+                                                                                "Select feature"
+                                                                            ),
+                                                                        ),
+                                                                        width=8,
+                                                                    ),
+                                                                    dbc.Col(
+                                                                        dbc.Input(
+                                                                            id="result-drilldown-topn",
+                                                                            type="number",
+                                                                            min=1,
+                                                                            max=100,
+                                                                            step=1,
+                                                                            value=20,
+                                                                        ),
+                                                                        width=4,
+                                                                    ),
+                                                                ],
+                                                                className="mb-2",
+                                                            ),
+                                                            dcc.Graph(
+                                                                id="result-feature-drilldown",
+                                                                style={"height": "330px"},
+                                                            ),
+                                                        ]
+                                                    ),
+                                                    label="Feature Drilldown",
+                                                    tab_id="tab-feature-drilldown",
                                                 ),
                                                 dbc.Tab(
                                                     html.Pre(

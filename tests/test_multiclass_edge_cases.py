@@ -66,9 +66,9 @@ def test_multiclass_fit_with_many_classes(tmp_path) -> None:
 def test_multiclass_low_frequency_class_with_stratified_split_is_supported(tmp_path) -> None:
     frame = pd.DataFrame(
         {
-            "x1": np.linspace(0.0, 1.0, 17),
-            "x2": np.linspace(1.0, 0.0, 17),
-            "target": ["a"] * 8 + ["b"] * 8 + ["rare"],
+            "x1": np.linspace(0.0, 1.0, 19),
+            "x2": np.linspace(1.0, 0.0, 19),
+            "target": ["a"] * 8 + ["b"] * 8 + ["rare"] * 3,
         }
     )
     path = tmp_path / "multiclass_low_frequency.csv"

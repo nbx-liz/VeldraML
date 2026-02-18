@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import numpy as np
@@ -60,6 +60,7 @@ from veldra.modeling import (
 from veldra.simulate import apply_scenario, build_simulation_frame, normalize_scenarios
 
 LOGGER = logging.getLogger("veldra")
+CancelHook = Callable[[], None] | None
 
 _LOG_LEVEL_MAP: dict[str, int] = {
     "DEBUG": logging.DEBUG,
@@ -84,7 +85,12 @@ def _ensure_config(config: RunConfig | dict[str, Any]) -> RunConfig:
         raise VeldraValidationError(f"Invalid RunConfig: {exc}") from exc
 
 
-def fit(config: RunConfig | dict[str, Any]) -> RunResult:
+def _invoke_cancel_hook(cancellation_hook: CancelHook) -> None:
+    if cancellation_hook is not None:
+        cancellation_hook()
+
+
+def fit(config: RunConfig | dict[str, Any], *, cancellation_hook: CancelHook = None) -> RunResult:
     """Train a model and persist an artifact.
 
     Parameters
@@ -105,6 +111,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         If the configuration is invalid or required fields are missing.
     """
     parsed = _ensure_config(config)
+    _invoke_cancel_hook(cancellation_hook)
     if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraNotImplementedError(
             "fit is currently implemented only for task.type='regression', 'binary', "
@@ -114,6 +121,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         raise VeldraValidationError("data.path is required for fit.")
 
     frame = load_tabular_data(parsed.data.path)
+    _invoke_cancel_hook(cancellation_hook)
     if parsed.task.type == "regression":
         training_output = train_regression_with_cv(config=parsed, data=frame)
     elif parsed.task.type == "binary":
@@ -137,9 +145,11 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
         threshold=getattr(training_output, "threshold", None),
         threshold_curve=getattr(training_output, "threshold_curve", None),
         training_history=getattr(training_output, "training_history", None),
+        fold_metrics=getattr(training_output, "cv_results", None),
         observation_table=getattr(training_output, "observation_table", None),
     )
     artifact.save(artifact_path)
+    _invoke_cancel_hook(cancellation_hook)
     log_event(
         LOGGER,
         logging.INFO,
@@ -169,7 +179,7 @@ def fit(config: RunConfig | dict[str, Any]) -> RunResult:
     )
 
 
-def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
+def tune(config: RunConfig | dict[str, Any], *, cancellation_hook: CancelHook = None) -> TuneResult:
     """Run Optuna-based hyperparameter tuning.
 
     Parameters
@@ -189,6 +199,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
         configuration fields are missing.
     """
     parsed = _ensure_config(config)
+    _invoke_cancel_hook(cancellation_hook)
     if parsed.task.type not in {"regression", "binary", "multiclass", "frontier"}:
         raise VeldraValidationError(f"Unsupported task type for tune: '{parsed.task.type}'.")
     if not parsed.tuning.enabled:
@@ -202,6 +213,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     optuna.logging.set_verbosity(_OPTUNA_LOG_LEVEL_MAP[parsed.tuning.log_level])
 
     frame = load_tabular_data(parsed.data.path)
+    _invoke_cancel_hook(cancellation_hook)
     run_id = uuid4().hex
     study_name = build_study_name(parsed)
     tuning_path = Path(parsed.export.artifact_dir) / "tuning" / study_name
@@ -228,6 +240,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     )
 
     def _trial_progress(payload: dict[str, Any]) -> None:
+        _invoke_cancel_hook(cancellation_hook)
         log_event(
             LOGGER,
             log_level,
@@ -248,6 +261,7 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
         output_dir=tuning_path,
         on_trial_complete=_trial_progress,
     )
+    _invoke_cancel_hook(cancellation_hook)
 
     log_event(
         LOGGER,
@@ -294,7 +308,11 @@ def tune(config: RunConfig | dict[str, Any]) -> TuneResult:
     )
 
 
-def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
+def estimate_dr(
+    config: RunConfig | dict[str, Any],
+    *,
+    cancellation_hook: CancelHook = None,
+) -> CausalResult:
     """Estimate causal effects with DR or DR-DiD.
 
     Parameters
@@ -316,6 +334,7 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
         If causal configuration, input data, or required columns are invalid.
     """
     parsed = _ensure_config(config)
+    _invoke_cancel_hook(cancellation_hook)
     if parsed.causal is None:
         raise VeldraValidationError("causal configuration is required for estimate_dr().")
     if parsed.causal.method == "dr":
@@ -334,6 +353,7 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
         raise VeldraValidationError("data.path is required for estimate_dr().")
 
     frame = load_tabular_data(parsed.data.path)
+    _invoke_cancel_hook(cancellation_hook)
     run_id = uuid4().hex
     output_dir = Path(parsed.export.artifact_dir) / "causal" / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -342,6 +362,7 @@ def estimate_dr(config: RunConfig | dict[str, Any]) -> CausalResult:
         estimation = run_dr_estimation(parsed, frame)
     else:
         estimation = run_dr_did_estimation(parsed, frame)
+    _invoke_cancel_hook(cancellation_hook)
     summary_path = output_dir / "dr_summary.json"
     obs_path = output_dir / "dr_observation_table.parquet"
     manifest_path = output_dir / "manifest.json"
@@ -444,6 +465,7 @@ def _build_ephemeral_artifact_from_config(config: RunConfig) -> Artifact:
         calibration_curve=getattr(training_output, "calibration_curve", None),
         threshold=getattr(training_output, "threshold", None),
         threshold_curve=getattr(training_output, "threshold_curve", None),
+        fold_metrics=getattr(training_output, "cv_results", None),
         observation_table=getattr(training_output, "observation_table", None),
     )
 

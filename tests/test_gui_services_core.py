@@ -78,6 +78,11 @@ def test_normalize_gui_error_variants() -> None:
     assert "Artifact error" in services.normalize_gui_error(VeldraArtifactError("x"))
     assert "Not implemented" in services.normalize_gui_error(VeldraNotImplementedError("x"))
     assert "RuntimeError" in services.normalize_gui_error(RuntimeError("x"))
+    assert services.classify_gui_error(VeldraValidationError("x")) == "validation"
+    assert services.classify_gui_error(FileNotFoundError("x")) == "file_not_found"
+    assert services.classify_gui_error(PermissionError("x")) == "permission"
+    assert services.classify_gui_error(TimeoutError("x")) == "timeout"
+    assert services.classify_gui_error(RuntimeError("database is locked")) == "resource_busy"
 
 
 def test_run_action_missing_required_inputs() -> None:

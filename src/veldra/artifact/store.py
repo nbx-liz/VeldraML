@@ -28,6 +28,7 @@ def save_artifact(
     threshold: dict[str, Any] | None = None,
     threshold_curve: pd.DataFrame | None = None,
     training_history: dict[str, Any] | None = None,
+    fold_metrics: pd.DataFrame | None = None,
     observation_table: pd.DataFrame | None = None,
 ) -> None:
     artifact_dir = Path(path)
@@ -66,6 +67,8 @@ def save_artifact(
             json.dumps(training_history, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+    if fold_metrics is not None:
+        fold_metrics.to_parquet(artifact_dir / "fold_metrics.parquet", index=False)
     if observation_table is not None:
         observation_table.to_parquet(artifact_dir / "observation_table.parquet", index=False)
 
@@ -99,6 +102,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         "threshold": None,
         "threshold_curve": None,
         "training_history": None,
+        "fold_metrics": None,
         "observation_table": None,
     }
     model_path = artifact_dir / "model.lgb.txt"
@@ -109,6 +113,7 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
     threshold_path = artifact_dir / "threshold.json"
     threshold_curve_path = artifact_dir / "threshold_curve.csv"
     training_history_path = artifact_dir / "training_history.json"
+    fold_metrics_path = artifact_dir / "fold_metrics.parquet"
     observation_table_path = artifact_dir / "observation_table.parquet"
     if model_path.exists():
         extras["model_text"] = model_path.read_text(encoding="utf-8")
@@ -126,6 +131,8 @@ def load_artifact(path: str | Path) -> tuple[RunConfig, Manifest, dict[str, Any]
         extras["threshold_curve"] = pd.read_csv(threshold_curve_path)
     if training_history_path.exists():
         extras["training_history"] = json.loads(training_history_path.read_text(encoding="utf-8"))
+    if fold_metrics_path.exists():
+        extras["fold_metrics"] = pd.read_parquet(fold_metrics_path)
     if observation_table_path.exists():
         extras["observation_table"] = pd.read_parquet(observation_table_path)
 

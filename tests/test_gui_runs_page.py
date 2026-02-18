@@ -6,7 +6,7 @@ import pytest
 
 from veldra.gui import app as app_module
 from veldra.gui.pages import runs_page
-from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+from veldra.gui.types import GuiJobRecord, GuiRunResult, PaginatedResult, RunInvocation
 
 _DASH_AVAILABLE = (
     importlib.util.find_spec("dash") is not None
@@ -49,12 +49,27 @@ def test_runs_layout_has_controls() -> None:
     assert "runs-compare-btn" in ids
     assert "runs-delete-btn" in ids
     assert "runs-feedback" in ids
+    assert "runs-page" in ids
+    assert "runs-total" in ids
+    assert "runs-page-size" in ids
 
 
 def test_refresh_runs_table(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "list_run_jobs_filtered", lambda **_k: [_job("a1"), _job("b2")])
-    rows = app_module._cb_refresh_runs_table(1, "/runs", "", "", "")
+    monkeypatch.setattr(
+        app_module,
+        "list_run_jobs_page",
+        lambda **_k: PaginatedResult(
+            items=[_job("a1"), _job("b2")],
+            total_count=2,
+            limit=50,
+            offset=0,
+        ),
+    )
+    rows, page, total, info = app_module._cb_refresh_runs_table(1, "/runs", "", "", "")
     assert len(rows) == 2
+    assert page == 0
+    assert total == 2
+    assert "2" in info
     assert rows[0]["job_id"] == "a1"
     assert rows[0]["created_at_utc"].endswith("JST")
     assert rows[0]["started_at_utc"] == "n/a"
