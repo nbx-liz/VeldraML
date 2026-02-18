@@ -1534,3 +1534,23 @@
 - `uv run ruff check src/veldra/modeling/_cv_runner.py src/veldra/modeling/regression.py src/veldra/modeling/binary.py src/veldra/modeling/multiclass.py src/veldra/modeling/frontier.py tests/test_phase267_output_parity.py` を通過。
 - `uv run pytest -q tests/test_regression_internal.py tests/test_binary_internal.py tests/test_multiclass_internal.py tests/test_frontier_internal.py tests/test_observation_table.py tests/test_training_history.py tests/test_top_k_precision.py tests/test_num_boost_round.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py tests/test_phase267_output_parity.py tests/test_early_stopping_validation.py` を実施（`48 passed`）。
 - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`704 passed, 11 deselected`）。
+
+### 2026-02-18（作業/PR: docs-blueprint-compression-before-phase26-7）
+**背景**
+- `DESIGN_BLUEPRINT.md` の `Phase26.7` 以前（特に 13.3〜13.6）が詳細仕様中心で肥大化し、現行設計の参照コストが高くなっていた。
+- 詳細な時系列・検証実績は `HISTORY.md` に既に保持されているため、Blueprint 側は要約へ寄せる余地があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `## 10`〜`## 13.6` を圧縮し、重要契約（互換性、Decision要点、成果物）を残した要約版へ再編。
+- 冗長な詳細（対象ファイル一覧、実装ステップ詳細、個別テストコマンド群）は削減し、参照先を `HISTORY.md` に統一。
+- 冒頭の最終更新日を `2026-02-18` に更新し、Phase要約の進捗表記（26.1/26.2/26.4）を完了状態へ整合。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Blueprint は「現時点の設計状態を短く示す文書」として維持し、Phase23〜26.6 の詳細は `HISTORY.md` を一次情報源とする。
+  - 理由: 重要情報を保持したまま、設計参照とレビュー時の認知負荷を下げるため。
+  - 影響範囲: `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- ドキュメント整合性を目視確認（`## 13.6` から `## 13.7` への接続、見出し整合、更新日反映）。
+- コード変更なしのため、テスト実行は未実施。
