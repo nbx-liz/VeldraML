@@ -10,9 +10,31 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+from veldra.gui.types import GuiJobPriority, GuiJobRecord, GuiRunResult, RunInvocation
 
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
+_PRIORITY_TO_INT: dict[GuiJobPriority, int] = {"low": 10, "normal": 50, "high": 90}
+
+
+def _priority_to_int(priority: str | None) -> int:
+    key = str(priority or "normal").strip().lower()
+    if key == "low":
+        return _PRIORITY_TO_INT["low"]
+    if key == "high":
+        return _PRIORITY_TO_INT["high"]
+    return _PRIORITY_TO_INT["normal"]
+
+
+def _priority_from_int(value: Any) -> GuiJobPriority:
+    try:
+        score = int(value)
+    except Exception:
+        return "normal"
+    if score >= 80:
+        return "high"
+    if score <= 20:
+        return "low"
+    return "normal"
 
 
 def _utcnow_iso() -> str:
@@ -43,6 +65,7 @@ def _row_to_record(row: sqlite3.Row) -> GuiJobRecord:
         created_at_utc=str(row["created_at_utc"]),
         updated_at_utc=str(row["updated_at_utc"]),
         invocation=_decode_invocation(str(row["invocation_json"])),
+        priority=_priority_from_int(row["priority"]),
         cancel_requested=bool(int(row["cancel_requested"])),
         started_at_utc=(str(row["started_at_utc"]) if row["started_at_utc"] is not None else None),
         finished_at_utc=(
@@ -74,6 +97,7 @@ class GuiJobStore:
                     job_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
                     action TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 50,
                     created_at_utc TEXT NOT NULL,
                     updated_at_utc TEXT NOT NULL,
                     invocation_json TEXT NOT NULL,
@@ -85,8 +109,18 @@ class GuiJobStore:
                 )
                 """
             )
+            columns = conn.execute("PRAGMA table_info(jobs)").fetchall()
+            column_names = {str(row["name"]) for row in columns}
+            if "priority" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 50")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at_utc)"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_jobs_status_priority_created
+                ON jobs(status, priority DESC, created_at_utc ASC)
+                """
             )
 
     def enqueue_job(self, invocation: RunInvocation) -> GuiJobRecord:
@@ -96,16 +130,17 @@ class GuiJobStore:
             conn.execute(
                 """
                 INSERT INTO jobs(
-                    job_id, status, action, created_at_utc, updated_at_utc,
+                    job_id, status, action, priority, created_at_utc, updated_at_utc,
                     invocation_json, cancel_requested, started_at_utc, finished_at_utc,
                     result_json, error_message
                 )
-                VALUES(?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
+                VALUES(?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
                 """,
                 (
                     job_id,
                     "queued",
                     invocation.action.strip().lower(),
+                    _priority_to_int(invocation.priority),
                     now,
                     now,
                     json.dumps(asdict(invocation), ensure_ascii=False),
@@ -164,7 +199,12 @@ class GuiJobStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at_utc ASC LIMIT 1"
+                """
+                SELECT * FROM jobs
+                WHERE status = 'queued'
+                ORDER BY priority DESC, created_at_utc ASC
+                LIMIT 1
+                """
             ).fetchone()
             if row is None:
                 conn.execute("COMMIT")
@@ -179,6 +219,33 @@ class GuiJobStore:
                 WHERE job_id = ?
                 """,
                 (now, now, job_id),
+            )
+            conn.execute("COMMIT")
+        return self.get_job(job_id)
+
+    def set_job_priority(self, job_id: str, priority: str | GuiJobPriority) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            status = str(row["status"])
+            if status != "queued":
+                conn.execute("COMMIT")
+                raise ValueError(f"Priority can only be changed for queued jobs (status={status}).")
+            conn.execute(
+                """
+                UPDATE jobs
+                SET priority = ?,
+                    updated_at_utc = ?
+                WHERE job_id = ?
+                """,
+                (_priority_to_int(priority), now, job_id),
             )
             conn.execute("COMMIT")
         return self.get_job(job_id)

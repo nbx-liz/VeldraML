@@ -26,6 +26,7 @@ from veldra.config.models import RunConfig
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.types import (
     ArtifactSummary,
+    GuiJobPriority,
     GuiJobRecord,
     GuiJobResult,
     GuiRunResult,
@@ -788,6 +789,35 @@ def cancel_run_job(job_id: str) -> GuiJobResult:
         job_id=canceled.job_id,
         status=canceled.status,
         message=f"Job {canceled.job_id} status updated to {canceled.status}.",
+    )
+
+
+def set_run_job_priority(job_id: str, priority: str | GuiJobPriority) -> GuiJobResult:
+    normalized = str(priority).strip().lower()
+    if normalized not in {"low", "normal", "high"}:
+        raise VeldraValidationError(f"Unsupported priority: {priority}")
+    updated = get_gui_job_store().set_job_priority(
+        _require(job_id, "job_id"),
+        normalized,
+    )
+    if updated is None:
+        raise VeldraValidationError(f"Job not found: {job_id}")
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "gui job priority updated",
+        run_id=updated.job_id,
+        artifact_path=updated.invocation.artifact_path,
+        task_type=updated.action,
+        event="gui job priority updated",
+        status=updated.status,
+        action=updated.action,
+        priority=updated.priority,
+    )
+    return GuiJobResult(
+        job_id=updated.job_id,
+        status=updated.status,
+        message=f"Job {updated.job_id} priority updated to {updated.priority}.",
     )
 
 

@@ -172,6 +172,16 @@ def layout(state: dict | None = None) -> html.Div:
                                                         ],
                                                         value="python",
                                                     ),
+                                                    html.Label("Queue Priority", className="mt-2"),
+                                                    dbc.Select(
+                                                        id="run-priority",
+                                                        options=[
+                                                            {"label": "High", "value": "high"},
+                                                            {"label": "Normal", "value": "normal"},
+                                                            {"label": "Low", "value": "low"},
+                                                        ],
+                                                        value="normal",
+                                                    ),
                                                     html.Label(
                                                         "Config YAML Override", className="mt-2"
                                                     ),
@@ -311,6 +321,26 @@ def layout(state: dict | None = None) -> html.Div:
                                                 href="/results",
                                                 className="float-end",
                                                 style={"display": "none"},
+                                            ),
+                                        ],
+                                        className="mb-3",
+                                    ),
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.Select(
+                                                id="run-queue-priority",
+                                                options=[
+                                                    {"label": "High", "value": "high"},
+                                                    {"label": "Normal", "value": "normal"},
+                                                    {"label": "Low", "value": "low"},
+                                                ],
+                                                value="normal",
+                                            ),
+                                            dbc.Button(
+                                                "Set Priority",
+                                                id="run-set-priority-btn",
+                                                color="secondary",
+                                                size="sm",
                                             ),
                                         ],
                                         className="mb-3",

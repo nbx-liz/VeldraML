@@ -355,7 +355,9 @@ uv run python examples/run_demo_regression.py
   - GUI runtime env vars and SQLite path
 - Command example:
 ```bash
-VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3 uv run veldra-gui --host 127.0.0.1 --port 8050
+VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3 \
+VELDRA_GUI_WORKER_COUNT=2 \
+uv run veldra-gui --host 127.0.0.1 --port 8050 --worker-count 2
 ```
 - Success criteria:
   - async queue state is visible
@@ -611,12 +613,16 @@ Runtime environment options:
 ```bash
 # SQLite persistence path for async GUI jobs
 VELDRA_GUI_JOB_DB_PATH=.veldra_gui/jobs.sqlite3
+# Worker pool size for async GUI jobs (default: 1)
+VELDRA_GUI_WORKER_COUNT=1
 # Run page polling interval (milliseconds)
 VELDRA_GUI_POLL_MS=2000
 ```
 
 GUI run behavior:
 - `/run` enqueues jobs asynchronously and keeps history in SQLite.
+- `/run` supports queue priority (`high`/`normal`/`low`) and queued-job reprioritization.
+- Job scheduling is strict priority (`high > normal > low`, FIFO within same priority).
 - queued jobs can be canceled immediately.
 - running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
 - Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.

@@ -60,6 +60,7 @@ from veldra.gui.services import (
     migrate_config_from_yaml,
     normalize_gui_error,
     save_config_yaml,
+    set_run_job_priority,
     submit_run_job,
     validate_config,
 )
@@ -1118,6 +1119,7 @@ def create_app() -> dash.Dash:
         State("run-artifact-path", "value"),
         State("run-scenarios-path", "value"),
         State("run-export-format", "value"),
+        State("run-priority", "value"),
         prevent_initial_call=True,
     )(_cb_enqueue_run_job)
 
@@ -1153,6 +1155,14 @@ def create_app() -> dash.Dash:
         State("run-job-select", "data"),
         prevent_initial_call=True,
     )(_cb_cancel_job)
+
+    app.callback(
+        Output("run-result-log", "children", allow_duplicate=True),
+        Input("run-set-priority-btn", "n_clicks"),
+        State("run-job-select", "data"),
+        State("run-queue-priority", "value"),
+        prevent_initial_call=True,
+    )(_cb_set_job_priority)
 
     # --- Results Page Callbacks ---
     app.callback(
@@ -2606,6 +2616,7 @@ def _cb_enqueue_run_job(
     artifact_path: str,
     scenarios_path: str,
     export_format: str,
+    priority: str,
 ) -> str:
     try:
         c_path = _ensure_default_run_config(config_path_state or "configs/gui_run.yaml")
@@ -2620,6 +2631,7 @@ def _cb_enqueue_run_job(
                 artifact_path=artifact_path,
                 scenarios_path=scenarios_path,
                 export_format=export_format,
+                priority=str(priority or "normal"),
             )
         )
         return f"[QUEUED] {result.message} (Job ID: {result.job_id})"
@@ -2636,6 +2648,13 @@ def _cb_refresh_run_jobs(
     batch_mode: list,
 ) -> tuple[html.Div, Any, dict, dict, str]:
     jobs = list_run_jobs(limit=100)
+    priority_rank = {"high": 0, "normal": 1, "low": 2}
+    queued_jobs = [
+        job for job in jobs if job.status == "queued"
+    ]
+    queued_jobs.sort(key=lambda job: (priority_rank.get(job.priority, 1), job.created_at_utc))
+    non_queued_jobs = [job for job in jobs if job.status != "queued"]
+    jobs = queued_jobs + non_queued_jobs
 
     new_status = {}
     toast = dash.no_update
@@ -2668,6 +2687,7 @@ def _cb_refresh_run_jobs(
         {
             "job_id": job.job_id,
             "action": job.action,
+            "priority": job.priority.upper(),
             "status": _status_badge(job.status),
             "created_at_utc": _format_jst_timestamp(job.created_at_utc),
             "id": job.job_id,
@@ -2716,6 +2736,13 @@ def _cb_show_selected_job_detail(
                     job.status.upper(),
                     className=f"badge bg-{status_color}",
                 ),
+            ],
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Span("Priority: ", className="fw-bold"),
+                html.Span(job.priority.upper()),
             ],
             className="mb-2",
         ),
@@ -2773,6 +2800,16 @@ def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:
         return f"[INFO] {result.message}"
     except Exception as exc:
         return f"[ERROR] {str(exc)}"
+
+
+def _cb_set_job_priority(_n_clicks: int, job_id: str | None, priority: str | None) -> str:
+    if not job_id:
+        return "[ERROR] Select a queued job first."
+    try:
+        result = set_run_job_priority(job_id, str(priority or "normal"))
+        return f"[INFO] {result.message}"
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}"
 
 
 def _cb_list_artifacts(

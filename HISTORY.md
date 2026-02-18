@@ -1554,3 +1554,34 @@
 **検証結果**
 - ドキュメント整合性を目視確認（`## 13.6` から `## 13.7` への接続、見出し整合、更新日反映）。
 - コード変更なしのため、テスト実行は未実施。
+
+### 2026-02-18（作業/PR: phase27-priority-queue-worker-pool）
+**背景**
+- GUI ジョブキューは single worker + FIFO で運用しており、優先度制御と並列実行が未対応だった。
+- queued ジョブの実運用上の順序変更手段がなく、重要ジョブを先行させる手段が必要だった。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase27 は strict priority（`high=90`, `normal=50`, `low=10`）を採用し、queued 並び替えは priority 変更操作で実現する。
+  - 理由: 既存契約を壊さず最小変更で制御性とスループットを向上できるため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,worker.py,server.py,services.py,app.py,pages/run_page.py,components/task_table.py}`, `tests/test_gui_*`, `tests/e2e_playwright/test_uc01_regression_flow.py`, `DESIGN_BLUEPRINT.md`
+- Decision: confirmed（確定）
+  - 内容: strict priority + worker pool + queued reprioritize UI を実装し、既定 `worker_count=1` の後方互換を維持した。
+  - 理由: スループットと運用制御を改善しつつ、既存GUI契約と安定動作を維持できたため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,worker.py,server.py,services.py,app.py,pages/run_page.py,components/task_table.py}`, `tests/test_gui_job_store.py`, `tests/test_gui_worker_pool.py`, `tests/test_gui_server.py`, `tests/test_gui_run_page.py`, `tests/test_gui_pages_and_init.py`, `tests/test_gui_app_job_flow.py`, `tests/test_new_ux.py`, `tests/test_gui_services_edge_cases.py`, `tests/e2e_playwright/test_uc01_regression_flow.py`, `README.md`, `DESIGN_BLUEPRINT.md`
+
+**変更内容**
+- `RunInvocation` / `GuiJobRecord` に `priority` を追加（`low|normal|high`, default `normal`）。
+- `GuiJobStore` に priority 列 migration（`PRAGMA table_info` + `ALTER TABLE`）と `(status, priority DESC, created_at_utc ASC)` インデックスを追加。
+- `claim_next_job()` を `ORDER BY priority DESC, created_at_utc ASC` へ変更し、`set_job_priority()`（queued限定）を実装。
+- `GuiWorkerPool` を追加し、`GuiWorker` 複数管理による並列実行と graceful shutdown を実装。
+- `veldra-gui` に `--worker-count` / `VELDRA_GUI_WORKER_COUNT` を追加し、起動ログに `worker_count` を記録。
+- Runページに `run-priority`（投入時）と `run-queue-priority` + `run-set-priority-btn`（queued再優先付け）を追加。
+- Runジョブテーブルに Priority 列を追加し、queued を priority順で表示。
+- `services.set_run_job_priority()` と `app._cb_set_job_priority()` を追加。
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/server.py src/veldra/gui/pages/run_page.py src/veldra/gui/components/task_table.py src/veldra/gui/app.py tests/test_gui_job_store.py tests/test_gui_worker_pool.py tests/test_gui_server.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_new_ux.py tests/test_gui_app_job_flow.py tests/test_gui_services_edge_cases.py tests/e2e_playwright/test_uc01_regression_flow.py README.md DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_server.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_job_flow.py tests/test_gui_services_edge_cases.py tests/test_gui_run_async.py tests/test_gui_app_callbacks_internal.py tests/test_new_ux.py` を実施（`41 passed`）。
+- `uv run pytest -q tests/e2e_playwright/test_uc01_regression_flow.py -m gui_e2e` を実施（`1 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`182 passed`）。

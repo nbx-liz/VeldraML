@@ -17,6 +17,7 @@ def task_table(id_prefix: str, data: list[dict[str, Any]]) -> html.Div:
                 columns=[
                     {"name": "Status", "id": "status", "presentation": "markdown"},
                     {"name": "Action", "id": "action"},
+                    {"name": "Priority", "id": "priority"},
                     {"name": "Created", "id": "created_at_utc"},
                     {"name": "Job ID", "id": "job_id"},
                 ],

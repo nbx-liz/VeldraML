@@ -16,9 +16,16 @@ LOGGER = logging.getLogger("veldra.gui.worker")
 class GuiWorker:
     """Single-worker loop that executes queued GUI jobs."""
 
-    def __init__(self, store: GuiJobStore, *, poll_interval_sec: float = 0.5) -> None:
+    def __init__(
+        self,
+        store: GuiJobStore,
+        *,
+        poll_interval_sec: float = 0.5,
+        worker_name: str | None = None,
+    ) -> None:
         self._store = store
         self._poll_interval_sec = max(0.05, float(poll_interval_sec))
+        self._worker_name = str(worker_name or "veldra-gui-worker")
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -32,7 +39,7 @@ class GuiWorker:
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
-            name="veldra-gui-worker",
+            name=self._worker_name,
             daemon=True,
         )
         self._thread.start()
@@ -107,3 +114,36 @@ class GuiWorker:
                     cancel_requested=updated.cancel_requested,
                 )
             time.sleep(0.001)
+
+
+class GuiWorkerPool:
+    """Manage a pool of GUI workers."""
+
+    def __init__(
+        self,
+        store: GuiJobStore,
+        *,
+        worker_count: int = 1,
+        poll_interval_sec: float = 0.5,
+    ) -> None:
+        safe_count = max(1, int(worker_count))
+        self._workers = [
+            GuiWorker(
+                store,
+                poll_interval_sec=poll_interval_sec,
+                worker_name=f"veldra-gui-worker-{idx + 1}",
+            )
+            for idx in range(safe_count)
+        ]
+
+    @property
+    def is_running(self) -> bool:
+        return any(worker.is_running for worker in self._workers)
+
+    def start(self) -> None:
+        for worker in self._workers:
+            worker.start()
+
+    def stop(self, *, timeout_sec: float = 2.0) -> None:
+        for worker in self._workers:
+            worker.stop(timeout_sec=timeout_sec)

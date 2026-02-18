@@ -22,7 +22,10 @@ def test_uc01_regression_navigation_flow(page, gui_base_url: str) -> None:
     assert_ids(page, ["train-learning-rate", "train-config-yaml-preview"])
 
     goto(page, gui_base_url, "/run")
-    assert_ids(page, ["run-action-display", "run-guardrail-container", "run-execute-btn"])
+    assert_ids(
+        page,
+        ["run-action-display", "run-guardrail-container", "run-execute-btn", "run-priority"],
+    )
 
     goto(page, gui_base_url, "/results")
     assert_ids(page, ["artifact-select", "artifact-evaluate-btn", "result-export-excel-btn"])

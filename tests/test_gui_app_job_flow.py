@@ -35,7 +35,9 @@ def test_enqueue_run_job_success_and_error(monkeypatch) -> None:
         "submit_run_job",
         lambda inv: SimpleNamespace(job_id="j1", message=f"queued {inv.action}"),
     )
-    msg = app_module._cb_enqueue_run_job(1, "fit", "a: 1", "cfg.yml", "data.csv", "", "", "python")
+    msg = app_module._cb_enqueue_run_job(
+        1, "fit", "a: 1", "cfg.yml", "data.csv", "", "", "python", "high"
+    )
     assert "[QUEUED]" in msg
 
     monkeypatch.setattr(
@@ -43,7 +45,9 @@ def test_enqueue_run_job_success_and_error(monkeypatch) -> None:
         "submit_run_job",
         lambda inv: (_ for _ in ()).throw(RuntimeError("enqueue fail")),
     )
-    msg2 = app_module._cb_enqueue_run_job(1, "fit", "a: 1", "cfg.yml", "data.csv", "", "", "python")
+    msg2 = app_module._cb_enqueue_run_job(
+        1, "fit", "a: 1", "cfg.yml", "data.csv", "", "", "python", "normal"
+    )
     assert "[ERROR]" in msg2
     assert "enqueue fail" in msg2
 
@@ -120,3 +124,13 @@ def test_cancel_job_result(monkeypatch) -> None:
     )
     out = app_module._cb_cancel_job(1, "j1")
     assert out.startswith("[ERROR]")
+
+
+def test_set_job_priority_result(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "set_run_job_priority",
+        lambda _job_id, _priority: SimpleNamespace(message="priority updated"),
+    )
+    assert app_module._cb_set_job_priority(1, "j1", "high") == "[INFO] priority updated"
+    assert app_module._cb_set_job_priority(1, None, "high").startswith("[ERROR]")

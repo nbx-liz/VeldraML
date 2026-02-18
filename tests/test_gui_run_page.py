@@ -39,17 +39,23 @@ def test_run_page_layout_defaults() -> None:
     assert "run-data-path" in ids
     assert "run-config-path" in ids
     assert "run-execute-btn" in ids
+    assert "run-priority" in ids
+    assert "run-queue-priority" in ids
+    assert "run-set-priority-btn" in ids
 
     data_input = _find_component_by_id(layout, "run-data-path")
     config_input = _find_component_by_id(layout, "run-config-path")
     execute_btn = _find_component_by_id(layout, "run-execute-btn")
+    run_priority = _find_component_by_id(layout, "run-priority")
 
     assert data_input is not None
     assert config_input is not None
     assert execute_btn is not None
+    assert run_priority is not None
     assert data_input.value == ""
     assert config_input.value == "configs/gui_run.yaml"
     assert execute_btn.disabled is True
+    assert run_priority.value == "normal"
 
 
 def test_run_page_layout_respects_state_and_config_yaml_none() -> None:

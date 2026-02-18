@@ -490,9 +490,13 @@ pytest tests/ -v --tb=short
 ### 技術アプローチ
 * **SQLiteスキーマ拡張:** `ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 50`
 * **ロジック変更:** `claim_next_job()` を `ORDER BY priority DESC, created_at_utc ASC` に変更
+* **優先度マップ固定:** `high=90`, `normal=50`, `low=10`（任意数値priorityは非サポート）
+* **公平性方針:** strict priority（Aging/比率制御なし）
 * **新規クラス:** `GuiWorkerPool` クラス作成（複数 `GuiWorker` インスタンス管理）
 * **排他制御:** データベースロックでthread-safeなジョブクレーム調整
 * **UI変更:** Run ページに優先度ドロップダウン追加（Low/Normal/High）
+* **並び替え方式:** queued ジョブの priority 変更で順序を制御（Move Up/Down, D&D は非採用）
+* **変更制約:** priority変更対象は `status=\"queued\"` のみ
 
 ### テスト要件
 1.  優先度ベースのクレームロジック単体テスト
@@ -505,6 +509,14 @@ pytest tests/ -v --tb=short
 * 高優先度ジョブが低優先度より先にクレームされる
 * Worker数が設定可能でGraceful shutdownが動作
 * 並行負荷下でジョブロスや破損が発生しない
+* queued以外のpriority変更が拒否され、ユーザーに明示メッセージを返す
+
+### 実装結果（2026-02-18）
+* `RunInvocation` / `GuiJobRecord` に `priority`（`low|normal|high`）を追加し、既定値を `normal` で固定。
+* `GuiJobStore` に priority 列の後方互換 migration（`PRAGMA table_info` + `ALTER TABLE`）を実装。
+* `claim_next_job()` を `priority DESC, created_at_utc ASC` に変更し、strict priority を適用。
+* `GuiWorkerPool` を導入し、`--worker-count`（既定1）で並列worker数を設定可能化。
+* Run 画面に投入priority選択（`run-priority`）と queued再優先付け（`run-queue-priority` + `run-set-priority-btn`）を追加。
 
 ---
 

@@ -13,6 +13,7 @@ GuiJobStatus = Literal[
     "canceled",
     "cancel_requested",
 ]
+GuiJobPriority = Literal["low", "normal", "high"]
 
 
 @dataclass(slots=True)
@@ -32,6 +33,7 @@ class RunInvocation:
     artifact_path: str | None = None
     scenarios_path: str | None = None
     export_format: str | None = None
+    priority: GuiJobPriority = "normal"
 
 
 @dataclass(slots=True)
@@ -49,6 +51,7 @@ class GuiJobRecord:
     created_at_utc: str
     updated_at_utc: str
     invocation: RunInvocation
+    priority: GuiJobPriority = "normal"
     cancel_requested: bool = False
     started_at_utc: str | None = None
     finished_at_utc: str | None = None

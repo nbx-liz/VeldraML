@@ -14,6 +14,7 @@ def test_build_parser_uses_environment_defaults(monkeypatch) -> None:
     monkeypatch.setenv("VELDRA_GUI_DEBUG", "1")
     monkeypatch.setenv("VELDRA_GUI_JOB_DB_PATH", ".veldra_gui/test.sqlite3")
     monkeypatch.setenv("VELDRA_GUI_WORKER_POLL_SEC", "0.25")
+    monkeypatch.setenv("VELDRA_GUI_WORKER_COUNT", "3")
     parser = server._build_parser()
     args = parser.parse_args([])
     assert args.host == "0.0.0.0"
@@ -21,6 +22,7 @@ def test_build_parser_uses_environment_defaults(monkeypatch) -> None:
     assert args.debug is True
     assert args.job_db_path == ".veldra_gui/test.sqlite3"
     assert args.worker_poll_sec == 0.25
+    assert args.worker_count == 3
 
 
 def test_main_runs_dash_app(monkeypatch) -> None:
@@ -32,8 +34,9 @@ def test_main_runs_dash_app(monkeypatch) -> None:
             called["port"] = port
             called["debug"] = debug
 
-    class _FakeWorker:
-        def __init__(self, _store, poll_interval_sec: float) -> None:
+    class _FakeWorkerPool:
+        def __init__(self, _store, worker_count: int, poll_interval_sec: float) -> None:
+            called["worker_count"] = worker_count
             called["poll_interval_sec"] = poll_interval_sec
 
         def start(self) -> None:
@@ -46,7 +49,7 @@ def test_main_runs_dash_app(monkeypatch) -> None:
     fake_mod.create_app = lambda: _FakeApp()
     monkeypatch.setitem(sys.modules, "veldra.gui.app", fake_mod)
     monkeypatch.setattr(server, "GuiJobStore", lambda path: {"path": path})
-    monkeypatch.setattr(server, "GuiWorker", _FakeWorker)
+    monkeypatch.setattr(server, "GuiWorkerPool", _FakeWorkerPool)
     monkeypatch.setattr(
         server,
         "set_gui_runtime",
@@ -70,13 +73,23 @@ def test_main_runs_dash_app(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["veldra-gui", "--host", "127.0.0.2", "--port", "8123", "--debug"],
+        [
+            "veldra-gui",
+            "--host",
+            "127.0.0.2",
+            "--port",
+            "8123",
+            "--debug",
+            "--worker-count",
+            "2",
+        ],
     )
     server.main()
 
     assert called["host"] == "127.0.0.2"
     assert called["port"] == 8123
     assert called["debug"] is True
+    assert called["worker_count"] == 2
     assert called["logged"] is True
     assert called["worker_started"] is True
     assert called["runtime_stopped"] is True

@@ -249,6 +249,22 @@ def test_job_services_filter_delete_cancel_and_load_config_yaml(monkeypatch, tmp
             self.deleted += len(job_ids)
             return len(job_ids)
 
+        def set_job_priority(self, job_id: str, priority: str):
+            if job_id == "missing":
+                return None
+            if job_id == "running":
+                raise ValueError("Priority can only be changed for queued jobs.")
+            return GuiJobRecord(
+                job_id=job_id,
+                status="queued",
+                action="fit",
+                created_at_utc="2026-01-01T00:00:00+00:00",
+                updated_at_utc="2026-01-01T00:00:00+00:00",
+                invocation=RunInvocation(action="fit", artifact_path="artifacts/r1"),
+                result=GuiRunResult(success=True, message="ok", payload={}),
+                priority=priority,  # type: ignore[arg-type]
+            )
+
     store = _Store()
     services.set_gui_runtime(job_store=store, worker=None)
 
@@ -257,8 +273,13 @@ def test_job_services_filter_delete_cancel_and_load_config_yaml(monkeypatch, tmp
 
     canceled = services.cancel_run_job("j1")
     assert canceled.status == "cancel_requested"
+    updated = services.set_run_job_priority("j1", "high")
+    assert "priority updated" in updated.message
 
     assert services.delete_run_jobs(["a", "b"]) == 2
+
+    with pytest.raises(VeldraValidationError, match="Job not found"):
+        services.set_run_job_priority("missing", "high")
 
     jobs = [
         GuiJobRecord(
