@@ -91,3 +91,22 @@ def test_job_store_additional_branches(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(store, "get_job", lambda _job_id: None)
     with pytest.raises(RuntimeError, match="Failed to read queued job"):
         store.enqueue_job(RunInvocation(action="fit"))
+
+
+def test_job_store_get_jobs_and_delete_jobs_contract(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    first = store.enqueue_job(RunInvocation(action="fit"))
+    second = store.enqueue_job(RunInvocation(action="tune"))
+
+    assert store.get_jobs([]) == []
+
+    selected = store.get_jobs([first.job_id, "", second.job_id])
+    ids = {item.job_id for item in selected}
+    assert first.job_id in ids
+    assert second.job_id in ids
+
+    assert store.delete_jobs([]) == 0
+    deleted = store.delete_jobs([first.job_id, "", "missing-id"])
+    assert deleted == 1
+    assert store.get_job(first.job_id) is None
+    assert store.get_job(second.job_id) is not None

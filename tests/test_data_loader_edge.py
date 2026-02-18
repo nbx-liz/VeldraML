@@ -68,3 +68,20 @@ def test_load_tabular_data_rejects_unsupported_extension(tmp_path: Path) -> None
     path.write_text("{}", encoding="utf-8")
     with pytest.raises(VeldraValidationError, match="Unsupported data format"):
         load_tabular_data(str(path))
+
+
+def test_load_tabular_data_preserves_missing_values_and_columns(tmp_path: Path) -> None:
+    path = tmp_path / "missing_values.csv"
+    frame = pd.DataFrame(
+        {
+            "x1": [1.0, 2.0, None],
+            "x2": [10.0, None, 30.0],
+            "target": [0.0, 1.0, 0.0],
+        }
+    )
+    frame.to_csv(path, index=False)
+
+    loaded = load_tabular_data(str(path))
+    assert loaded.columns.tolist() == ["x1", "x2", "target"]
+    assert loaded["x1"].isna().sum() == 1
+    assert loaded["x2"].isna().sum() == 1

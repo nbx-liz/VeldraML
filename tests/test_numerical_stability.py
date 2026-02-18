@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from veldra.api import estimate_dr
 from veldra.diagnostics.metrics import binary_metrics, frontier_metrics, regression_metrics
@@ -71,3 +72,39 @@ def test_causal_dr_stability_with_extreme_propensity_scores(tmp_path: Path) -> N
     assert math.isfinite(float(result.estimate))
     assert math.isfinite(float(result.metrics["overlap_metric"]))
     assert math.isfinite(float(result.metrics["smd_max_weighted"]))
+
+
+def test_metrics_nan_propagation_contract() -> None:
+    with pytest.raises(ValueError):
+        regression_metrics(
+            np.array([1.0, 2.0, 3.0], dtype=float),
+            np.array([1.1, np.nan, 2.9], dtype=float),
+            label="nan-case",
+        )
+
+    with pytest.raises(ValueError):
+        binary_metrics(
+            np.array([0, 1, 0, 1], dtype=int),
+            np.array([0.1, np.nan, 0.2, 0.9], dtype=float),
+            label="nan-case",
+        )
+
+    with pytest.raises(ValueError):
+        frontier_metrics(
+            np.array([1.0, 2.0, 3.0], dtype=float),
+            np.array([1.1, np.nan, 2.9], dtype=float),
+            alpha=0.9,
+            label="nan-case",
+        )
+
+
+def test_binary_metrics_remain_finite_under_extreme_clipping_edges() -> None:
+    metrics = binary_metrics(
+        np.array([0, 1, 0, 1, 0, 1], dtype=int),
+        np.array([0.0, 1.0, 1e-15, 1.0 - 1e-15, 1e-12, 1.0], dtype=float),
+        label="clip-boundary",
+    )
+    for key, value in metrics.items():
+        if key == "label":
+            continue
+        assert math.isfinite(float(value)), key

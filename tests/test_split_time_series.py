@@ -70,3 +70,18 @@ def test_timeseries_splitter_embargo_excludes_previous_test_from_future_train() 
     first_test = set(splits[0][1].tolist())
     second_train = set(splits[1][0].tolist())
     assert first_test.isdisjoint(second_train)
+
+
+def test_timeseries_splitter_supports_single_period_split() -> None:
+    splitter = TimeSeriesSplitter(n_splits=1, test_size=1, mode="expanding")
+    splits = list(splitter.split(4))
+    assert len(splits) == 1
+    train_idx, test_idx = splits[0]
+    assert len(train_idx) == 1
+    assert len(test_idx) == 1
+
+
+def test_timeseries_splitter_rejects_insufficient_periods() -> None:
+    splitter = TimeSeriesSplitter(n_splits=3, test_size=1, mode="expanding")
+    with pytest.raises(ValueError, match="n_samples is too small"):
+        list(splitter.split(4))

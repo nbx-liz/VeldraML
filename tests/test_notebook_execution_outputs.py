@@ -80,7 +80,7 @@ def _assert_metric_bounds(frame: pd.DataFrame) -> None:
             assert (series >= 0.0).all(), col
 
 
-def test_phase26_3_outputs_have_materialized_files() -> None:
+def test_quick_reference_outputs_have_materialized_files() -> None:
     for uc, summary_path in SUMMARY_FILES.items():
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
         csv_outputs: dict[str, pd.DataFrame] = {}

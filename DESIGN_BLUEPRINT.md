@@ -74,6 +74,7 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 26.3: ユースケース詳細化（diagnostics ライブラリ + observation_table + Notebook 完全版 + 実行証跡）← **完了**
 - Phase 26.4: Notebook 教育化 & テスト品質強化 ← **計画策定済み**
 - Phase 26.5: 13.3 A/B Notebook適用 + gui_e2e安定化 ← **完了**
+- Phase 26.6: テスト品質向上（命名整理 + カバレッジ強化）← **完了**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -855,7 +856,7 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 6. SUMMARY dict（status, artifact_path, outputs リスト, metrics）
 ```
 
-**テスト**: `tests/test_notebook_phase26_3_uc_structure.py`（Notebook セル構造・import・SUMMARY 形式の検証）
+**テスト**: `tests/test_quickref_structure.py`（Notebook セル構造・import・SUMMARY 形式の検証）
 
 ---
 
@@ -883,8 +884,8 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 | ファイル | 内容 |
 |---|---|
 | `examples/out/phase26_*/summary.json` | 各 Notebook の実行結果（status, outputs リスト, metrics） |
-| `tests/test_notebook_phase26_3_execution_evidence.py` | summary の整合性テスト（全 UC が passed、outputs が存在） |
-| `tests/test_notebook_phase26_3_outputs.py` | 各 Notebook の出力ファイル検証（PNG 画像の存在、CSV の列名・行数、指標の妥当範囲） |
+| `tests/test_notebook_execution_evidence.py` | summary の整合性テスト（全 UC が passed、outputs が存在） |
+| `tests/test_notebook_execution_outputs.py` | 各 Notebook の出力ファイル検証（PNG 画像の存在、CSV の列名・行数、指標の妥当範囲） |
 
 ---
 
@@ -925,9 +926,9 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 | `tests/test_diagnostics_tables.py` | 1 | 新規 |
 | `tests/test_diagnostics_causal.py` | 1 | 新規 |
 | `tests/test_observation_table.py` | 2 | 新規 |
-| `tests/test_notebook_phase26_3_uc_structure.py` | 4 | 新規 |
-| `tests/test_notebook_phase26_3_execution_evidence.py` | 6 | 新規 |
-| `tests/test_notebook_phase26_3_outputs.py` | 6 | 新規 |
+| `tests/test_quickref_structure.py` | 4 | 新規 |
+| `tests/test_notebook_execution_evidence.py` | 6 | 新規 |
+| `tests/test_notebook_execution_outputs.py` | 6 | 新規 |
 
 ---
 
@@ -942,9 +943,9 @@ def build_drdid_table(observation_table) -> pd.DataFrame
 | テーブル生成 | 各 `build_*_table` が期待列を含む DataFrame を返すこと | `tests/test_diagnostics_tables.py` |
 | 因果診断 | ESS、SMD、トリミング比較が正しい型・範囲で返ること | `tests/test_diagnostics_causal.py` |
 | Observation table | 各 TrainingOutput の observation_table が fold_id, in_out 列を含むこと | `tests/test_observation_table.py` |
-| Notebook 構造 | 全 Notebook が SUMMARY セル、diagnostics import、savefig 呼び出しを含むこと | `tests/test_notebook_phase26_3_uc_structure.py` |
-| 実行証跡 | summary の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_phase26_3_execution_evidence.py` |
-| 出力ファイル検証 | PNG の存在、CSV の列名一致、指標値の妥当範囲（例: 0 ≤ AUC ≤ 1） | `tests/test_notebook_phase26_3_outputs.py` |
+| Notebook 構造 | 全 Notebook が SUMMARY セル、diagnostics import、savefig 呼び出しを含むこと | `tests/test_quickref_structure.py` |
+| 実行証跡 | summary の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_execution_evidence.py` |
+| 出力ファイル検証 | PNG の存在、CSV の列名一致、指標値の妥当範囲（例: 0 ≤ AUC ≤ 1） | `tests/test_notebook_execution_outputs.py` |
 | 後方互換 | 既存テスト群（`tests/test_*.py`）が全パス | 既存テスト群 |
 
 ### 検証コマンド
@@ -960,10 +961,10 @@ uv run pytest tests/test_observation_table.py -v
 uv run pytest tests/test_causal_dr.py tests/test_causal_drdid.py -v
 
 # Step 4-5: Notebook 構造
-uv run pytest tests/test_notebook_phase26_3_uc_structure.py -v
+uv run pytest tests/test_quickref_structure.py -v
 
 # Step 6: 実行証跡 + 出力検証
-uv run pytest tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -v
+uv run pytest tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py -v
 
 # 全体回帰テスト
 uv run pytest tests -x --tb=short
@@ -990,7 +991,7 @@ uv run pytest tests -x --tb=short
 ### Decision（confirmed）
 - 内容: Notebook 証跡はハイブリッド運用とし、構造契約テストは常時実行、重い証跡検証は `notebook_e2e` marker で分離する。
 - 理由: CI 負荷と実行時間を抑制しつつ、Phase26.3 の成果物検証を維持するため。
-- 影響範囲: `pyproject.toml` marker / `tests/test_notebook_phase26_3_*` / summary evidence 運用
+- 影響範囲: `pyproject.toml` marker / `tests/test_quickref_structure.py` / `tests/test_notebook_execution_*` / summary evidence 運用
 
 ### Decision（confirmed）
 - 内容: Phase26.3 の Notebook は `UC-1〜UC-8 + UC-11/12` を実行済み状態でコミットし、placeholder 出力を撤廃する。`UC-9/10` は export 中心の最小更新を維持する。
@@ -1132,7 +1133,7 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
   - `outlier_frame`
 
 ##### P2
-- `tests/test_data_loader_robust.py`
+- `tests/test_data_loader_edge.py`
 
 #### Step 5: 既存参照の全面更新
 
@@ -1145,9 +1146,9 @@ Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初�
 
 ```bash
 uv run pytest tests/test_runner_fit_happy.py tests/test_runner_evaluate_happy.py tests/test_runner_predict_happy.py tests/test_runner_tune_happy.py -v
-uv run pytest tests/test_edge_cases.py tests/test_numerical_stability.py tests/test_config_cross_field.py tests/test_data_loader_robust.py -v
-uv run pytest tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py tests/test_notebook_phase26_3_uc_structure.py -v
-uv run pytest tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e -v
+uv run pytest tests/test_edge_cases.py tests/test_numerical_stability.py tests/test_config_cross_field.py tests/test_data_loader_edge.py -v
+uv run pytest tests/test_quickref_structure.py tests/test_quickref_paths.py tests/test_notebook_execution_evidence.py -v
+uv run pytest tests/test_notebook_execution_outputs.py -m notebook_e2e -v
 uv run pytest tests -x --tb=short
 ```
 
@@ -1180,7 +1181,7 @@ uv run pytest tests -x --tb=short
 - 生成スクリプト: `scripts/generate_phase263_notebooks.py`
 - tuning 既定探索空間: `src/veldra/modeling/tuning.py`
 - E2E テスト: `tests/e2e_playwright/_helpers.py`, `tests/e2e_playwright/test_uc01_*`, `test_uc02_*`, `test_uc04_*`, `test_uc05_*`, `test_uc09_*`
-- 契約テスト: `tests/test_notebook_phase26_5_ab_contract.py`, `tests/test_tuning_search_space.py`
+- 契約テスト: `tests/test_notebook_reference_ab_contract.py`, `tests/test_tuning_search_space.py`
 
 ### 固定方針
 
@@ -1238,7 +1239,7 @@ uv run pytest tests -x --tb=short
 
 #### Step 6: 契約テスト追加・更新
 
-- 新規: `tests/test_notebook_phase26_5_ab_contract.py`
+- 新規: `tests/test_notebook_reference_ab_contract.py`
   - canonical Notebook の A/B キーと値を正規表現で検証
 - 更新: `tests/test_tuning_search_space.py`
   - `standard` preset の探索空間契約を 13.3 B に合わせる
@@ -1246,8 +1247,8 @@ uv run pytest tests -x --tb=short
 ### テスト計画
 
 ```bash
-uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py
-uv run pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_3_uc_structure.py
+uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_reference_ab_contract.py
+uv run pytest -q tests/test_quickref_paths.py tests/test_quickref_structure.py
 uv run pytest -q tests/e2e_playwright -m gui_e2e
 uv run pytest -q -m "not gui_e2e"
 ```
@@ -1271,6 +1272,198 @@ uv run pytest -q -m "not gui_e2e"
 - 内容: `gui_e2e` の不安定要因は GUI 実装変更ではなく、Playwright テストの待機/操作戦略を見直して収束させる。
 - 理由: Stable API と GUI 実装互換を維持し、検証層のみで flaky 要因を除去できるため。
 - 影響範囲: tests/e2e_playwright/*
+
+## 13.6 Phase26.6: テスト品質向上（命名整理 + カバレッジ強化）
+
+### 背景
+
+- Phase26.2〜26.5 で Notebook を legacy → `quick_reference/` / `tutorials/` へ再編成したが、テストファイルの命名が旧構造のまま残っており、ソースとの対応関係が不明瞭になっている。
+- 削除済みワークフロー Notebook（`regression_analysis_workflow.ipynb` 等）を想起させるテスト名が 10 ファイル、「phase26_2」「phase26_3」を冠するが実態は `quick_reference/` をテストするファイルが 5 ファイル存在する。
+- コアモジュール（artifact store/exporter, config I/O, causal diagnostics）にテストが皆無であり、modeling/causal モジュールもエッジケース・数値安定性テストが不足している。
+
+### 目的
+
+- テストファイル命名を実態に合わせてリネーム・統合し、保守性と可読性を回復する。
+- 重複テスト（`phase26_2_uc_structure` / `phase26_3_uc_structure` の重複等）を統合して不要なファイルを削除する。
+- カバレッジが皆無の Critical モジュールにテストを追加する。
+- 正常系・エッジケース・数値安定系の不足箇所を体系的に補完する。
+
+### 適用範囲
+
+- Notebook テスト: `tests/test_notebook_*.py`（18 ファイル対象）
+- コアモジュールテスト: `tests/test_artifact_*.py`, `tests/test_config_*.py`, `tests/test_causal_*.py`
+- エッジケーステスト: `tests/test_*_edge_cases.py`
+- 数値安定性テスト: `tests/test_numerical_stability.py`
+
+### 固定方針
+
+- テストファイルのリネームは `git mv` で実施し、git 履歴を保持する。
+- テスト内容（アサーション）は原則変更せず、命名とファイル構成のみを整理する。
+- 新規テストは既存の fixture（`regression_frame`, `binary_frame` 等）を再利用し、新規 fixture の追加は最小限とする。
+- `veldra.api.*` の公開シグネチャは変更しない。
+
+### 実装ステップ
+
+#### Stage A: テストファイル命名整理
+
+##### Step A-1: Tutorial テストのリネーム（10 ファイル）
+
+削除済みワークフロー Notebook を想起させる名前を、テスト対象の tutorial 番号に合わせてリネームする。
+
+| 現在の名前 | テスト対象（実態） | リネーム先 |
+|---|---|---|
+| `test_notebook_regression_paths.py` | `tutorial_01_regression_basics.ipynb` | `test_tutorial_01_regression_paths.py` |
+| `test_notebook_regression_structure.py` | 同上 | `test_tutorial_01_regression_structure.py` |
+| `test_notebook_binary_tune_structure.py` | `tutorial_02_binary_classification_tuning.ipynb` | `test_tutorial_02_binary_tune_structure.py` |
+| `test_notebook_frontier_structure.py` | `tutorial_03_frontier_quantile_regression.ipynb` | `test_tutorial_03_frontier_structure.py` |
+| `test_notebook_frontier_paths.py` | 同上 | `test_tutorial_03_frontier_paths.py` |
+| `test_notebook_simulate_structure.py` | `tutorial_04_scenario_simulation.ipynb` | `test_tutorial_04_simulate_structure.py` |
+| `test_notebook_lalonde_structure.py` | `tutorial_05_causal_dr_lalonde.ipynb` | `test_tutorial_05_lalonde_dr_structure.py` |
+| `test_notebook_lalonde_paths.py` | 同上 | `test_tutorial_05_lalonde_dr_paths.py` |
+| `test_notebook_lalonde_drdid_structure.py` | `tutorial_06_causal_drdid_lalonde.ipynb` | `test_tutorial_06_lalonde_drdid_structure.py` |
+| `test_notebook_lalonde_drdid_paths.py` | 同上 | `test_tutorial_06_lalonde_drdid_paths.py` |
+
+##### Step A-2: Quick Reference テストの統合・リネーム（3 ファイル → 2 ファイル）
+
+- `test_notebook_phase26_2_uc_structure.py` と `test_notebook_phase26_3_uc_structure.py` は共に `quick_reference/` をテストしており重複がある。
+- 後者（phase26_3）の方が厳密な検証（execution_count, outputs, matplotlib, diagnostics import）を含む。
+- 前者の独自テスト（legacy removal check, reference_index link check）を後者に統合し、`test_quickref_structure.py` としてリネームする。
+- `test_notebook_phase26_2_paths.py` → `test_quickref_paths.py` にリネーム。
+
+| 現在の名前 | 操作 |
+|---|---|
+| `test_notebook_phase26_2_uc_structure.py` | 独自テストを統合後、削除 |
+| `test_notebook_phase26_3_uc_structure.py` | 統合先 → `test_quickref_structure.py` にリネーム |
+| `test_notebook_phase26_2_paths.py` | `test_quickref_paths.py` にリネーム |
+
+##### Step A-3: Execution Evidence テストの整理（2 ファイル → 1 ファイル）
+
+- `test_notebook_phase26_3_execution_evidence.py` は `test_notebook_execution_evidence.py`（新規追加済み）でカバー済みのため削除。
+- `test_notebook_phase26_3_outputs.py` → `test_notebook_execution_outputs.py` にリネーム。
+
+| 現在の名前 | 操作 |
+|---|---|
+| `test_notebook_phase26_3_execution_evidence.py` | 削除（`test_notebook_execution_evidence.py` でカバー済み） |
+| `test_notebook_phase26_3_outputs.py` | `test_notebook_execution_outputs.py` にリネーム |
+
+##### Step A-4: 全テスト通過確認
+
+リネーム・統合・削除後にテストを実行し、既存の検証がすべて通過することを確認する。
+
+#### Stage B: カバレッジ強化
+
+##### Step B-1: Critical モジュールのテスト追加（不足領域を補完）
+
+| 新規テストファイル | テスト対象 | テスト内容 |
+|---|---|---|
+| `test_artifact_store.py` | `artifact/store.py` | save/load ラウンドトリップ、破損/欠損ファイル、calibrator joblib シリアライズ、オプションフィールド永続化 |
+| `test_exporter_internal.py`（既存） | `artifact/exporter.py` | Python パッケージ構造検証、ONNX export バリデーション、依存不在時エラー、不正 feature schema |
+| `test_config_io.py` | `config/io.py` | save→load ラウンドトリップ、不正 YAML エラー、存在しないパス、親ディレクトリ自動作成 |
+| `test_causal_diagnostics_unit.py` | `causal/diagnostics.py` | max SMD 計算正常系、overlap 境界値（全 treated/全 control）、空の重み分布 |
+
+##### Step B-2: 数値安定性テスト（既存 `test_numerical_stability.py` 拡張）
+
+- DR score 計算での極端な propensity（0 に近い / 1 に近い）
+- importance 累積の精度劣化検証
+- 極小ターゲットスケール + 不均衡の複合条件
+- NaN 伝播の検証（causal / modeling パス）
+
+##### Step B-3: Modeling エッジケース強化
+
+| 新規テストファイル | テスト内容 |
+|---|---|
+| `test_binary_edge_cases.py` | 極端なクラス不均衡、全同一予測、NaN feature、threshold 境界 |
+| `test_regression_edge_cases.py` | 極小ターゲットスケール（1e-6）、定数ターゲット、外れ値混在 |
+| `test_frontier_edge_cases.py` | alpha 境界値（0.01, 0.99）、単一分位点、efficiency 計算 |
+| `test_multiclass_edge_cases.py` | 2 クラス / 多クラス（10+）境界、低頻度クラス |
+
+##### Step B-4: Tuning エッジケース強化（新規 `test_tune_edge_cases.py`）
+
+- DuplicatedStudyError ハンドリング
+- search_space 解決ロジックの検証
+- trial 例外時のフォールバック動作
+
+##### Step B-5: Data / Split テスト強化
+
+| 新規テストファイル | テスト内容 |
+|---|---|
+| `test_data_loader_edge.py` | エンコーディング問題、欠損カラム、存在しないファイル |
+| `test_split_time_series.py` | ギャップ分割、単一期間、期間数不足 |
+
+### 優先順位
+
+1. **Stage A 全体** → 最優先（命名整理は他のテスト追加の前提）
+2. **B-1**（Critical: テスト皆無モジュール）→ 高優先
+3. **B-2**（数値安定性）→ 高優先
+4. **B-3, B-4**（エッジケース強化）→ 中優先
+5. **B-5**（data/split）→ 低優先
+
+### 実装状況（2026-02-18）
+
+- Stage A（命名整理）を完了し、notebook テストの phase 接頭辞を撤廃した。
+  - tutorial テスト: `test_tutorial_01_*`〜`test_tutorial_06_*` へ統一
+  - quick reference テスト: `test_quickref_structure.py`, `test_quickref_paths.py` へ統合
+  - execution evidence テスト: `test_notebook_execution_evidence.py`, `test_notebook_execution_outputs.py` に一本化
+  - AB 契約テスト: `test_notebook_reference_ab_contract.py` へリネーム
+- Stage B（カバレッジ強化）を完了した。
+  - 新規: `tests/test_artifact_store.py`, `tests/test_config_io.py`, `tests/test_causal_diagnostics_unit.py`
+  - 拡張: `tests/test_numerical_stability.py`
+  - 新規: `tests/test_binary_edge_cases.py`, `tests/test_regression_edge_cases.py`, `tests/test_frontier_edge_cases.py`, `tests/test_multiclass_edge_cases.py`, `tests/test_tune_edge_cases.py`
+  - リネーム + 強化: `tests/test_data_loader_edge.py`, `tests/test_split_time_series.py`
+- 検証結果:
+  - `uv run pytest -q tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` → `34 passed`
+  - `uv run pytest -q tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` → `20 passed`
+  - `uv run pytest -q tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py tests/test_tune_edge_cases.py tests/test_data_loader_edge.py tests/test_split_time_series.py` → `31 passed`
+  - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` → `658 passed, 11 deselected`
+
+### テスト計画
+
+```bash
+# Stage A 完了後
+uv run pytest tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_*.py -v
+
+# Stage B 完了後（Critical）
+uv run pytest tests/test_artifact_store.py tests/test_artifact_exporter.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py -v
+
+# Stage B 完了後（エッジケース・数値安定性）
+uv run pytest tests/test_numerical_stability.py tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py -v
+
+# 全テスト通過確認
+uv run pytest -q -m "not gui_e2e and not notebook_e2e"
+```
+
+### 完了条件
+
+1. 旧命名の notebook 関連テストファイルがすべてリネーム / 統合 / 削除され、命名が実態と一致すること。
+2. 重複テスト（`phase26_2_uc_structure` / `phase26_3_uc_structure`、`phase26_3_execution_evidence` / `execution_evidence`）が統合されていること。
+3. Critical モジュール（artifact store, exporter, config I/O, causal diagnostics）のテストが存在すること。
+4. 各 modeling モジュールにエッジケーステストが追加されていること。
+5. 数値安定性テストが causal / modeling の主要計算パスをカバーしていること。
+6. 既存テストがすべて通過すること（`-m "not gui_e2e and not notebook_e2e"`）。
+
+### Decision（provisional）
+
+- 内容: テストファイル命名は「テスト対象のノートブック種別 + 番号」を基準とし、フェーズ番号（phase26_2 等）を冠しない方針とする。
+- 理由: ノートブック再編成が繰り返されても命名が安定し、テスト対象との対応が明瞭になるため。
+- 影響範囲: tests/test_notebook_*.py, tests/test_tutorial_*.py, tests/test_quickref_*.py
+
+### Decision（provisional）
+
+- 内容: カバレッジ強化は Critical（テスト皆無）→ 数値安定性 → エッジケース → data/split の優先順で段階的に実施する。
+- 理由: 本番影響度の高いモジュールから着手し、投入工数に対するカバレッジ改善効果を最大化するため。
+- 影響範囲: tests/ 配下の新規テストファイル群
+
+### Decision（confirmed）
+
+- 内容: notebook テスト命名は「対象種別 + 連番」を基準とし、phase 番号依存を廃止する。
+- 理由: notebook 構成変更時の追従コストを抑え、責務境界を命名から即時判別できるようにするため。
+- 影響範囲: `tests/test_tutorial_*.py`, `tests/test_quickref_*.py`, `tests/test_notebook_execution_*.py`, `tests/test_notebook_reference_ab_contract.py`
+
+### Decision（confirmed）
+
+- 内容: Phase26.6 は Stage A/B を 3PR 粒度（命名整理 → Critical+数値安定 → edge/data/split）で実行し、全ステージ完了をもって閉じる。
+- 理由: 変更リスクを段階分離しつつ、最終的に `not gui_e2e and not notebook_e2e` 回帰のグリーンを完了条件として固定するため。
+- 影響範囲: tests/ 配下全体, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
 
 
 ## 14 Phase 27: ジョブキュー強化 & 優先度システム

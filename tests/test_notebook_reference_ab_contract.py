@@ -86,14 +86,14 @@ def _metrics_pattern(metrics: list[str]) -> str:
     return fr'"metrics"\s*:\s*\[{ordered}\]'
 
 
-def test_phase26_5_a_contract_applied_to_quickref_and_tutorials() -> None:
+def test_reference_a_contract_applied_to_quickref_and_tutorials() -> None:
     for notebook, metrics in A_NOTEBOOK_METRICS.items():
         source = _notebook_source(Path(notebook))
         _assert_patterns(source, A_COMMON_PATTERNS, notebook)
         _assert_patterns(source, [_metrics_pattern(metrics)], notebook)
 
 
-def test_phase26_5_b_contract_applied_to_tuning_notebooks() -> None:
+def test_reference_b_contract_applied_to_tuning_notebooks() -> None:
     for notebook, objective in B_NOTEBOOK_OBJECTIVES.items():
         source = _notebook_source(Path(notebook))
         objective_pattern = fr'"objective"\s*:\s*"{re.escape(objective)}"'

@@ -1445,3 +1445,49 @@
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_phase26_3_uc_structure.py tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を実施（`2 passed, 1 deselected`）。
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 skipped`）。
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。
+
+### 2026-02-18（作業/PR: phase26.6-test-quality-rename-and-coverage）
+**背景**
+- Phase26.6 の計画（命名整理 + カバレッジ強化）に対し、notebook テスト命名と実体の不一致、および一部コアモジュールの直接ユニットテスト不足を解消する必要があった。
+- `tests/test_notebook_*.py` は実測 18 ファイルで、設計上の対象数と差分があり、実態同期が必要だった。
+
+**変更内容**
+- Stage A（命名整理）
+  - Tutorial テストを `test_tutorial_01_*`〜`test_tutorial_06_*` へリネーム。
+  - `test_notebook_phase26_3_uc_structure.py` を `test_quickref_structure.py` へリネームし、`test_notebook_phase26_2_uc_structure.py` の独自検証（reference_index / legacy notebook 削除）を統合した上で削除。
+  - `test_notebook_phase26_2_paths.py` を `test_quickref_paths.py` へリネーム。
+  - `test_notebook_phase26_3_execution_evidence.py` を削除し、`test_notebook_execution_evidence.py` を単一の証跡テストとして維持。
+  - `test_notebook_phase26_3_outputs.py` を `test_notebook_execution_outputs.py` へリネーム。
+  - `test_notebook_phase26_5_ab_contract.py` を `test_notebook_reference_ab_contract.py` へリネーム。
+- Stage B（カバレッジ強化）
+  - 新規: `tests/test_artifact_store.py`
+  - 新規: `tests/test_config_io.py`
+  - 新規: `tests/test_causal_diagnostics_unit.py`
+  - 拡張: `tests/test_numerical_stability.py`（NaN 伝播契約と clipping 境界）
+  - 新規: `tests/test_binary_edge_cases.py`, `tests/test_regression_edge_cases.py`, `tests/test_frontier_edge_cases.py`, `tests/test_multiclass_edge_cases.py`, `tests/test_tune_edge_cases.py`
+  - リネーム + 強化: `tests/test_data_loader_edge.py`（旧 `test_data_loader_robust.py`）, `tests/test_split_time_series.py`（旧 `test_time_series_splitter_additional.py`）
+- ドキュメント
+  - `DESIGN_BLUEPRINT.md` 13.6 にベースライン（18ファイル）と実装完了状況を追記し、Decision を confirmed 化した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26.6 は 3PR 粒度（命名整理 → Critical+数値安定 → edge/data/split）で段階実施する。
+  - 理由: テスト資産の大規模リネームとカバレッジ追加を分離し、レビュー/回帰リスクを制御するため。
+  - 影響範囲: tests / DESIGN_BLUEPRINT
+- Decision: confirmed（確定）
+  - 内容: notebook テスト命名は phase 番号依存を廃止し、対象種別ベース（tutorial / quickref / notebook_execution / notebook_reference）へ統一する。
+  - 理由: notebook 再編時でも命名規約を安定化し、テスト責務を明確化するため。
+  - 影響範囲: `tests/test_tutorial_*.py`, `tests/test_quickref_*.py`, `tests/test_notebook_execution_*.py`, `tests/test_notebook_reference_ab_contract.py`
+- Decision: confirmed（確定）
+  - 内容: Phase26.6 の完了条件は Stage A/B 実装 + `-m \"not gui_e2e and not notebook_e2e\"` 回帰グリーンで固定する。
+  - 理由: GUI E2E / notebook E2E の実行コストを分離しつつ、日常回帰の品質ゲートを維持するため。
+  - 影響範囲: tests / CI 運用
+
+**検証結果**
+- `uv run ruff check tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_*.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` を通過。
+- `uv run pytest -q tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` を実施（`34 passed`）。
+- `uv run ruff check tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` を通過。
+- `uv run pytest -q tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` を実施（`20 passed`）。
+- `uv run ruff check tests/test_*edge*.py tests/test_split_time_series.py tests/test_data_loader_edge.py tests/test_tune_edge_cases.py` を通過。
+- `uv run pytest -q tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py tests/test_tune_edge_cases.py tests/test_data_loader_edge.py tests/test_split_time_series.py` を実施（`31 passed, 1 warning`）。
+- `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`658 passed, 11 deselected, 1 warning`）。

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from veldra.diagnostics.metrics import (
     binary_metrics,
     frontier_metrics,
     multiclass_metrics,
     regression_metrics,
+    split_in_out_metrics,
 )
 
 
@@ -39,3 +41,16 @@ def test_multiclass_metrics_contract() -> None:
 def test_frontier_metrics_contract() -> None:
     out = frontier_metrics([1.0, 2.0, 3.0], [1.2, 2.1, 2.9], alpha=0.9)
     assert {"pinball", "mae", "coverage"} <= set(out)
+
+
+def test_split_in_out_metrics_returns_two_labels() -> None:
+    out = split_in_out_metrics(
+        regression_metrics,
+        y_true=[1.0, 2.0, 3.0, 4.0],
+        y_pred=[1.1, 2.2, 2.9, 4.1],
+        fold_ids=[0, 0, 1, 1],
+        eval_fold_ids={1},
+    )
+    assert isinstance(out, pd.DataFrame)
+    assert list(out["label"]) == ["in_sample", "out_of_sample"]
+    assert {"rmse", "mae", "mape", "r2"} <= set(out.columns)

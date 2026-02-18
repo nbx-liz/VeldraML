@@ -35,7 +35,7 @@ def _notebook_source(path: Path) -> str:
     return "\n".join(chunks)
 
 
-def test_uc_notebooks_reference_phase26_2_out_dirs() -> None:
+def test_uc_notebooks_reference_quickref_out_dirs() -> None:
     for notebook in UC_NOTEBOOKS:
         source = _notebook_source(Path("notebooks") / notebook)
         assert "OUT_DIR = ROOT / 'examples' / 'out' / 'phase26_2_" in source, notebook
