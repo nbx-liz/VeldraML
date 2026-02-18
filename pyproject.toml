@@ -30,6 +30,13 @@ gui = [
     "dash==2.18.2",
     "dash-bootstrap-components==1.7.1",
     "plotly==5.24.1",
+    "openpyxl==3.1.5",
+    "jinja2==3.1.6",
+]
+export-report = [
+    # SHAP is environment-sensitive with the current NumPy pin.
+    # Install manually in compatible environments if needed:
+    # uv add shap --optional export-report
 ]
 notebook = [
     "ipykernel==6.30.1",
@@ -49,9 +56,11 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "mypy==1.19.1",
+    "playwright>=1.58.0",
     "pre-commit==4.5.1",
     "pytest==9.0.2",
     "pytest-cov==7.0.0",
+    "pytest-playwright>=0.7.2",
     "ruff==0.15.0",
 ]
 
@@ -60,6 +69,9 @@ testpaths = ["tests"]
 addopts = "-p no:cacheprovider --basetemp=.pytest_tmp"
 markers = [
     "gui: GUI adapter related tests",
+    "gui_e2e: Playwright GUI end-to-end tests",
+    "gui_smoke: CI smoke subset of Playwright GUI end-to-end tests",
+    "notebook_e2e: Notebook execution evidence and output contract tests",
 ]
 
 [tool.ruff]

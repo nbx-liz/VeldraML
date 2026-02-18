@@ -10,6 +10,49 @@ def layout() -> html.Div:
     return html.Div(
         [
             html.H2("Results & Artifacts", className="mb-4"),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.Button(
+                            "Export Excel",
+                            id="result-export-excel-btn",
+                            color="secondary",
+                            className="me-2 result-export-btn",
+                        ),
+                        width="auto",
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Export HTML Report",
+                            id="result-export-html-btn",
+                            color="secondary",
+                            className="me-2 result-export-btn",
+                        ),
+                        width="auto",
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Download Config",
+                            id="result-download-config-btn",
+                            color="info",
+                            outline=True,
+                        ),
+                        width="auto",
+                    ),
+                ],
+                className="mb-3 g-2",
+            ),
+            html.Div(id="result-export-status", className="small text-info mb-3"),
+            html.Div(id="result-export-help", className="small text-muted mb-3"),
+            dcc.Download(id="result-config-download"),
+            dcc.Download(id="result-report-download"),
+            dcc.Store(id="result-export-job-store"),
+            dcc.Interval(
+                id="result-export-poll-interval",
+                interval=1000,
+                n_intervals=0,
+                disabled=True,
+            ),
             # Artifact Selection
             html.Div(
                 [
@@ -106,7 +149,7 @@ def layout() -> html.Div:
                                                         id="result-chart-main",
                                                         style={"height": "400px"},
                                                     ),
-                                                    label="Primary Chart",
+                                                    label="Overview",
                                                     tab_id="tab-chart-main",
                                                 ),
                                                 dbc.Tab(
@@ -116,6 +159,25 @@ def layout() -> html.Div:
                                                     ),
                                                     label="Feature Importance",
                                                     tab_id="tab-chart-secondary",
+                                                ),
+                                                dbc.Tab(
+                                                    dcc.Graph(
+                                                        id="result-learning-curve",
+                                                        style={"height": "400px"},
+                                                    ),
+                                                    label="Learning Curves",
+                                                    tab_id="tab-learning-curves",
+                                                ),
+                                                dbc.Tab(
+                                                    html.Pre(
+                                                        id="result-config-view",
+                                                        style={
+                                                            "height": "400px",
+                                                            "overflowY": "auto",
+                                                        },
+                                                    ),
+                                                    label="Config",
+                                                    tab_id="tab-config",
                                                 ),
                                             ],
                                             className="nav-fill mb-3",
@@ -134,6 +196,13 @@ def layout() -> html.Div:
                                             color="primary",
                                             className="w-100 mb-3",
                                         ),
+                                        html.Div(
+                                            (
+                                                "Re-evaluate checks model performance "
+                                                "on another dataset."
+                                            ),
+                                            className="small text-muted mb-2",
+                                        ),
                                         html.Label(
                                             "Evaluation Data Path", className="small text-muted"
                                         ),
@@ -142,7 +211,10 @@ def layout() -> html.Div:
                                             placeholder="path/to/data.csv",
                                             className="mb-3",
                                         ),
+                                        html.Div(id="artifact-eval-precheck", className="mb-3"),
                                         html.Hr(),
+                                        html.H5("Overview", className="mb-2"),
+                                        html.Div(id="result-overview-summary", className="mb-3"),
                                         html.H5("Details", className="mb-2"),
                                         html.Div(id="result-details"),
                                         html.Pre(

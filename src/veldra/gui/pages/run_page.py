@@ -38,8 +38,37 @@ def layout(state: dict | None = None) -> html.Div:
                             html.Div(
                                 [
                                     html.H5("1. Auto-Action Mode", className="text-info mb-3"),
-                                    # Action is now auto-determined by Config content logic
-                                    # We keep the RadioItems but hidden, populated by callback
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.RadioItems(
+                                                    id="run-action-override-mode",
+                                                    options=[
+                                                        {"label": "Auto", "value": "auto"},
+                                                        {"label": "Manual", "value": "manual"},
+                                                    ],
+                                                    value="auto",
+                                                    inline=True,
+                                                ),
+                                                width=12,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Select(
+                                                    id="run-action-manual",
+                                                    options=[
+                                                        {"label": a.upper(), "value": a}
+                                                        for a in actions
+                                                    ],
+                                                    value="fit",
+                                                ),
+                                                width=12,
+                                                className="mt-2",
+                                                id="run-action-manual-container",
+                                                style={"display": "none"},
+                                            ),
+                                        ],
+                                        className="mb-2",
+                                    ),
                                     html.Div(
                                         [
                                             dbc.RadioItems(
@@ -56,6 +85,10 @@ def layout(state: dict | None = None) -> html.Div:
                                                 id="run-action-display",
                                                 className="badge bg-primary fs-6 p-2 mb-3",
                                                 children="Ready: TRAIN",
+                                            ),
+                                            html.Div(
+                                                id="run-action-description",
+                                                className="small text-muted mb-2",
                                             ),
                                         ]
                                     ),
@@ -189,6 +222,8 @@ def layout(state: dict | None = None) -> html.Div:
                                         ],
                                         id="run-launch-container",
                                     ),
+                                    html.Div(id="run-guardrail-container", className="mt-3"),
+                                    dcc.Store(id="run-guardrail-has-error", data=False),
                                     dcc.Loading(
                                         id="run-loading",
                                         type="dot",
@@ -239,8 +274,7 @@ def layout(state: dict | None = None) -> html.Div:
                                             ),
                                         ],
                                         className=(
-                                            "d-flex justify-content-between "
-                                            "align-items-center mb-3"
+                                            "d-flex justify-content-between align-items-center mb-3"
                                         ),
                                     ),
                                     dcc.Interval(

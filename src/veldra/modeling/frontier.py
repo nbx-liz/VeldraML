@@ -28,6 +28,7 @@ class FrontierTrainingOutput:
     cv_results: pd.DataFrame
     feature_schema: dict[str, Any]
     training_history: dict[str, Any]
+    observation_table: pd.DataFrame
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
@@ -71,10 +72,11 @@ def _train_single_booster(
     config: RunConfig,
     evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
+    metric_value: str | list[str] = config.train.metrics or "quantile"
     params = {
         "objective": "quantile",
         "alpha": float(config.frontier.alpha),
-        "metric": "quantile",
+        "metric": metric_value,
         "verbosity": -1,
         "seed": config.train.seed,
         **config.train.lgb_params,
@@ -159,6 +161,7 @@ def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTra
     alpha = float(config.frontier.alpha)
 
     oof_pred = np.full(len(x), np.nan, dtype=float)
+    fold_ids = np.full(len(x), -1, dtype=int)
     fold_records: list[dict[str, float | int]] = []
     history_folds: list[dict[str, Any]] = []
 
@@ -193,6 +196,7 @@ def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTra
                 "Frontier prediction output length does not match validation rows."
             )
         oof_pred[valid_idx] = pred
+        fold_ids[valid_idx] = fold_idx
 
         fold_metrics = _frontier_metrics(y.iloc[valid_idx].to_numpy(), pred, alpha)
         best_iteration, num_iterations = _booster_iteration_stats(
@@ -259,10 +263,21 @@ def train_frontier_with_cv(config: RunConfig, data: pd.DataFrame) -> FrontierTra
         "task_type": config.task.type,
         "frontier_alpha": alpha,
     }
+    denominator = np.where(np.abs(oof_pred) < 1e-12, np.nan, oof_pred)
+    observation_table = pd.DataFrame(
+        {
+            "fold_id": fold_ids,
+            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+            "y_true": y.to_numpy(dtype=float),
+            "prediction": oof_pred,
+            "efficiency": y.to_numpy(dtype=float) / denominator,
+        }
+    )
     return FrontierTrainingOutput(
         model_text=final_model.model_to_string(),
         metrics=metrics,
         cv_results=cv_results,
         feature_schema=feature_schema,
         training_history=training_history,
+        observation_table=observation_table,
     )

@@ -1,0 +1,80 @@
+"""Diagnostics utilities for notebook and reporting workflows."""
+
+from veldra.diagnostics.causal_diag import (
+    compute_balance_smd,
+    compute_overlap_stats,
+    compute_trimming_comparison,
+    get_if_outliers,
+    plot_if_distribution,
+    plot_love_plot,
+    plot_parallel_trends,
+    plot_propensity_distribution,
+    plot_weight_distribution,
+)
+from veldra.diagnostics.importance import compute_importance
+from veldra.diagnostics.metrics import (
+    binary_metrics,
+    frontier_metrics,
+    multiclass_metrics,
+    regression_metrics,
+    split_in_out_metrics,
+)
+from veldra.diagnostics.plots import (
+    plot_error_histogram,
+    plot_feature_importance,
+    plot_frontier_scatter,
+    plot_lift_chart,
+    plot_nll_histogram,
+    plot_pinball_histogram,
+    plot_roc_comparison,
+    plot_shap_summary,
+    plot_timeseries_prediction,
+    plot_timeseries_residual,
+    plot_true_class_prob_histogram,
+)
+from veldra.diagnostics.shap_native import compute_shap, compute_shap_multiclass
+from veldra.diagnostics.tables import (
+    build_binary_table,
+    build_dr_table,
+    build_drdid_table,
+    build_frontier_table,
+    build_multiclass_table,
+    build_regression_table,
+)
+
+__all__ = [
+    "binary_metrics",
+    "build_binary_table",
+    "build_dr_table",
+    "build_drdid_table",
+    "build_frontier_table",
+    "build_multiclass_table",
+    "build_regression_table",
+    "compute_balance_smd",
+    "compute_importance",
+    "compute_overlap_stats",
+    "compute_shap",
+    "compute_shap_multiclass",
+    "compute_trimming_comparison",
+    "frontier_metrics",
+    "get_if_outliers",
+    "multiclass_metrics",
+    "plot_error_histogram",
+    "plot_feature_importance",
+    "plot_frontier_scatter",
+    "plot_if_distribution",
+    "plot_lift_chart",
+    "plot_love_plot",
+    "plot_nll_histogram",
+    "plot_parallel_trends",
+    "plot_pinball_histogram",
+    "plot_propensity_distribution",
+    "plot_roc_comparison",
+    "plot_shap_summary",
+    "plot_timeseries_prediction",
+    "plot_timeseries_residual",
+    "plot_true_class_prob_histogram",
+    "plot_weight_distribution",
+    "regression_metrics",
+    "split_in_out_metrics",
+]

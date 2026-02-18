@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-16
+最終更新: 2026-02-17
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -68,6 +68,13 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 21: Dash GUI MVP（Config編集 + Run実行 + Artifact閲覧）
 - Phase 22: Config migration utility MVP（`veldra config migrate`）
 - Phase 25: GUI運用強化（async job queue + config migrate統合）
+- Phase 26: UX/UI改善（7画面再構成 + Export + Learning Curves）
+- Phase 26.1: UI改善（バグ修正3件 + ユースケース駆動UI再構成設計）← **実装中**
+- Phase 26.2: ユースケース駆動UI改善（ヘルプUI基盤 + 画面別ガイド強化）
+- Phase 26.3: ユースケース詳細化（diagnostics ライブラリ + observation_table + Notebook 完全版 + 実行証跡）← **完了**
+- Phase 26.4: Notebook 教育化 & テスト品質強化 ← **計画策定済み**
+- Phase 26.5: 13.3 A/B Notebook適用 + gui_e2e安定化 ← **完了**
+- Phase 26.6: テスト品質向上（命名整理 + カバレッジ強化）← **完了**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -176,888 +183,1290 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 
 ## 12. Phase 25（完了）: GUI運用強化
 
-### 完了内容
-- 非同期ジョブ実行（SQLite永続 + single worker + best-effort cancel）
-- `/config` への config migrate 統合（preview/diff/apply）
-- GUI callback の堅牢化
-  - uploadデータのbase64デコード例外をユーザー向けエラーに変換
-  - callback外実行でも破綻しない互換フォールバックを追加
-  - 旧テスト契約（引数/戻り値）との後方互換を維持
+### 要約
+- 非同期ジョブ実行基盤を GUI に導入（SQLite 永続 + single worker + best-effort cancel）。
+- `/config` に config migrate（preview/diff/apply）を統合。
+- GUI callback の堅牢化を実施（アップロード例外のユーザー向け変換、callback 外フォールバック、旧テスト契約互換維持）。
 
 ### 検証結果
 - `pytest -q`: **405 passed, 0 failed**
-- GUI主要フロー（Data → Config → Run → Results）で callback 破綻が発生しないことを確認
+- Data → Config → Run → Results の主要導線で callback 破綻なし。
 
 ### Notes
-- `ruff check` はリポジトリ全体で既存違反が残っており、Phase25スコープ外として別途整理する。
+- `ruff check` の既存違反は Phase25 スコープ外として別管理。
 
 ## 12.5 Phase25.5: テスト改善計画（DRY / 対称性 / API化）(完了)
 
-### Context（2026-02-14 時点）
-- テストスイートは約145ファイル。
-- データ生成ロジック（`_binary_frame` など）が42ファイルに分散し、関連ヘルパー定義は56箇所ある。
-- タスク別の契約テストは regression だけ `fit_smoke / predict_contract / evaluate_metrics / artifact_roundtrip` が不足している。
-- `*_internal` テストの一部が private関数に直結し、リファクタリング耐性を下げている。
+### 要約
+- 課題: テストデータ生成の重複（42ファイル）、regression 契約テスト不足、private 関数依存テストの存在。
+- 実施:
+  - `tests/conftest.py` に共通ファクトリー群（`binary_frame` / `multiclass_frame` / `regression_frame` / `frontier_frame` / `panel_frame` / `config_payload` / `FakeBooster`）を追加し、Wave 方式で移行。
+  - regression の契約テスト 4 種を補完（fit/predict/evaluate/artifact roundtrip）。
+  - 公開ユーティリティ化:
+    - `src/veldra/split/cv.py`: `iter_cv_splits`
+    - `src/veldra/causal/diagnostics.py`: `overlap_metric`, `max_standardized_mean_difference`
+  - task 実装の private `_iter_cv_splits` と causal 内重複ロジックを公開関数利用へ置換。
+- 非公開維持: `_train_single_booster`, `_to_python_scalar`, `_normalize_proba`。
 
-### 目的
-- DRY原則に沿ってテストデータ生成を共通化する。
-- task間で同じ種類の契約テストを揃える。
-- private実装依存のテストを公開ユーティリティ/公開API検証へ移す。
-
-### Phase 1: データ生成ロジックの共通化（DRY）
-- `tests/conftest.py` に以下を追加する。
-- `binary_frame(rows, seed, coef1, coef2, noise)`
-- `multiclass_frame(rows_per_class, seed, scale)`
-- `regression_frame(rows, seed, coef1, coef2, noise)`
-- `frontier_frame(rows, seed)`
-- `panel_frame(n_units, seed)`
-- `config_payload(task_type, **overrides)`
-- `FakeBooster`
-- 42ファイルをWave方式で段階移行する。
-- Wave1: smoke/contract系 + internal系（優先）
-- Wave2: tune/simulate/export 系
-- Wave3: examples/補助テスト系
-- 再発防止として、対象Waveでローカル `def _*frame` を禁止する契約テストを追加する。
-
-### Phase 2: テスト対称性の確保（regression補完）
-- 新規作成:
-- `tests/test_regression_fit_smoke.py`
-- `tests/test_regression_predict_contract.py`
-- `tests/test_regression_evaluate_metrics.py`
-- `tests/test_regression_artifact_roundtrip.py`
-- 既存の binary/frontier 契約テストをテンプレートにし、以下を検証する。
-- fitでartifactと主要ファイルが生成されること
-- predict契約（出力shape、特徴量順序、欠損特徴量エラー）
-- evaluate契約（`rmse`, `mae`, `r2`）
-- save/load往復で予測整合と `feature_schema` 維持
-
-### Phase 3: internalテストの公式API化
-- 3.1 CV splitユーティリティの公開化。
-- 新規: `src/veldra/split/cv.py` に `iter_cv_splits(config, data, x, y=None)` を追加
-- `src/veldra/split/__init__.py` でexport
-- `binary/multiclass/regression/frontier` の private `_iter_cv_splits` を削除し公開関数利用へ置換
-- 新規: `tests/test_split_cv.py`
-- 3.2 因果診断メトリクスの公開化。
-- 新規: `src/veldra/causal/diagnostics.py`
-- 公開関数: `overlap_metric`, `max_standardized_mean_difference`
-- `src/veldra/causal/__init__.py` でexport
-- `dr.py` と `dr_did.py` の重複実装を当該公開関数へ置換
-- 新規: `tests/test_causal_diagnostics.py`
-- `tests/test_drdid_internal.py` の該当private依存テストを置換
-- 3.3 private維持方針。
-- 公開化しない: `_train_single_booster`, `_to_python_scalar`, `_normalize_proba`
-- 将来検討: `_default_search_space`
-
-### 検証コマンド
-- `uv run pytest tests -x --tb=short`
-- `uv run pytest tests/test_binary_fit_smoke.py tests/test_multiclass_fit_smoke.py -v`
-- `uv run pytest tests/test_regression_fit_smoke.py tests/test_regression_predict_contract.py tests/test_regression_evaluate_metrics.py tests/test_regression_artifact_roundtrip.py -v`
-- `uv run pytest tests/test_split_cv.py tests/test_causal_diagnostics.py -v`
-- `uv run pytest tests/test_binary_internal.py tests/test_regression_internal.py -v`
-- `uv run ruff check src/veldra/split src/veldra/causal tests`
-
-### 完了条件
-- regressionの契約テスト4種が追加され、task間の対称性ギャップが解消される。
-- 優先Waveの重複データ生成ロジックがconftestファクトリーへ移行される。
-- CV split/causal diagnostics が公開ユーティリティとしてテストされる。
-- Stable API（`veldra.api.*`）の互換性は維持される。
+### 完了条件の達成
+- regression の契約対称性を解消。
+- DRY 化と公開 API 寄せを完了。
+- Stable API（`veldra.api.*`）互換性を維持。
 
 ## 12.6 Phase25.6: GUI UXポリッシュ（CSS/HTML限定）(完了)
 
-### 目的
-- ダークテーマ上の可読性を改善する。
-- データプレビューの操作性（縦スクロール時の列ヘッダー参照性）を改善する。
-- Configページ内の主要導線を視覚的に統一し、操作迷いを減らす。
+### 要約
+- スコープを CSS/HTML に限定し、機能追加や API/Artifact/RunConfig 契約変更は未実施。
+- 主な改善:
+  - 可読性改善（`text-muted-readable`）。
+  - データプレビューのヘッダー sticky 化。
+  - `Split Type=Time Series` 時の `Time Column` 必須警告を明示。
+  - Data Settings の簡素化（Categorical Columns 非表示化）。
+  - 不要表示削除（`ID Columns (Optional - for Group K-Fold)` を非表示維持）。
+  - workflow ボタン色/ステッパー状態の視覚統一、export preset 初期値を `artifacts` に固定。
 
-### 非スコープ
-- 機能追加（新しいコールバック、データ処理ロジック、永続化仕様の変更）。
-- 公開API/Artifact/RunConfig契約の変更。
-
-### 主要成果物
-- `text-muted-readable` クラス導入（`#cbd5e1`）による補助テキストのコントラスト改善。
-- データプレビュー表の `thead th` sticky固定（インラインstyle + CSS fallback）。
-- `ID Columns (Optional - for Group K-Fold)` の表示を削除（内部互換のため関連IDは非表示維持）。
-- Export preset (`cfg-export-dir-preset`) の初期選択を `artifacts` に固定。
-- ワークフロー進行ボタン色を `primary` に統一。
-- ステッパー活性状態に glow、完了済みコネクタに成功色を反映。
-- `Split Type=Time Series` 時に `Time Column` 必須であることを GUI 上で明示する警告表示を追加。
-- Data Settings から `Categorical Columns (Optional override)` を非表示化し、導線を簡素化。
-
-### 検証コマンド
-- `uv run pytest tests/test_gui_app_callbacks_internal.py tests/test_gui_app_pure_callbacks.py tests/test_gui_app_job_flow.py -v`
-- `uv run pytest tests/test_gui_pages_logic.py tests/test_gui_pages_and_init.py tests/test_gui_app_callbacks_config.py tests/test_gui_app_additional_branches.py -v`
-- `uv run pytest tests -x --tb=short`
+### 検証
+- GUI 関連テスト群および全体スモーク（`uv run pytest tests -x --tb=short`）で確認。
 
 ## 12.7 Phase25.7: LightGBMの機能強化（完了・検証済み）
 
 ### 目的
-- 目的変数の自動判定機能
-- バリデーションデータの適切な自動設定
-- ImbalanceデータにWeightを自動適用する機能
-- `num_boost_round` の設定可能化（現在300にハードコード）
-- 学習曲線の早期停止機能（Learning Curve 監視 および Early Stopping）
-- 学習曲線データの記録・Artifact保存（可視化はPhase30で対応）
-- GUI対応（新パラメーター、ラベル修正）
-- Config migration（`lgb_params.n_estimators` → `train.num_boost_round`）
+- 学習契約を RunConfig 駆動で強化（`num_boost_round`、Early Stopping 分割、class weight、自動 split、学習履歴保存、GUI/migrate 連携）。
 
-### 現状分析
-
-| 機能 | 現状 | 対応 |
-|------|------|------|
-| `num_boost_round` | 300にハードコード。GUIの `n_estimators` は `lgb_params` に格納されるが `lgb.train()` では無視される | `TrainConfig` に昇格 |
-| 目的関数 | タスクごとにハードコード（`binary`, `regression` 等）。自動判定は既存で機能している | ユーザー上書きは `lgb_params.objective` 経由で既に可能。GUIドロップダウン追加 |
-| クラス不均衡 | 未実装 | `is_unbalance` / sample weight の自動・手動設定 |
-| バリデーション分割 | CVフォールドから適切に生成されている。ただしタスクに応じた分割タイプの自動選択は未実装 | タスク/設定に応じた分割タイプの自動適用を実装 |
-| 早期停止 | CVフォールドではOOFデータをES監視に使用（OOFの独立性にリーク）。最終モデルは `x_valid=x, y_valid=y` でES実質無効 | CVフォールド・最終モデルの両方で、train部分からES用バリデーションを自動分割。OOFは純粋にOOF予測専用 |
-| 学習曲線 | イテレーションごとのメトリクス保存なし | `record_evaluation` callback + Artifact保存。可視化はPhase30で対応 |
-
----
-
-### Step 1: `TrainConfig` スキーマ拡張
-
-**対象**: `src/veldra/config/models.py`
-
-```python
-class TrainConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lgb_params: dict[str, Any] = Field(default_factory=dict)
-    early_stopping_rounds: int | None = 100
-    early_stopping_validation_fraction: float = 0.1  # NEW: 最終モデルの early stopping 用バリデーション比率
-    num_boost_round: int = 300                    # NEW
-    seed: int = 42
-    auto_class_weight: bool = True                # NEW: opt-out
-    class_weight: dict[str, float] | None = None  # NEW: ユーザー手動指定
-```
-
-**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
-- `auto_class_weight=True` は `binary` / `multiclass` のみ許可（`regression`/`frontier` で True なら ValueError）
-- `class_weight` は `binary` / `multiclass` のみ許可
-- `auto_class_weight=True` と `class_weight` の同時指定は禁止（手動指定が優先される旨のエラー）
-- `num_boost_round >= 1` を検証
-- `0.0 < early_stopping_validation_fraction < 1.0` を検証
-
----
-
-### Step 2: `num_boost_round` の設定可能化 + 最終モデル Early Stopping 用バリデーション分割
-
-**対象**: 全 `_train_single_booster` 関数（4ファイル）+ 全 `train_*_with_cv` 関数（4ファイル）
-
-#### 2a: `num_boost_round` の設定可能化
-
-```python
-# Before（全タスク共通）
-num_boost_round=300
-
-# After
-num_boost_round=config.train.num_boost_round
-```
-
-#### 2b: Early Stopping 用バリデーション分割（CVフォールド + 最終モデル共通）
-
-**問題**:
-- CVフォールド: 現在OOFデータ（valid部分）を early stopping の監視対象として使用している。これではOOFが完全にOOFでなくなる（early stopping の判断にリークする）。
-- 最終モデル: `x_valid=x, y_valid=y`（訓練データ＝バリデーションデータ）のため early stopping が実質無効。
-
-**設計方針**:
-- CVフォールド・最終モデルの両方で、**学習に使うデータ（train部分）からさらに early stopping 用バリデーションデータを自動分割**する
-- OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、**純粋にOOF予測専用**として扱う
-- 分割比率: `train.early_stopping_validation_fraction`（既定 `0.1`、train部分の10%をearly stopping用バリデーションに使用）
-- `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習する
-
-**タスクに応じた分割タイプの自動適用**:
-- `task.type=binary/multiclass` → `sklearn.model_selection.StratifiedShuffleSplit` で層化分割
-- `task.type=regression/frontier` → `sklearn.model_selection.ShuffleSplit` でランダム分割
-- `split.type=timeseries` → 時系列順で末尾 N% をバリデーションに使用（シャッフルしない）
-
-**CVフォールドの変更**:
-```python
-# Before
-for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-    booster = _train_single_booster(
-        x_train=x.iloc[train_idx], y_train=y.iloc[train_idx],
-        x_valid=x.iloc[valid_idx], y_valid=y.iloc[valid_idx],  # OOFデータをES監視に使用（リーク）
-        config=config,
-    )
-
-# After
-for fold_idx, (train_idx, valid_idx) in enumerate(splits, start=1):
-    x_fold_train, y_fold_train = x.iloc[train_idx], y.iloc[train_idx]
-    # train部分からES用バリデーションを分割（OOFは純粋にOOFのまま）
-    x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
-        x_fold_train, y_fold_train, config
-    )
-    booster = _train_single_booster(
-        x_train=x_es_train, y_train=y_es_train,
-        x_valid=x_es_valid, y_valid=y_es_valid,  # ES専用バリデーション
-        config=config,
-    )
-    # OOFデータはES非依存で予測のみに使用
-    pred = booster.predict(x.iloc[valid_idx], ...)
-```
-
-**最終モデルの変更**:
-```python
-# Before
-final_model = _train_single_booster(
-    x_train=x, y_train=y,
-    x_valid=x, y_valid=y,  # 訓練データ＝バリデーションデータ（ES無効）
-    config=config,
-)
-
-# After
-x_es_train, x_es_valid, y_es_train, y_es_valid = _split_for_early_stopping(
-    x, y, config
-)
-final_model = _train_single_booster(
-    x_train=x_es_train, y_train=y_es_train,
-    x_valid=x_es_valid, y_valid=y_es_valid,
-    config=config,
-)
-```
-
-**`_split_for_early_stopping` 関数**（`src/veldra/modeling/utils.py` に新設）:
-```python
-def _split_for_early_stopping(
-    x: pd.DataFrame,
-    y: pd.Series,
-    config: RunConfig,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """学習データから early stopping 用バリデーションデータを分割する。
-
-    - early_stopping_rounds=None の場合は分割せず (x, x, y, y) を返す（従来互換）。
-    - タスクに応じた分割タイプを自動適用する。
-    - CVフォールド内でも最終モデル学習時でも共通で使用する。
-    """
-```
-
-**`TrainConfig` 追加フィールド**:
-```python
-early_stopping_validation_fraction: float = 0.1  # NEW: ES用バリデーション比率
-```
-
-**対象ファイル**:
-- `src/veldra/modeling/utils.py`（新設: `_split_for_early_stopping`）
-- `src/veldra/modeling/binary.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/multiclass.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/regression.py`（CVループ + 最終モデル）
-- `src/veldra/modeling/frontier.py`（CVループ + 最終モデル）
-
----
-
-### Step 3: クラス不均衡の自動検出・重み適用
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`
-
-**Binary**（`_train_single_booster` 内）:
-- `config.train.class_weight` が指定されている場合:
-  - `class_weight` から `scale_pos_weight`（= neg_count / pos_count 相当）を算出し `params` に設定
-- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
-  - `params["is_unbalance"] = True` を自動的に設定
-
-**Multiclass**（`_train_single_booster` 内）:
-- `config.train.class_weight` が指定されている場合:
-  - `class_weight` dict からサンプルごとの重みを算出し `lgb.Dataset(weight=...)` に渡す
-- `config.train.auto_class_weight=True` かつ `class_weight=None` の場合:
-  - `sklearn.utils.class_weight.compute_sample_weight("balanced", y_train)` でサンプル重みを自動算出し `lgb.Dataset(weight=...)` に渡す
-
----
-
-### Step 4: バリデーション分割の自動適用
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/multiclass.py`, 因果推論経路
-
-**実装方針**（分割タイプをタスク/設定に応じて自動的に適用する）:
-- `task.type=binary/multiclass` かつ `split.type=kfold` → 内部で `stratified` 分割を自動適用する
-  - ユーザーが明示的に `split.type` を設定している場合はそれを尊重する
-- `causal` 設定時 → `split.group_col` または `causal.unit_id_col`（panel）利用可能時に `GroupKFold` を適用し、利用不可時は `KFold` にフォールバックする
-- `split.type=timeseries` → 既存実装で時系列分割が適用される（変更なし）
-
----
-
-### Step 5: 学習曲線データの記録・Artifact保存
-
-**対象**: 全 `_train_single_booster` + 各 `TrainingOutput` + Artifact保存
-
-**実装方針**:
-- `_train_single_booster` の戻り値を `tuple[lgb.Booster, dict]` に変更し、`lgb.record_evaluation()` の結果を返す
-- 各 `TrainingOutput` dataclass に `training_history: list[dict]` フィールドを追加
-- Artifact保存時に `training_history.json` として永続化
-
-**Artifactスキーマ**:
-```json
-{
-  "folds": [
-    {
-      "fold": 1,
-      "num_iterations": 150,
-      "best_iteration": 120,
-      "eval_history": {"binary_logloss": [0.69, 0.55, 0.42, ...]}
-    }
-  ]
-}
-```
-
-**注**: 学習曲線の可視化（GUI/チャート）はPhase30で対応する。本Stepではデータ保存のみ。
-
----
-
-### Step 6: GUI対応
-
-**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
-
-**変更点**:
-1. `N Estimators` ラベルを `Num Boost Round` に変更し、意味を正確に反映する
-2. `Auto Class Weight` トグルスイッチ追加（`binary`/`multiclass` 選択時のみ表示、既定 ON）
-3. `Class Weight` 手動入力フィールド追加（`Auto Class Weight=OFF` 時のみ活性化）
-4. Config builder で `num_boost_round` を `train.num_boost_round` に正しくマッピング（現在の `lgb_params.n_estimators` のミスマッピングを修正）
-
----
-
-### Step 7: Config Migration
-
-**対象**: `src/veldra/config/migrate.py`
-
-- `train.lgb_params.n_estimators` が存在する場合 → 値を `train.num_boost_round` に移行
-- `n_estimators` キーを `lgb_params` から削除
-- migration utility に変換ルールを追加
-
----
-
-### Step 8: テスト計画
-
-| テスト | 内容 | ファイル |
-|--------|------|----------|
-| スキーマ検証 | `num_boost_round`, `auto_class_weight`, `class_weight`, `early_stopping_validation_fraction` のバリデーション | `tests/test_config_train_fields.py` |
-| Binary不均衡自動 | `auto_class_weight=True` で `is_unbalance` が自動的に設定される | `tests/test_binary_class_weight.py` |
-| Binary手動重み | `class_weight` 指定で `scale_pos_weight` が適用される | 同上 |
-| Multiclass不均衡自動 | `auto_class_weight=True` で balanced sample weight が自動的に適用される | `tests/test_multiclass_class_weight.py` |
-| Multiclass手動重み | `class_weight` 指定で指定重みがサンプルに適用される | 同上 |
-| num_boost_round | 設定値が実際の学習に反映される | `tests/test_num_boost_round.py` |
-| 分割自動適用 | binary/multiclass で stratified が自動適用される | `tests/test_auto_split_selection.py` |
-| 分割自動適用(causal) | causal 設定時に group KFold が自動適用される | 同上 |
-| ES用バリデーション分割(CV) | CVフォールドでtrain部分からES用バリデーションが分割され、OOFがES監視に使用されない | `tests/test_early_stopping_validation.py` |
-| ES用バリデーション分割(最終モデル) | 最終モデル学習時にも全データからES用バリデーションが分割される | 同上 |
-| ES用バリデーション分割(timeseries) | 時系列データで末尾N%がバリデーションに使用される | 同上 |
-| ES用バリデーション分割(stratified) | binary/multiclass で層化分割がバリデーション生成に使用される | 同上 |
-| ES無効時 | `early_stopping_rounds=None` の場合は分割せず全データで学習される | 同上 |
-| 学習曲線 | `training_history` がArtifactに保存される | `tests/test_training_history.py` |
-| 早期停止 | `best_iteration` が `training_history` に記録される | 同上 |
-| GUI | Config builder が新フィールドを正しく生成する | `tests/test_gui_app_callbacks_config.py` |
-| Migration | `lgb_params.n_estimators` → `num_boost_round` 変換 | `tests/test_config_migration.py` |
-
-### 検証コマンド
-- `uv run pytest tests/test_config_train_fields.py tests/test_binary_class_weight.py tests/test_multiclass_class_weight.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_auto_split_selection.py tests/test_early_stopping_validation.py -v`
-- `uv run pytest tests/test_training_history.py -v`
-- `uv run pytest tests/test_gui_app_callbacks_config.py tests/test_config_migration.py -v`
-- `uv run pytest tests -x --tb=short`
-
-### 実装順序（依存関係順）
-1. Step 1: `TrainConfig` スキーマ拡張 + バリデーション
-2. Step 2: `num_boost_round` 設定可能化 + 最終モデル Early Stopping 用バリデーション分割（全4ファイル + utils.py 新設）
-3. Step 3: クラス不均衡の自動検出・重み適用（binary + multiclass）
-4. Step 4: バリデーション分割の自動適用
-5. Step 5: 学習曲線データの記録・Artifact保存
-6. Step 6: GUI対応
-7. Step 7: Config Migration
-8. Step 8: テスト
-
-### 完了条件
-- 目的変数の自動判定機能が実装され、ユーザーが明示的に指定しなくても適切な目的関数が選択されること。必要に応じてユーザーが設定変更もできること。
-- バリデーションデータの適切な設定が自動的に行われ、モデルの過学習を防止するための適切なバリデーションが実施されること。
-  - データが時系列の場合は、時系列分割が自動的に適用されること。
-  - 目的変数がカテゴリカル（Binary or Multi-class）であれば、層化分割が自動的に適用されること。
-  - DR or DR-DiD の傾向スコアモデルとOutcomeモデルには、Group K-Fold 分割が自動的に適用されること。
-- CVフォールド・最終モデルの両方で、学習データ（train部分）からタスクに応じた分割タイプで early stopping 用バリデーションデータが自動分割されること。OOFデータ（CVのvalid部分）は early stopping の監視に一切使わず、純粋にOOF予測専用として扱われること。
-  - binary/multiclass → 層化分割（StratifiedShuffleSplit）で自動分割されること。
-  - regression/frontier → ランダム分割（ShuffleSplit）で自動分割されること。
-  - timeseries → 時系列順で末尾 N% がバリデーションに使用されること。
-  - `early_stopping_rounds=None`（early stopping 無効）の場合は分割せず、従来通り全データで学習すること。
-  - 分割比率は `early_stopping_validation_fraction`（既定 0.1）で制御可能であること。
-- ImbalanceデータにWeightを適用する機能が実装され、クラス不均衡なデータセットに対して適切な重み付けが自動的に行われること。
-  - Binary分類タスクで、`auto_class_weight=True`（既定）の場合に、LightGBMの `is_unbalance` パラメーターが自動的に設定されること。
-    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
-  - Multi-class分類タスクで、`auto_class_weight=True`（既定）の場合に、balanced sample weight が自動的に算出・適用されること。
-    - ユーザーが明示的にクラス重みを `class_weight` で指定できるオプションも提供されること。
-- `num_boost_round` が `TrainConfig` から制御可能で、全タスク（regression/binary/multiclass/frontier）で反映されること。
-- 学習曲線の早期停止機能が実装され、ユーザーが `early_stopping_rounds` と `num_boost_round` を設定できること。
-- 学習曲線データ（foldごとのイテレーション別メトリクス + best_iteration）が `training_history.json` としてArtifactに保存されること。学習曲線の可視化はPhase30で対応する。
-- GUI で `Num Boost Round`、`Auto Class Weight`、`Class Weight` が設定可能であること。
-- `lgb_params.n_estimators` → `train.num_boost_round` の Config migration が動作すること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+### 実装要点（Step1-8 完了）
+- `TrainConfig` 拡張:
+  - `num_boost_round`, `early_stopping_validation_fraction`, `auto_class_weight`, `class_weight` を追加。
+  - cross-field validation を追加（task 制約、競合指定、値域）。
+- 学習ループ:
+  - 全 task で `num_boost_round` を 300 固定から設定値駆動へ移行。
+  - CV/最終学習ともに train 部分から ES 用 validation を自動分割（OOF を ES 監視に使わない）。
+  - `timeseries` は末尾 N%、分類は stratified、回帰/frontier は shuffle split。
+- クラス不均衡対応:
+  - binary: `is_unbalance` 自動、手動 `class_weight` から `scale_pos_weight` 適用。
+  - multiclass: 自動/手動 sample weight を `Dataset(weight=...)` へ反映。
+- 学習履歴:
+  - `record_evaluation` を保存し、Artifact に `training_history.json` を永続化。
+- GUI + migration:
+  - `Num Boost Round` 表示、`Auto Class Weight` / `Class Weight` 入力追加。
+  - `lgb_params.n_estimators` → `train.num_boost_round` を migrate。
 
 ### 検証結果（2026-02-16）
-- 全8ステップ（スキーマ拡張 / num_boost_round / ES分割 / クラス不均衡 / 分割自動適用 / 学習曲線 / GUI / Migration）が実装完了。
-- Phase25.7 関連テスト: **31 passed, 0 failed**
-- Stable API 互換性: 維持確認済み
+- Phase25.7 関連: **31 passed, 0 failed**
+- Stable API 互換性: 維持確認済み。
 
-## 12.8 Phase25.8: LightGBMのパラメーター追加
+## 12.8 Phase25.8: LightGBMのパラメーター追加（実装・検証完了）
 
 ### 目的
-- Top-K Precision の追加（`top_k` パラメーター）により、Binary モデル性能評価の多様化を実現する。
-- 特徴量の重み付けの追加（`feature_weights` パラメーター）により、特定特徴量への分割集中を制御する。
-- `num_leaves` の自動調整機能（`auto_num_leaves` + `num_leaves_ratio`）により、木構造のデータ適応を自動化する。
-- 比率ベースのリーフ制約（`min_data_in_leaf_ratio`, `min_data_in_bin_ratio`）により、過学習防止とモデル安定性を向上する。
-- 既存の `lgb_params` 経由パラメーターを GUI で直接設定可能にする。
-
-### 現状分析
-
-| パラメーター | 現状 | 対応 |
-|-------------|------|------|
-| `top_k` | 未実装。Binary 評価・学習に precision@k がない | `TrainConfig` に追加。LightGBM カスタム metric（`feval`）として学習ループに組込み、ES 監視・tune objective・evaluate 返却で利用可能にする |
-| `feature_weights` | 未実装 | `TrainConfig` に追加し、`lgb.Dataset(feature_name=..., weight=...)` とは別に `lgb.Dataset` の `feature_name` パラメータに続けて適用 |
-| `auto_num_leaves` | 未実装。GUI で `num_leaves` を手動入力するのみ | `TrainConfig` にフラグ追加。`max_depth` から動的に `num_leaves` を算出 |
-| `num_leaves_ratio` | 未実装 | `auto_num_leaves=True` 時の補正係数として `TrainConfig` に追加 |
-| `min_data_in_leaf_ratio` | 未実装。`min_child_samples` は絶対値で `lgb_params` 経由 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_leaf` を動的算出 |
-| `min_data_in_bin_ratio` | 未実装。`min_data_in_bin` は `lgb_params` 経由で設定可能 | `TrainConfig` に追加。学習時にデータ行数から `min_data_in_bin` を動的算出 |
-| `path_smooth` / `cat_l2` / `cat_smooth` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
-| `bagging_freq` / `max_bin` / `max_drop` / `min_gain_to_split` | `lgb_params` 経由で設定可能だが GUI 入力なし | GUI Advanced セクションに入力欄追加 |
-
----
-
-### Step 1: `TrainConfig` スキーマ拡張
-
-**対象**: `src/veldra/config/models.py`
-
-```python
-class TrainConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lgb_params: dict[str, Any] = Field(default_factory=dict)
-    early_stopping_rounds: int | None = 100
-    early_stopping_validation_fraction: float = 0.1
-    num_boost_round: int = 300
-    auto_class_weight: bool = True
-    class_weight: dict[str, float] | None = None
-    seed: int = 42
-    # --- Phase25.8 追加 ---
-    auto_num_leaves: bool = False               # NEW: max_depth から num_leaves を自動算出
-    num_leaves_ratio: float = 1.0               # NEW: auto_num_leaves 時の補正係数
-    min_data_in_leaf_ratio: float | None = None  # NEW: 行数に対する比率 (例: 0.01 → 1%)
-    min_data_in_bin_ratio: float | None = None   # NEW: 行数に対する比率 (例: 0.001)
-    feature_weights: dict[str, float] | None = None  # NEW: 特徴量名→重み
-    top_k: int | None = None                    # NEW: precision@k の k（binary のみ）
-```
-
-**バリデーション追加**（`RunConfig._validate_cross_fields` 内）:
-- `auto_num_leaves=True` の場合 `num_leaves_ratio` は `0.0 < ratio <= 1.0` を検証
-- `auto_num_leaves=True` かつ `lgb_params` に `num_leaves` が明示指定されている場合は ValueError（競合）
-- `min_data_in_leaf_ratio` は `0.0 < ratio < 1.0` を検証
-- `min_data_in_bin_ratio` は `0.0 < ratio < 1.0` を検証
-- `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定は禁止
-- `min_data_in_bin_ratio` と `lgb_params.min_data_in_bin` の同時指定は禁止
-- `top_k` は `binary` タスクのみ許可、`top_k >= 1` を検証
-- `feature_weights` の値は全て `> 0` を検証
-
----
-
-### Step 2: `auto_num_leaves` の動的算出ロジック
-
-**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
-
-```python
-def resolve_auto_num_leaves(config: RunConfig) -> int | None:
-    """auto_num_leaves=True の場合に num_leaves を動的に算出する。
-
-    - max_depth が指定されていない場合(-1): num_leaves = 131072（LightGBM上限）
-    - max_depth が指定されている場合: num_leaves = clip(2^max_depth, 8, 131072)
-    - num_leaves_ratio で補正: num_leaves = clip(ceil(num_leaves * ratio), 8, 131072)
-    - auto_num_leaves=False の場合は None を返す（既存の lgb_params.num_leaves が使われる）
-    """
-```
-
-**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
-```python
-# auto_num_leaves の解決
-resolved_leaves = resolve_auto_num_leaves(config)
-if resolved_leaves is not None:
-    params["num_leaves"] = resolved_leaves
-```
-
----
-
-### Step 3: 比率ベースのリーフ・ビン制約
-
-**対象**: `src/veldra/modeling/utils.py`（新規関数追加）
-
-```python
-def resolve_ratio_params(config: RunConfig, n_rows: int) -> dict[str, int]:
-    """比率ベースのパラメーターを絶対値に変換する。
-
-    - min_data_in_leaf_ratio: n_rows * ratio → min_data_in_leaf（最小 1）
-    - min_data_in_bin_ratio: n_rows * ratio → min_data_in_bin（最小 1）
-    """
-```
-
-**適用箇所**: 全4ファイルの `_train_single_booster` 内、`params` dict 構築後に:
-```python
-ratio_params = resolve_ratio_params(config, len(x_train))
-params.update(ratio_params)
-```
-
----
-
-### Step 4: `feature_weights` の適用
-
-**対象**: 全4ファイルの `_train_single_booster` 内
-
-**実装方針**:
-- `config.train.feature_weights` が指定されている場合、特徴量名のリストに対応する重みリストを構築
-- `lgb.Dataset` コンストラクタの `feature_name` と合わせて `lgb.train()` の `feature_weights` パラメータを使用
-- 指定されていない特徴量のデフォルト重みは `1.0`
-
-```python
-# feature_weights の適用
-if config.train.feature_weights:
-    fw = [config.train.feature_weights.get(col, 1.0) for col in x_train.columns]
-else:
-    fw = None
-# ...
-booster = lgb.train(
-    params=params,
-    train_set=train_set,
-    # ...,
-    feature_name=list(x_train.columns) if fw else "auto",
-)
-# feature_weights は lgb.Dataset ではなく lgb.train() の引数ではないため、
-# params["feature_fraction_bynode"] 等との組合せで実現するか、
-# lgb.Dataset(init_score=...) ではなく params dict に直接設定:
-# params["feature_weights"] = fw  ← LightGBM は内部で feature_weights を受け付ける（要確認）
-```
-
-**注**: LightGBM の `feature_weights` は `lgb.Dataset` の `set_feature_names` 後に
-`dataset.set_feature_names()` とは異なり `params` に直接渡す形式ではない。
-実際には `lgb.train()` の `feature_name` パラメータと合わせて
-`Dataset(feature_name=..., free_raw_data=False)` 構築後に
-`train_set.feature_name` を参照し weight リストを構築する方式を取る。
-→ LightGBM 4.x の `feature_pre_filter` と `feature_weights` サポートを確認の上、最適な方法を採用する。
-
----
-
-### Step 5: Top-K Precision のカスタム metric 実装
-
-**対象**: `src/veldra/modeling/binary.py`, `src/veldra/modeling/tuning.py`, `src/veldra/config/models.py`
-
-#### 5a: LightGBM カスタム評価関数（`feval`）
-
-**新規関数**（`src/veldra/modeling/binary.py`）:
-```python
-def _make_precision_at_k_feval(k: int):
-    """LightGBM の feval 互換の precision@k 評価関数を返す。
-
-    - feval シグネチャ: (y_pred, dataset) -> (name, value, is_higher_better)
-    - y_pred を降順ソートし、上位 k 件を抽出
-    - 抽出された k 件中の正例数 / k が precision@k
-    - k > len(y_true) の場合は全件を使用
-    - is_higher_better=True（precision は高いほど良い）
-    """
-    def _precision_at_k(y_pred, dataset):
-        y_true = dataset.get_label()
-        order = np.argsort(-y_pred)
-        top = order[:min(k, len(y_true))]
-        value = float(y_true[top].sum() / len(top))
-        return f"precision_at_{k}", value, True
-    return _precision_at_k
-```
-
-**適用箇所**（`_train_single_booster` 内）:
-- `config.train.top_k` が指定されている場合、`_make_precision_at_k_feval(k)` を生成
-- `lgb.train()` の `feval` 引数に渡す
-- これにより early stopping が `precision_at_{k}` を監視メトリクスとして利用可能になる
-
-```python
-feval_funcs = []
-if config.train.top_k is not None:
-    feval_funcs.append(_make_precision_at_k_feval(config.train.top_k))
-
-return lgb.train(
-    params=params,
-    train_set=train_set,
-    valid_sets=[valid_set],
-    num_boost_round=config.train.num_boost_round,
-    callbacks=callbacks,
-    feval=feval_funcs if feval_funcs else None,
-)
-```
-
-#### 5b: Tuning objective への統合
-
-**対象**: `src/veldra/config/models.py`
-
-`_TUNE_ALLOWED_OBJECTIVES["binary"]` に `precision_at_k` を追加:
-```python
-"binary": {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall", "precision_at_k"},
-```
-
-**対象**: `src/veldra/modeling/tuning.py`
-
-Tune trial 内で `precision_at_k` が objective に指定された場合:
-- `config.train.top_k` の値を使用して OOF 予測に対する precision@k を算出
-- `top_k` 未指定時はエラー
-
-#### 5c: evaluate API での返却
-
-**対象**: `src/veldra/modeling/binary.py`
-
-`_binary_metrics` / `_binary_label_metrics` の呼び出し後に:
-- `config.train.top_k` が指定されていれば `precision_at_{k}` をメトリクス dict に追加
-- これにより `evaluate` API の返却値にも含まれる
-
-**メトリクスキー**: `precision_at_{k}`（例: `precision_at_100`）
-
-**学習曲線**: `record_evaluation` callback により `training_history.json` にイテレーションごとの `precision_at_{k}` が自動記録される。
-
----
-
-### Step 6: GUI Advanced Training Parameters の拡充
-
-**対象**: `src/veldra/gui/pages/config_page.py`, `src/veldra/gui/app.py`
-
-**config_page.py の Advanced Training Parameters アコーディオン**に以下を追加:
-
-| GUI コンポーネント | ID | タイプ | デフォルト | 備考 |
-|-------------------|-----|--------|-----------|------|
-| Auto Num Leaves | `cfg-train-auto-num-leaves` | Switch | OFF | ON 時に Num Leaves 入力を無効化 |
-| Num Leaves Ratio | `cfg-train-num-leaves-ratio` | Slider (0.1–1.0) | 1.0 | `auto_num_leaves=ON` 時のみ活性 |
-| Min Data In Leaf Ratio | `cfg-train-min-leaf-ratio` | Input (number) | 空 | 設定時は `min_child_samples` より優先 |
-| Min Data In Bin Ratio | `cfg-train-min-bin-ratio` | Input (number) | 空 | |
-| Feature Weights | `cfg-train-feature-weights` | Textarea (JSON) | 空 | `{"col_name": 2.0, ...}` 形式 |
-| Path Smooth | `cfg-train-path-smooth` | Input (number) | 0 | |
-| Cat L2 | `cfg-train-cat-l2` | Input (number) | 10 | |
-| Cat Smooth | `cfg-train-cat-smooth` | Input (number) | 10 | |
-| Bagging Freq | `cfg-train-bagging-freq` | Input (number) | 0 | |
-| Max Bin | `cfg-train-max-bin` | Input (number) | 255 | |
-| Min Gain To Split | `cfg-train-min-gain` | Input (number) | 0 | |
-| Top K (Binary) | `cfg-train-top-k` | Input (number) | 空 | binary 選択時のみ表示。学習 feval + 評価 metric 両用 |
-
-**app.py の `_cb_build_config_yaml` への追加**:
-- 上記の各 Input を callback の引数に追加
-- `cfg["train"]` および `cfg["train"]["lgb_params"]` に値をマッピング
-- 空値（None / 空文字）はスキップし、YAML に含めない
-- `auto_num_leaves` / `num_leaves_ratio` / `min_data_in_leaf_ratio` / `min_data_in_bin_ratio` / `feature_weights` は `cfg["train"]` 直下に配置
-- `path_smooth` / `cat_l2` / `cat_smooth` / `bagging_freq` / `max_bin` / `min_gain_to_split` は `cfg["train"]["lgb_params"]` に配置
-
----
-
-### Step 7: Tuning Search Space の拡充
-
-**対象**: `src/veldra/modeling/tuning.py`
-
-**standard プリセット**に以下を追加:
-```python
-"standard": {
-    # 既存 ...
-    "lambda_l1": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
-    "lambda_l2": {"type": "float", "low": 1e-8, "high": 10.0, "log": True},  # NEW
-    "path_smooth": {"type": "float", "low": 0.0, "high": 10.0},              # NEW
-    "min_gain_to_split": {"type": "float", "low": 0.0, "high": 1.0},         # NEW
-}
-```
-
----
-
-### Step 8: Artifact パラメーター永続化の確認
-
-**現状**: `run_config.yaml` が Artifact に保存されるため、`TrainConfig` に追加された全フィールドと `lgb_params` 内のパラメーターは自動的に永続化される。
-
-**追加対応**:
-- `feature_weights` が大量の場合でも `run_config.yaml` に含まれるため、別ファイル化は不要（YAML のまま）
-- Artifact からの `predict` 実行時に `feature_weights` が保存された RunConfig から復元されることを確認
-
----
-
-### Step 9: テスト計画
-
-| テスト | 内容 | ファイル |
-|--------|------|----------|
-| スキーマ検証 | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` のバリデーション | `tests/test_config_param_fields.py` |
-| auto_num_leaves | `auto_num_leaves=True` で `max_depth` から `num_leaves` が動的算出される | `tests/test_auto_num_leaves.py` |
-| auto_num_leaves + ratio | `num_leaves_ratio=0.5` で葉数が半減する | 同上 |
-| auto_num_leaves 競合 | `auto_num_leaves=True` かつ `lgb_params.num_leaves` 指定でエラー | 同上 |
-| min_data_in_leaf_ratio | 比率から絶対値が正しく算出される | `tests/test_ratio_params.py` |
-| min_data_in_bin_ratio | 比率から絶対値が正しく算出される | 同上 |
-| 比率パラメーター競合 | `min_data_in_leaf_ratio` と `lgb_params.min_data_in_leaf` の同時指定でエラー | 同上 |
-| feature_weights | 指定した重みが学習に反映される（モデルが作成可能なこと） | `tests/test_feature_weights.py` |
-| feature_weights 不正値 | 重み <= 0 でバリデーションエラー | 同上 |
-| top_k feval | `top_k` 指定時に LightGBM カスタム metric として学習ループ内で `precision_at_{k}` が算出される | `tests/test_top_k_precision.py` |
-| top_k early stopping | `precision_at_{k}` で early stopping が正しく動作する | 同上 |
-| top_k evaluate | Binary 評価で `precision_at_{k}` がメトリクスに含まれる | 同上 |
-| top_k tune objective | `precision_at_k` を tune objective に指定して最適化が動作する | 同上 |
-| top_k 非 binary | `top_k` を regression で指定してバリデーションエラー | 同上 |
-| top_k 学習曲線 | `training_history.json` にイテレーションごとの `precision_at_{k}` が記録される | 同上 |
-| GUI | Config builder が新フィールドを正しく YAML に生成する | `tests/test_gui_app_callbacks_config.py`（既存に追加） |
-| Tuning search space | standard プリセットに `lambda_l1`, `lambda_l2` 等が含まれる | `tests/test_tuning_search_space.py` |
-| Artifact 復元 | 新パラメーター付き Artifact からの predict が成功する | `tests/test_artifact_param_roundtrip.py` |
-
-### 検証コマンド
-- `uv run pytest tests/test_config_param_fields.py tests/test_auto_num_leaves.py tests/test_ratio_params.py -v`
-- `uv run pytest tests/test_feature_weights.py tests/test_top_k_precision.py -v`
-- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py -v`
-- `uv run pytest tests/test_gui_app_callbacks_config.py -v`
-- `uv run pytest tests -x --tb=short`
-
-### 実装順序（依存関係順）
-1. Step 1: `TrainConfig` / `PostprocessConfig` スキーマ拡張 + バリデーション
-2. Step 2: `auto_num_leaves` 動的算出ロジック（`utils.py` + 全4 modeling ファイル）
-3. Step 3: 比率ベースパラメーター算出ロジック（`utils.py` + 全4 modeling ファイル）
-4. Step 4: `feature_weights` の適用（全4 modeling ファイル）
-5. Step 5: Top-K Precision カスタム metric（`binary.py` + `tuning.py` + 評価経路）
-6. Step 6: GUI Advanced Training Parameters 拡充
-7. Step 7: Tuning Search Space 拡充
-8. Step 8: Artifact パラメーター永続化確認
-9. Step 9: テスト
-
-### 完了条件
-- `auto_num_leaves=True` の場合に `max_depth` から `num_leaves` が動的に算出され、`num_leaves_ratio` で補正可能であること。`auto_num_leaves=True` と `lgb_params.num_leaves` の同時指定でバリデーションエラーとなること。
-- `min_data_in_leaf_ratio` が指定された場合に学習データの行数に基づいて `min_data_in_leaf` が動的に算出されること。`min_data_in_bin_ratio` も同様に動作すること。比率パラメーターと対応する `lgb_params` の絶対値パラメーターの同時指定でバリデーションエラーとなること。
-- `feature_weights` が指定された場合に、特徴量ごとの重みが LightGBM の学習に反映されること。重み <= 0 の指定でバリデーションエラーとなること。
-- `top_k` が指定された場合に precision@k が LightGBM カスタム metric（`feval`）として学習ループに組み込まれ、early stopping の監視指標として動作すること。`precision_at_k` を tune の objective として指定可能であること。`evaluate` API でも `precision_at_{k}` がメトリクスに含まれること。`training_history.json` にイテレーションごとの値が記録されること。`top_k` は `binary` タスクのみ許可され、他タスクではバリデーションエラーとなること。
-- GUI の Advanced Training Parameters に `Auto Num Leaves` / `Num Leaves Ratio` / `Min Data In Leaf Ratio` / `Min Data In Bin Ratio` / `Feature Weights` / `Path Smooth` / `Cat L2` / `Cat Smooth` / `Bagging Freq` / `Max Bin` / `Min Gain To Split` / `Top K` の入力欄が追加され、Config YAML に正しく反映されること。
-- Tuning の standard プリセットに `lambda_l1` / `lambda_l2` / `path_smooth` / `min_gain_to_split` が追加されること。
-- 新パラメーター付きの RunConfig が Artifact に保存され、Artifact からの再利用（predict / evaluate）が成功すること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
+- パラメーター拡張を RunConfig/GUI/Tuning/Evaluate/Artifact に一貫適用。
+
+### 実装要点（Step1-9 完了）
+- `TrainConfig` 拡張:
+  - `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `top_k` を追加。
+  - 競合・値域・task 制約（`top_k` は binary のみ）を検証。
+- modeling utils:
+  - `resolve_auto_num_leaves`, `resolve_ratio_params`, `resolve_feature_weights` を追加し、全4 task 学習器へ適用。
+- Binary Top-K:
+  - `precision_at_k` を `feval` として fit へ統合。
+  - tune objective（`precision_at_k`）と evaluate 返却、`training_history` 記録に連携。
+- GUI 拡張:
+  - Advanced Training Parameters に 25.8 項目を追加。
+  - `auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
+  - binary tune objective 候補に `brier` / `precision_at_k` を追加。
+- tuning search space:
+  - standard に `lambda_l1`, `lambda_l2`, `path_smooth`, `min_gain_to_split` を追加。
+- docs/運用:
+  - RunConfig reference 生成スクリプトを更新し README へ反映。
 
 ### Decision（provisional）
-- `train.top_k` が指定された場合、Early Stopping は `precision_at_{k}` を優先監視する（`metric=None + feval`）。
-- `train.feature_weights` は未知特徴量キーを許容しない。未知キーは学習前に `VeldraValidationError` とする。
-
-### 実装結果（2026-02-16）
-- `TrainConfig` に `auto_num_leaves / num_leaves_ratio / min_data_in_leaf_ratio / min_data_in_bin_ratio / feature_weights / top_k` を追加し、cross-field validation を実装。
-- `modeling/utils.py` に `resolve_auto_num_leaves / resolve_ratio_params / resolve_feature_weights` を追加し、全4 task 学習器へ適用。
-- binary 学習に `precision_at_k` を実装し、`fit / tune / evaluate / training_history` で利用可能にした。
-- binary `metrics.mean` に `accuracy/f1/precision/recall` を含めるよう修正し、既存 tuning objective の実行不整合を解消。
-- GUI Builder に Phase25.8 パラメータ入力を追加し、`auto_num_leaves=True` 時は YAML から `lgb_params.num_leaves` を除外。
-- `_cb_update_tune_objectives("binary")` に `brier` と `precision_at_k` を追加。
-- `scripts/generate_runconfig_reference.py` を更新し、README RunConfig Reference を再生成。
+- `train.top_k` 指定時、ES 監視は `precision_at_{k}` 優先。
+- `train.feature_weights` は未知特徴量キーを許容せず、学習前に validation error。
 
 ### 検証結果（2026-02-16）
-- `uv run ruff check .` : passed
-- `uv run pytest -q tests/test_config_train_fields.py tests/test_lgb_param_resolution.py tests/test_top_k_precision.py` : **19 passed**
-- `uv run pytest -q tests/test_tuning_internal.py tests/test_tune_objective_selection.py tests/test_tune_validation.py tests/test_binary_evaluate_metrics.py` : **17 passed**
-- `uv run pytest -q tests/test_gui_app_callbacks_config.py tests/test_gui_pages_and_init.py tests/test_gui_new_layout.py tests/test_gui_app_additional_branches.py` : **28 passed**
-- `uv run pytest -q -m "not gui"` : **385 passed**
-- `uv run pytest -q -m "gui"` : **100 passed**
+- `uv run ruff check .`: passed
+- 主要テスト群（config/lgb resolver/top_k/tuning/evaluate/gui）通過。
+- `uv run pytest -q -m "not gui"`: **385 passed**
+- `uv run pytest -q -m "gui"`: **100 passed**
 
-## 12.9 Phase25.9: LightGBM機能強化の不足テスト補完
+## 12.9 Phase25.9: LightGBM機能強化の不足テスト補完（完了）
 
 ### 目的
-Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テストでカバーされていないギャップを特定し、不足テストを追加する。
+- Phase25.7/25.8 の未カバー領域をテストで閉じ、必要時は同フェーズ内で最小本体修正まで実施。
 
-### 実装方針（2026-02-16 更新）
-- 不足テスト追加で差分が見つかった場合、Phase25.9 内で最小本体修正まで行う。
-- Causal の GroupKFold は既存 `split.group_col` 検証に加えて、`causal.unit_id_col` 経路を追加検証する。
-- `best_iteration` は実学習依存を避け、monkeypatch による安定した契約検証を優先する。
+### 実装方針（固定）
+- 不足テスト追加で差分が出た場合は最小本体修正を同時適用。
+- Causal は `split.group_col` に加えて `causal.unit_id_col` 経路を検証。
+- `best_iteration` は monkeypatch 契約検証を主方式にして CI 安定性を優先。
 
-### 既存テストカバレッジ分析（2026-02-16 時点）
+### 追加/更新テスト
+- 新規:
+  - `tests/test_auto_num_leaves.py`
+  - `tests/test_ratio_params.py`
+  - `tests/test_feature_weights.py`
+  - `tests/test_tuning_search_space.py`
+  - `tests/test_objective_override.py`
+  - `tests/test_artifact_param_roundtrip.py`
+- 既存拡張:
+  - `tests/test_num_boost_round.py`（既定値 300 後方互換）
+  - `tests/test_early_stopping_validation.py`（`best_iteration` 記録契約）
+  - `tests/test_dr_internal.py`（`unit_id_col` 経路の GroupKFold / fallback）
 
-#### Phase25.7: カバー済み
-| テスト対象 | 既存テストファイル | 状態 |
-|---|---|---|
-| Config バリデーション | `test_config_train_fields.py` | 充足 |
-| Binary class weight | `test_binary_class_weight.py` | 充足 |
-| Multiclass class weight | `test_multiclass_class_weight.py` | 充足 |
-| num_boost_round 反映 | `test_num_boost_round.py` | 充足（全4タスク） |
-| 分割自動適用 | `test_auto_split_selection.py` | binary/regression のみ |
-| ES用バリデーション分割 | `test_early_stopping_validation.py` | 充足（無効時/timeseries/binary層化/CVでOOF非使用） |
-| 学習曲線Artifact保存 | `test_training_history.py` | 充足（save/load + legacy互換） |
-| Config migration | `test_config_migrate_file.py` / `test_config_migrate_payload.py` | 充足（`n_estimators` → `num_boost_round`） |
+### 最小本体修正
+- `src/veldra/modeling/regression.py`
+- `src/veldra/modeling/binary.py`
+- `src/veldra/modeling/multiclass.py`
+- `src/veldra/modeling/frontier.py`
+- `feature_weights` 指定時に `params["feature_pre_filter"] = False` を付与し、適用契約を固定。
 
-#### Phase25.8: ギャップあり
-| テスト対象 | 既存テストファイル | 状態 |
-|---|---|---|
-| Config バリデーション（25.8分） | `test_config_train_fields.py` | 充足（auto_num_leaves/ratio/feature_weights/top_k） |
-| パラメーター解決ロジック | `test_lgb_param_resolution.py` | ユニットテストのみ（`resolve_*` 関数の入出力検証） |
-| top_k precision | `test_top_k_precision.py` | 充足（helper/feval/CV metrics/training_history） |
-| GUI Config builder（25.8分） | `test_gui_new_layout.py` | 充足（YAML出力に25.8パラメーター含む） |
-| **auto_num_leaves 学習適用** | — | **不在**: 学習ループで `params["num_leaves"]` に算出値が渡されるか未検証 |
-| **ratio_params 学習適用** | — | **不在**: 学習ループで `params["min_data_in_leaf"]` 等が渡されるか未検証 |
-| **feature_weights 学習適用** | — | **不在**: 学習ループで重みリストが渡されるか未検証 |
-| **Tuning search space 拡充** | — | **不在**: standard プリセットに `lambda_l1`/`lambda_l2`/`path_smooth`/`min_gain_to_split` が含まれるか未検証 |
-| **新パラメーター Artifact roundtrip** | — | **不在**: 新パラメーター付き Artifact → predict 成功の検証なし |
-| **num_boost_round 既定値後方互換** | — | **不在**: 未指定時に既定値300で動作するか未検証 |
-| **早期停止の best_iteration 動作** | — | **不在**: monkeypatch で `best_iteration` 記録契約（`< num_boost_round`）を固定検証していない |
-| **Causal での GroupKFold 自動適用** | `test_dr_internal.py` | **一部充足**: `split.group_col` は検証済み、`causal.unit_id_col` 経路が未検証 |
-| **目的関数ユーザー上書き** | — | **不在**: `lgb_params.objective` 指定時の優先動作が未検証 |
+### Decision（confirmed）
+- 不足テスト + 必要時の最小本体修正を同一フェーズで閉じる方針を確定。
+- Causal GroupKFold は `group_col` 維持 + `unit_id_col` 補完で確定。
+- 早期停止 `best_iteration` は monkeypatch 契約検証を正式方式として確定。
+
+### 検証結果（2026-02-16）
+- 追加テスト群: **6 passed / 4 passed / 26 passed**（3バッチ）
+- `uv run ruff check .`: passed
+- `uv run pytest -q -m "not gui"`: **399 passed, 100 deselected**
+
+## 13 Phase 26: UX/UI 改善
+
+### 目的
+- 初学者が Data 取り込みから学習・評価・出力までを迷わず完遂できる GUI を提供する。
+- GUI を RunConfig / Artifact 中心の運用に揃え、比較・再評価・エクスポートの実務導線を強化する。
+
+### 実装固定方針（confirmed, 2026-02-16）
+- ロールアウトは Stage A/B/C の段階導入とする。
+- Export は Excel/HTML を標準導線にする（SHAP は `export-report` extra 導入時のみ有効）。
+- `/config` は 1 フェーズ互換を維持しつつ、主導線は `/target` へ移行する。
+
+### 実装結果（要約）
+- 画面構成を `Data -> Target -> Validation -> Train -> Run -> Results` + `Runs/Compare` に再編。
+- `workflow-state` 拡張 + `_build_config_from_state()` により、GUI 入力から RunConfig を再構築可能にした。
+- Results を `Overview / Feature Importance / Learning Curves / Config` に拡張した。
+- Export を非同期ジョブ（`export_excel` / `export_html_report`）化し、Results から実行可能にした。
+- ガードレール表示を各画面に統合し、実行前診断を強化した。
+- Stable API (`veldra.api.*`) と RunConfig/Artifact 契約は維持した。
+
+### 非スコープ
+- 特徴量エンジニアリング自動化、認証/権限管理、分散実行。
+
+### 完了条件（要約）
+1. 6段階メインフロー + Runs/Compare 導線が機能すること。
+2. 主要ユースケース（学習、チューニング、因果推論、再評価、export）を GUI で完遂できること。
+3. 互換性（Stable API / RunConfig / Artifact）を維持すること。
+
+## 13.1 Phase 26.1: UI改善
+
+### 目的
+- Phase26 の安定化として、先行バグ修正とユースケース駆動の再構成設計を完了する。
+
+### 実装固定方針（confirmed, 2026-02-17）
+- Stage 1（バグ修正）と Stage 2（設計整理）の 2 段階で進める。
+
+### Stage 1: バグ修正（完了）
+- JST 表示統一:
+  - ユーザー向け時刻表示と export 出力名タイムスタンプを JST で統一。
+- Export ダウンロード導線:
+  - Results に `dcc.Download` ベースのブラウザダウンロードを追加（HTML/Excel）。
+- Learning Curves 取得ロジック:
+  - `training_history` を Artifact オブジェクトから直接参照する実装へ修正。
+
+### Stage 2: ユースケース駆動設計（完了）
+- UC マトリクス、優先度付きギャップ（P0-P2）、26.2 実装計画を確定。
+- 重点ギャップ:
+  - task/split/objective の説明不足
+  - causal 入力ガイド不足
+  - run action 手動切替導線不足
+  - frontier alpha / results precheck / runs-results ショートカット不足
+
+### 26.2 への引き継ぎ
+- 26.2 は Stage 1 の修正を前提に、GUI adapter のみで Step0-5 を実装する。
+- Core/API は非変更を維持する。
+
+## 13.2 Phase 26.2: ユースケース駆動UI改善
+
+### 目的
+- 26.1 Stage2 で特定したギャップを解消し、UC-1〜UC-10 の操作完遂性を高める。
+- Core/API を変更せず、GUI adapter 層の改善に限定する。
+
+### 前提
+- 26.1 Stage1 完了（JST / Export DL / Learning Curves 修正済み）。
+
+### 実装固定方針（confirmed, 2026-02-17）
+- Step0（Notebook 監査）-> Step1〜5（GUI 改修）の順で実施する。
+
+### 実装結果（要約）
+- Step0: 監査基盤
+  - `notebooks/reference_index.ipynb` を canonical な索引ハブとして運用。
+- Step1: 共通ヘルプUI
+  - `help_ui.py` / `help_texts.py` を追加し、説明表示の再利用基盤を導入。
+- Step2: Target 強化
+  - task/causal/frontier ガイドと causal 必須入力チェックを追加。
+- Step3: Validation 強化
+  - split 比較ガイド、timeseries 補助説明、推奨バッジを追加。
+- Step4: Train 強化
+  - 主要パラメータ help、Conservative/Balanced プリセット、objective 説明カードを追加。
+- Step5: Run/Runs/Results 導線強化
+  - run action manual override、pre-run guardrail 可視化、runs shortcut、results 再評価前 precheck を追加。
+
+### 補正フェーズ（2026-02-17）
+- 完了基準を「テンプレート整備」から「実行証跡 + parity 検証」へ補正した。
+- 追加成果物:
+  - UC別 Notebook 10 本（`phase26_2_uc01`〜`phase26_2_uc10`）
+  - Notebook 契約テスト（構造/証跡/パス）
+  - Playwright E2E（UC-1〜UC-10）と `gui_e2e` / `gui_smoke` marker
+
+### クリーンアップ（2026-02-18）
+- legacy 互換スタブ Notebook（root 配下の旧 workflow / old UC / old audit）を撤去し、canonical のみを運用対象とした。
+- `phase26_2/phase26_3` execution manifest は廃止し、証跡は `examples/out/phase26_*/summary.json` と生成物ファイルで管理する。
+- Phase26.2 専用 parity レポートは削除し、履歴トレースは `HISTORY.md` に集約した。
+
+### 完了条件（要約）
+1. Step0-5 の GUI 改修が反映され、UC-1〜UC-10 の到達導線が確認できること。
+2. Notebook 実行証跡（`examples/out/phase26_*/summary.json` + outputs）が更新されていること。
+3. Stable API / RunConfig / Artifact 契約を維持していること。
+
+### 運用メモ
+- Phase26〜26.2 の詳細な時系列・判断理由・テスト実績は `HISTORY.md` を正とする。
+
+## 13.3 Phase26.3: ユースケース詳細化
+
+### 目的
+
+Phase 26.2 で作成した骨格 Notebook（UC-1〜UC-10）を、実務レベルの診断・可視化・CSV 出力を含む完全版ユースケースに仕上げる。併せて、各 Notebook が依存する **診断計算ライブラリ** (`veldra.diagnostics`) を新設し、Notebook セルから 1 行で呼べる高レベル API を提供する。
+
+### 前提
+
+- SHAP 算出は LightGBM の **内蔵 SHAP**（`booster.predict(data, pred_contrib=True)`）を使用する。外部 `shap` ライブラリに依存しない。
+- Feature Importance は `booster.feature_importance(importance_type='split' | 'gain')` で取得。
+- Notebook はすべて **ヘッドレス実行可能**（`matplotlib.use('Agg')` + `plt.savefig`）とする。
+- 可視化は `matplotlib` のみ。追加描画ライブラリに依存しない。
 
 ---
 
-### 取り組み項目
+### 要件仕様
 
-#### 1. `auto_num_leaves` 学習ループ適用テスト
-- **ファイル**: `tests/test_auto_num_leaves.py`（新規）
-- `auto_num_leaves=True` + `lgb_params.max_depth=5` + `num_leaves_ratio=0.5` で `lgb.train()` に渡される `params["num_leaves"]` が算出値（16）であることを monkeypatch で検証する。
-- `auto_num_leaves=False`（既定）の場合に `params["num_leaves"]` がセットされないことを検証する。
-- 代表タスク（regression）で検証し、`resolve_auto_num_leaves` の呼び出しが全4タスクで共通であることは `test_lgb_param_resolution.py` のユニットテストで担保する。
+#### A. LightGBM 固定パラメーター
 
-#### 2. `ratio_params` 学習ループ適用テスト
-- **ファイル**: `tests/test_ratio_params.py`（新規）
-- `min_data_in_leaf_ratio=0.05` 指定時に `params["min_data_in_leaf"]` がデータ行数に基づく算出値であることを monkeypatch で検証する。
-- `min_data_in_bin_ratio=0.01` 指定時に `params["min_data_in_bin"]` が算出値であることを検証する。
-- 代表タスク（regression）で検証する。
+Notebook 内の学習設定は以下の値を使用する:
 
-#### 3. `feature_weights` 学習ループ適用テスト
-- **ファイル**: `tests/test_feature_weights.py`（新規）
-- `feature_weights={"x1": 2.0}` 指定時に `params["feature_pre_filter"]` が `False` になり、`params["feature_weights"]` に正しい重みリストが渡されることを monkeypatch で検証する。
-- `feature_weights` 未指定時に `params` に `feature_weights` キーが含まれないことを検証する。
-- 代表タスク（regression）で検証する。
+| パラメーター | 値 |
+|---|---|
+| `epochs` | 2000 |
+| `patience` | 200 |
+| `learning_rate` | 0.01 |
+| `validation_ratio` | 0.2 |
+| `max_bin` | 255 |
+| `auto_num_leaves` | True |
+| `num_leaves_ratio` | 1 |
+| `min_data_in_leaf_ratio` | 0.01 |
+| `min_data_in_bin_ratio` | 0.01 |
+| `max_depth` | 10 |
+| `feature_fraction` | 1 |
+| `bagging_fraction` | 1 |
+| `bagging_freq` | 0 |
+| `lambda_l1` | 0 |
+| `lambda_l2` | 0.000001 |
+| `min_child_samples` | 20 |
+| `first_metric_only` | True |
 
-#### 4. Tuning search space 拡充テスト
-- **ファイル**: `tests/test_tuning_search_space.py`（新規）
-- `_default_search_space("regression", "standard")` の返却 dict に `lambda_l1`, `lambda_l2`, `path_smooth`, `min_gain_to_split` キーが含まれることを検証する。
-- 各キーの `type`, `low`, `high` が妥当な値であることを検証する。
+タスクタイプ別 metrics:
 
-#### 5. 新パラメーター付き Artifact ラウンドトリップテスト
-- **ファイル**: `tests/test_artifact_param_roundtrip.py`（新規）
-- `auto_num_leaves=True`, `feature_weights`, `top_k` を設定した RunConfig で Artifact を `save` → `load` し、`run_config.yaml` 内にこれらのフィールドが保持されていることを検証する。
-- ロードした Artifact から `predict` が成功すること（predict 自体は RunConfig のパラメーターに依存しないが、config 復元の整合性として検証）を確認する。
-
-#### 6. `num_boost_round` 既定値後方互換テスト
-- **ファイル**: `tests/test_num_boost_round.py`（既存に追加）
-- `train.num_boost_round` 未指定時に既定値 300 で `lgb.train()` が呼ばれることを monkeypatch で検証する。
-
-#### 7. 早期停止 `best_iteration` 動作テスト
-- **ファイル**: `tests/test_early_stopping_validation.py`（既存に追加）
-- `lgb.train()` を monkeypatch し、`best_iteration < num_boost_round` の Booster を返したときに `training_history.final_model.best_iteration` へ正しく記録されることを検証する。
-
-#### 8. Causal での GroupKFold 自動適用テスト
-- **ファイル**: `tests/test_dr_internal.py`（既存に追加）
-- 既存の `split.group_col` 分岐テストを維持しつつ、`split.group_col` 未指定でも `causal.unit_id_col`（panel想定）経路で `GroupKFold` が選択されることを monkeypatch で検証する。
-- `unit_id_col` が実質1群など GroupKFold が成立しない場合に `KFold` フォールバックが維持されることを検証する。
-
-#### 9. 目的関数ユーザー上書きテスト
-- **ファイル**: `tests/test_objective_override.py`（新規）
-- Binary タスクで `lgb_params.objective` を `cross_entropy` に指定した場合に、`lgb.train()` の `params["objective"]` がユーザー指定値になることを monkeypatch で検証する。
-- 未指定時にタスク既定値（例: `binary` → `binary`）が使用されることを検証する。
+| タスクタイプ | metrics |
+|---|---|
+| Regression | `[rmse, mae]` |
+| Binary | `[logloss, auc]` |
+| Multiclass | `[multi_logloss, multi_error]` |
 
 ---
 
-### テストファイル一覧
+#### B. パラメーター最適化 Search Space
 
-| ファイル | 新規/既存 | テスト数（想定） |
+| パラメーター | 範囲 | 型 |
 |---|---|---|
-| `tests/test_auto_num_leaves.py` | 新規 | 2 |
-| `tests/test_ratio_params.py` | 新規 | 2 |
-| `tests/test_feature_weights.py` | 新規 | 2 |
-| `tests/test_tuning_search_space.py` | 新規 | 1–2 |
-| `tests/test_artifact_param_roundtrip.py` | 新規 | 1–2 |
-| `tests/test_objective_override.py` | 新規 | 2 |
-| `tests/test_num_boost_round.py` | 既存追加 | +1 |
-| `tests/test_early_stopping_validation.py` | 既存追加 | +1 |
-| `tests/test_dr_internal.py` | 既存追加 | +2 |
+| `learning_rate` | 0.01〜0.1 | log uniform |
+| `num_leaves_ratio` | 0.5〜1.0 | float |
+| `validation_ratio` | 0.1〜0.3 | float |
+| `max_bin` | 127〜255 | int |
+| `min_data_in_leaf_ratio` | 0.01〜0.1 | float |
+| `min_data_in_bin_ratio` | 0.01〜0.1 | float |
+| `max_depth` | 3〜15 | int |
+| `feature_fraction` | 0.5〜1.0 | float |
+| `bagging_fraction` | 1.0（固定） | float |
+| `bagging_freq` | 0（固定） | int |
+| `lambda_l1` | 0（固定） | float |
+| `lambda_l2` | 0.000001〜0.1 | float |
+
+タスクタイプ別 tuning objective:
+
+| タスクタイプ | objective |
+|---|---|
+| Regression | `[mape]` |
+| Binary | `[brier]` |
+| Multiclass | `[multi_logloss]` |
+| Causal DR | `[dr_balance_priority, dr_std_error, dr_overlap_penalty]` |
+| Causal DR-DiD | `[drdid_balance_priority, drdid_std_error, drdid_overlap_penalty]` |
+
+タスクタイプ別 tuning metrics:
+
+| タスクタイプ | metrics 候補 |
+|---|---|
+| Regression | `[rmse]`, `[huber]`, `[mae]` |
+| Binary | `[logloss]`, `[auc]` |
+| Multiclass | `[multi_logloss]`, `[multi_error]` |
+
+---
+
+#### C. タスクタイプ別 期待アウトプット
+
+##### C-1. Regression 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 誤差分布ヒストグラム | In-sample / Out-of-sample の残差分布を重ねて表示。過学習度合いの比較 |
+| 2 | 評価指標テーブル | MAE, MAPE, RMSE, R² を In/Out 別に併記 |
+| 3 | Feature Importance | Split / Gain の棒グラフ（上位 20 特徴量） |
+| 4 | SHAP（全特徴量） | LightGBM 内蔵 SHAP。bee swarm 風の散布図 |
+| 5 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `prediction` + `residual` |
+
+##### C-2. Binary 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | ROC Chart | In-sample / Out-of-sample 別の ROC 曲線。過学習比較 |
+| 2 | 評価指標テーブル | AUC, Brier, Average Precision, Logloss を In/Out 別に併記 |
+| 3 | Lift Chart | OOF 予測のリフトカーブ（全体の予測力確認） |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `score` |
+
+##### C-3. Multiclass 予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | NLL ヒストグラム | サンプル別 Negative Log Likelihood を In/Out 別に比較 |
+| 2 | 正解クラス確率ヒストグラム | p(true_class) を In/Out 別に比較 |
+| 3 | 評価指標テーブル | 多クラスAUC, 多クラスBrier, Multi-logloss, Multi-error を In/Out 別に併記 |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP | 最大確率ラベルについての SHAP（全特徴量） |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + クラス別スコア列 |
+
+##### C-4. 時系列予測モデル
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 時系列プロット（実測 vs 予測） | X軸: 時系列、Y軸: 目的変数 + 予測値。In/Out 境界を垂直線で明示 |
+| 2 | 残差時系列プロット | X軸: 時系列、Y軸: 残差。In/Out 境界を明示 |
+| 3 | 評価指標テーブル | MAE, MAPE, RMSE, R² を In/Out 別に併記 |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `in_out_label` + `prediction` + `residual` |
+
+##### C-5. Frontier（分位点回帰）
+
+前提:
+- 分位点はユーザーで変更可能
+- 特徴量に対して単調制約を設定できる
+- Group CV ですべてのデータに対して OOF としての予測値が得られている
+- Output Oriented の効率を算出: **相対到達度** `eff = y / q_hat_tau(x)`（1 に近いほど良い。1 超えはフロンティア超え扱い）
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | Pinball loss ヒストグラム | サンプル別 Pinball loss を In/Out 別に比較 |
+| 2 | 評価指標テーブル | Pinball Loss, coverage, exceedance rate を In/Out 別に併記 |
+| 3 | フロンティア散布図 | 予測値 vs 実測の散布図（45 度線 + フロンティア線） |
+| 4 | Feature Importance | Split / Gain の棒グラフ |
+| 5 | SHAP（全特徴量） | LightGBM 内蔵 SHAP |
+| 6 | 詳細テーブル（CSV） | 元データ + `fold_id` + `prediction` + `efficiency` |
+
+##### C-6. DR（Doubly Robust: ATE/ATT 推定）
+
+前提:
+- 推定対象: ATE / ATT（どちらか明示。両方出すなら両方）
+- Cross-fitting（group K-fold）で nuisance を学習し、全データで OOF 予測を保持
+- nuisance 構成: Propensity model `e(x) = P(D=1|X=x)`（キャリブレーション付き）、Outcome model `μ1(x), μ0(x)`
+- 推定量: AIPW / DR（標準誤差は influence function ベース or ブートストラップ）
+
+**最終推定（因果効果）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 推定サマリ | 推定値（ATE/ATT）、標準誤差、95%CI、p 値 |
+| 2 | IF 分布ヒストグラム | Influence function / pseudo-outcome の分布（全体） |
+| 3 | IF 外れ値一覧 | 上位 1% の IF 値を持つサンプルと、それらに多い特徴 |
+
+**Overlap / 傾向スコア診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 4 | 傾向スコア分布 | Treated / Control 別ヒストグラム |
+| 5 | IPW 重み分布 | ATE/ATT 定義に応じた重み w のヒストグラム |
+| 6 | Overlap 指標 | e(x) の min/max/分位点、極端値比率（<0.01, >0.99）、有効標本サイズ（ESS） |
+
+**バランスチェック:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 7 | Love plot | Unweighted vs Weighted の SMD（標準化差）比較 |
+| 8 | SMD 要約 | 中央値/最大値、\|SMD\|>0.1 の割合 |
+
+**nuisance モデル健全性:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 9 | Propensity 診断 | InFold / OOF の ROC, AUC, Logloss, Brier, Average Precision |
+| 10 | Outcome 診断 | InFold / OOF の誤差分布ヒストグラム + MAE, RMSE, R² |
+| 11 | Feature Importance / SHAP | Propensity・Outcome 各モデルの Split/Gain + SHAP（全特徴量） |
+| 12 | Overlap 崩壊警告 | AUC が極端に高い場合の注意喚起メッセージ |
+
+**ロバストネス:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 13 | トリミング比較 | 重みの 1%/99% クリッピングごとの推定結果比較表 |
+
+**詳細テーブル（CSV）:**
+
+| 列 | 説明 |
+|---|---|
+| 元データ全列 | 入力特徴量 |
+| `fold_id` | CV fold 番号 |
+| `D` | 処置フラグ |
+| `Y` | アウトカム |
+| `e_x` | OOF 傾向スコア |
+| `mu1_x`, `mu0_x` | OOF outcome 予測 |
+| `weight` | ATE/ATT 定義に応じた重み |
+| `pseudo_outcome` | pseudo-outcome / IF 成分 |
+| `trimmed` | トリミング適用フラグ |
+
+##### C-7. DR-DiD（Doubly Robust Difference-in-Differences: ATT）
+
+前提:
+- 推定対象: ATT（Average Treatment effect on the Treated）
+- データ構造: Panel / Repeated cross-section を明示
+- 時点: Pre / Post を明示
+- Cross-fitting（Group K-fold）で nuisance を学習し、全データで OOF 予測を保持
+- nuisance: 傾向スコア `e(x) = P(D=1|X)`（キャリブレーション付き）、結果モデル `E[Y_t | D, X]` or `E[ΔY | D, X]`
+- 標準誤差: クラスタロバスト（panel なら個体 ID）or ブートストラップ
+
+**最終推定（ATT）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 1 | 推定サマリ | ATT 推定値、標準誤差、95%CI、p 値 |
+| 2 | IF 分布ヒストグラム | DR-DiD の IF / pseudo-outcome 分布 |
+| 3 | IF 外れ値一覧 | 上位 1% |
+
+**DiD 前提（並行トレンド）診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 4 | Placebo DID | Pre 期間のみの placebo DID（効果=0 を期待）。リードがゼロ付近か確認 |
+| 5 | 平均推移プロット | Treated vs Control の平均アウトカム推移（Unweighted + Weighted） |
+
+**Overlap / 傾向スコア診断:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 6 | 傾向スコア分布 | Treated / Control 別ヒストグラム |
+| 7 | 重み分布 | DR-DiD 定義に合わせた w のヒストグラム |
+| 8 | Overlap 指標 | e(x) の min/max/分位点、極端値比率、ESS、極端重み比率（p99 超） |
+
+**バランスチェック（Pre の X に対して）:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 9 | Love plot | Unweighted vs Weighted の SMD 比較 |
+| 10 | SMD 要約 | 中央値/最大値、\|SMD\|>0.1 の割合 |
+
+**nuisance モデル健全性:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 11 | Propensity 診断 | InFold / OOF の ROC, AUC, Logloss, Brier, Average Precision |
+| 12 | Outcome 診断 | Pre/Post 別（or ΔY）の InFold / OOF 誤差分布 + MAE, RMSE, R² |
+| 13 | Feature Importance / SHAP | Propensity・Outcome 各モデルの Split/Gain + SHAP |
+| 14 | Overlap 崩壊警告 | AUC 極端時の注意喚起 |
+
+**ロバストネス:**
+
+| # | アウトプット | 説明 |
+|---|---|---|
+| 15 | トリミング比較 | 重みの 1%/99% クリッピングごとの ATT 比較表 |
+| 16 | Placebo outcome（任意） | 影響しないはずの目的変数で効果ゼロ確認 |
+
+**詳細テーブル（CSV）:**
+
+| 列 | 説明 |
+|---|---|
+| 元データ全列 | 入力特徴量 |
+| `fold_id` | CV fold 番号 |
+| `unit_id`（Panel のみ） | 個体 ID |
+| `time`, `pre_post` | 時点、Pre/Post フラグ |
+| `D` | treated indicator |
+| `Y` | アウトカム |
+| `e_x` | OOF 傾向スコア |
+| `mu_d_pre_x`, `mu_d_post_x` or `delta_mu_d_x` | OOF outcome nuisance |
+| `weight` | DR-DiD 定義に応じた重み |
+| `pseudo_outcome` | pseudo-outcome / IF 成分 |
+| `trimmed` | トリミング適用フラグ |
+
+---
+
+### 実装ステップ
+
+#### Step 1: 診断計算ライブラリ新設 (`veldra.diagnostics`)
+
+**目的**: Notebook セルから 1 行で呼べる高レベル診断 API を提供する。
+
+**新規ファイル**:
+
+| ファイル | 内容 |
+|---|---|
+| `src/veldra/diagnostics/__init__.py` | 公開 API の re-export |
+| `src/veldra/diagnostics/importance.py` | Feature importance（Split/Gain）取得ユーティリティ |
+| `src/veldra/diagnostics/shap_native.py` | LightGBM 内蔵 SHAP の算出・整形 |
+| `src/veldra/diagnostics/metrics.py` | In/Out 別メトリクス算出（Regression, Binary, Multiclass, Frontier, TimeSeries） |
+| `src/veldra/diagnostics/plots.py` | matplotlib ベースの可視化関数群 |
+| `src/veldra/diagnostics/tables.py` | 詳細テーブル（CSV）生成ユーティリティ |
+| `src/veldra/diagnostics/causal_diag.py` | 因果推定固有の診断（IF 分布、Overlap、Balance、Love plot、トリミング比較） |
+
+**主要 API**:
+
+```python
+# importance.py
+def compute_importance(booster, importance_type='gain', top_n=20) -> pd.DataFrame
+
+# shap_native.py
+def compute_shap(booster, X: pd.DataFrame) -> pd.DataFrame
+# Multiclass の場合: 最大確率ラベルの SHAP を返す
+def compute_shap_multiclass(booster, X, predictions, n_classes) -> pd.DataFrame
+
+# metrics.py
+def regression_metrics(y_true, y_pred, label='overall') -> dict
+def binary_metrics(y_true, y_score, label='overall') -> dict
+def multiclass_metrics(y_true, y_proba, label='overall') -> dict
+def frontier_metrics(y_true, y_pred, alpha, label='overall') -> dict
+def split_in_out_metrics(metric_fn, y_true, y_pred, fold_ids, eval_fold_ids) -> pd.DataFrame
+
+# plots.py
+def plot_error_histogram(residuals_in, residuals_out, metrics_in, metrics_out, save_path)
+def plot_roc_comparison(y_true_in, y_score_in, y_true_out, y_score_out, save_path)
+def plot_lift_chart(y_true, y_score, save_path)
+def plot_nll_histogram(nll_in, nll_out, save_path)
+def plot_true_class_prob_histogram(prob_in, prob_out, save_path)
+def plot_timeseries_prediction(time_index, y_true, y_pred, split_point, save_path)
+def plot_timeseries_residual(time_index, residuals, split_point, save_path)
+def plot_pinball_histogram(pinball_in, pinball_out, save_path)
+def plot_frontier_scatter(y_true, y_pred, save_path)
+def plot_feature_importance(importance_df, importance_type, save_path)
+def plot_shap_summary(shap_df, X, save_path)
+
+# causal_diag.py
+def plot_propensity_distribution(propensity, treatment, save_path)
+def plot_weight_distribution(weights, save_path)
+def compute_overlap_stats(propensity, treatment) -> dict
+def compute_balance_smd(covariates, treatment, weights=None) -> pd.DataFrame
+def plot_love_plot(smd_unweighted, smd_weighted, save_path)
+def compute_trimming_comparison(estimate_fn, observation_table, trim_levels=[0.01, 0.05]) -> pd.DataFrame
+def plot_if_distribution(if_values, save_path)
+def get_if_outliers(if_values, observation_table, percentile=99) -> pd.DataFrame
+def plot_parallel_trends(means_treated, means_control, time_labels, save_path)
+
+# tables.py
+def build_regression_table(X, y, fold_ids, predictions, in_out_labels) -> pd.DataFrame
+def build_binary_table(X, y, fold_ids, scores, in_out_labels) -> pd.DataFrame
+def build_multiclass_table(X, y, fold_ids, class_probas, in_out_labels) -> pd.DataFrame
+def build_frontier_table(X, y, fold_ids, predictions, efficiency) -> pd.DataFrame
+def build_dr_table(observation_table) -> pd.DataFrame
+def build_drdid_table(observation_table) -> pd.DataFrame
+```
+
+**テスト**: `tests/test_diagnostics_importance.py`, `tests/test_diagnostics_shap.py`, `tests/test_diagnostics_metrics.py`, `tests/test_diagnostics_plots.py`, `tests/test_diagnostics_tables.py`, `tests/test_diagnostics_causal.py`
+
+---
+
+#### Step 2: 既存モデリング層の拡張（CV 結果に In/Out 情報を保持）
+
+**目的**: 各 `train_*_with_cv()` の返り値に、サンプル別の fold_id・in/out ラベル・予測値を含める。
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/veldra/modeling/regression.py` | `RegressionTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, prediction, residual） |
+| `src/veldra/modeling/binary.py` | `BinaryTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, score） |
+| `src/veldra/modeling/multiclass.py` | `MulticlassTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, in_out, class 別 proba） |
+| `src/veldra/modeling/frontier.py` | `FrontierTrainingOutput` に `observation_table: pd.DataFrame` を追加（fold_id, prediction, efficiency） |
+| `src/veldra/api/artifact.py` | `Artifact` に `observation_table` を保持（persist/load 対応） |
+
+**制約**: 既存の `RunResult`, `EvalResult` の公開シグネチャは変更しない（後方互換維持）。
+
+**テスト**: 既存テスト群の拡張 + `tests/test_observation_table.py`（新規: observation_table の列・行数・型の検証）
+
+---
+
+#### Step 3: 因果推定層の拡張（nuisance 診断情報の充実）
+
+**目的**: `DREstimationOutput` に nuisance モデルの Feature Importance / SHAP / InFold メトリクスを追加。
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/veldra/causal/dr.py` | nuisance 学習ループで InFold 予測を保持。`DREstimationOutput` に `nuisance_diagnostics: dict` を追加（propensity_importance, outcome_importance, infold_metrics） |
+| `src/veldra/causal/dr_did.py` | 同上。加えて `parallel_trends: dict` に placebo DID 推定値と平均推移データを追加 |
+| `src/veldra/causal/diagnostics.py` | `compute_ess()`, `extreme_weight_ratio()`, `overlap_summary()` を追加 |
+
+**テスト**: `tests/test_causal_dr.py`, `tests/test_causal_drdid.py` の拡張（新規フィールドの存在と型の検証）
+
+---
+
+#### Step 4: Notebook 詳細化（UC-1〜UC-6）
+
+**目的**: Phase26.2 の骨格 Notebook を完全版に差し替える。
+
+**対象 Notebook と内容**:
+
+| Notebook | 内容 |
+|---|---|
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | Setup → fit（固定パラメーター） → 誤差ヒストグラム → 指標テーブル → Feature Importance → SHAP → CSV 出力 |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | Setup → tune（Search Space 適用） → fit → ROC 比較 → Lift → 指標テーブル → Importance → SHAP → CSV |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | Setup → fit → Pinball ヒストグラム → 指標テーブル → 散布図 → Importance → SHAP → CSV |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | Setup → estimate_dr → 推定サマリ → IF 分布 → Overlap 診断 → Balance → nuisance 診断 → Importance/SHAP → トリミング比較 → CSV |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | Setup → estimate_dr_did → 推定サマリ → IF 分布 → 並行トレンド → Overlap → Balance → nuisance 診断 → Importance/SHAP → トリミング比較 → CSV |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | Setup → tune（Causal objective） → estimate_dr → 診断一式 |
+
+**追加 Notebook**:
+
+| Notebook | 内容 |
+|---|---|
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | 新規: Multiclass fit → NLL ヒストグラム → 正解クラス確率 → 指標テーブル → Importance → SHAP → CSV |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | 新規: TimeSeries fit → 時系列プロット → 残差プロット → 指標テーブル → Importance → SHAP → CSV |
+
+**各 Notebook の共通構造**:
+
+```
+1. Setup（import, OUT_DIR, matplotlib.use('Agg')）
+2. データ読み込み + config 定義（固定パラメーター使用）
+3. fit / tune / estimate 実行
+4. 診断セクション（diagnostics API 呼び出し）
+   - 可視化: plt.savefig(OUT_DIR / 'plot_name.png')
+   - 指標: pd.DataFrame 表示 + CSV 保存
+5. 詳細テーブル CSV 出力
+6. SUMMARY dict（status, artifact_path, outputs リスト, metrics）
+```
+
+**テスト**: `tests/test_quickref_structure.py`（Notebook セル構造・import・SUMMARY 形式の検証）
+
+---
+
+#### Step 5: Notebook 詳細化（UC-7〜UC-10: 既存アーティファクト評価・エクスポート）
+
+**目的**: 評価・エクスポート系 Notebook にも診断出力を追加。
+
+| Notebook | 追加内容 |
+|---|---|
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | artifact.load → evaluate → タスクタイプに応じた診断一式（Step 4 と同じ可視化セット） |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | 別データでの evaluate → In/Out 比較（学習時 vs 再評価時）の指標並置 |
+| `notebooks/phase26_2_uc09_export_python_onnx.ipynb` | 変更なし（エクスポートは診断対象外） |
+| `notebooks/phase26_2_uc10_export_html_excel.ipynb` | 変更なし（エクスポートは診断対象外） |
+
+**テスト**: Step 4 のテストで併せて検証
+
+---
+
+#### Step 6: 実行証跡の更新と契約テスト
+
+**目的**: 全 Notebook のヘッドレス実行で出力ファイルが生成されることを確認し、summary evidence を更新。
+
+**成果物**:
+
+| ファイル | 内容 |
+|---|---|
+| `examples/out/phase26_*/summary.json` | 各 Notebook の実行結果（status, outputs リスト, metrics） |
+| `tests/test_notebook_execution_evidence.py` | summary の整合性テスト（全 UC が passed、outputs が存在） |
+| `tests/test_notebook_execution_outputs.py` | 各 Notebook の出力ファイル検証（PNG 画像の存在、CSV の列名・行数、指標の妥当範囲） |
+
+---
+
+### 対象ファイル一覧
+
+| ファイル | Step | 変更種別 |
+|---|---|---|
+| `src/veldra/diagnostics/__init__.py` | 1 | 新規 |
+| `src/veldra/diagnostics/importance.py` | 1 | 新規 |
+| `src/veldra/diagnostics/shap_native.py` | 1 | 新規 |
+| `src/veldra/diagnostics/metrics.py` | 1 | 新規 |
+| `src/veldra/diagnostics/plots.py` | 1 | 新規 |
+| `src/veldra/diagnostics/tables.py` | 1 | 新規 |
+| `src/veldra/diagnostics/causal_diag.py` | 1 | 新規 |
+| `src/veldra/modeling/regression.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/binary.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/multiclass.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/modeling/frontier.py` | 2 | 変更: observation_table 追加 |
+| `src/veldra/api/artifact.py` | 2 | 変更: observation_table persist/load |
+| `src/veldra/causal/dr.py` | 3 | 変更: nuisance_diagnostics 追加 |
+| `src/veldra/causal/dr_did.py` | 3 | 変更: nuisance_diagnostics + parallel_trends 追加 |
+| `src/veldra/causal/diagnostics.py` | 3 | 変更: ESS, extreme_weight_ratio 追加 |
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | 4 | 変更: 診断セクション追加 |
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | 4 | 新規 |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | 4 | 新規 |
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | 5 | 変更: 診断セクション追加 |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | 5 | 変更: 比較指標追加 |
+| `examples/out/phase26_*/summary.json` | 6 | 新規 |
+| `tests/test_diagnostics_importance.py` | 1 | 新規 |
+| `tests/test_diagnostics_shap.py` | 1 | 新規 |
+| `tests/test_diagnostics_metrics.py` | 1 | 新規 |
+| `tests/test_diagnostics_plots.py` | 1 | 新規 |
+| `tests/test_diagnostics_tables.py` | 1 | 新規 |
+| `tests/test_diagnostics_causal.py` | 1 | 新規 |
+| `tests/test_observation_table.py` | 2 | 新規 |
+| `tests/test_quickref_structure.py` | 4 | 新規 |
+| `tests/test_notebook_execution_evidence.py` | 6 | 新規 |
+| `tests/test_notebook_execution_outputs.py` | 6 | 新規 |
+
+---
+
+### テスト計画
+
+| テスト | 内容 | ファイル |
+|---|---|---|
+| Feature Importance | `compute_importance` が正しい shape の DataFrame を返すこと | `tests/test_diagnostics_importance.py` |
+| SHAP 算出 | `compute_shap` が feature 数と一致する列を返すこと、合計が予測値と一致すること | `tests/test_diagnostics_shap.py` |
+| メトリクス計算 | 各タスクタイプの In/Out 別メトリクスが正しい範囲の値を返すこと | `tests/test_diagnostics_metrics.py` |
+| 可視化 | 各 plot 関数が PNG ファイルを生成し、サイズ > 0 であること | `tests/test_diagnostics_plots.py` |
+| テーブル生成 | 各 `build_*_table` が期待列を含む DataFrame を返すこと | `tests/test_diagnostics_tables.py` |
+| 因果診断 | ESS、SMD、トリミング比較が正しい型・範囲で返ること | `tests/test_diagnostics_causal.py` |
+| Observation table | 各 TrainingOutput の observation_table が fold_id, in_out 列を含むこと | `tests/test_observation_table.py` |
+| Notebook 構造 | 全 Notebook が SUMMARY セル、diagnostics import、savefig 呼び出しを含むこと | `tests/test_quickref_structure.py` |
+| 実行証跡 | summary の全 UC が passed で outputs がファイルシステム上に存在すること | `tests/test_notebook_execution_evidence.py` |
+| 出力ファイル検証 | PNG の存在、CSV の列名一致、指標値の妥当範囲（例: 0 ≤ AUC ≤ 1） | `tests/test_notebook_execution_outputs.py` |
+| 後方互換 | 既存テスト群（`tests/test_*.py`）が全パス | 既存テスト群 |
 
 ### 検証コマンド
-- `uv run pytest tests/test_auto_num_leaves.py tests/test_ratio_params.py tests/test_feature_weights.py -v`
-- `uv run pytest tests/test_tuning_search_space.py tests/test_artifact_param_roundtrip.py tests/test_objective_override.py -v`
-- `uv run pytest tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py -v`
-- `uv run pytest tests -x --tb=short`
+
+```bash
+# Step 1: 診断ライブラリ
+uv run pytest tests/test_diagnostics_*.py -v
+
+# Step 2: observation table
+uv run pytest tests/test_observation_table.py -v
+
+# Step 3: 因果拡張
+uv run pytest tests/test_causal_dr.py tests/test_causal_drdid.py -v
+
+# Step 4-5: Notebook 構造
+uv run pytest tests/test_quickref_structure.py -v
+
+# Step 6: 実行証跡 + 出力検証
+uv run pytest tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py -v
+
+# 全体回帰テスト
+uv run pytest tests -x --tb=short
+```
+
+---
 
 ### 完了条件
-- Phase25.8 の学習ループ適用テスト（auto_num_leaves / ratio_params / feature_weights）が追加され、`resolve_*` 関数のユニットテストだけでなく実際の学習器への適用が検証されること。
-- Tuning search space の standard プリセットに追加されたパラメーターの存在が検証されること。
-- 新パラメーター付き Artifact の save → load ラウンドトリップが成功すること。
-- `num_boost_round` 既定値後方互換、`best_iteration` 記録契約（monkeypatch）、Causal GroupKFold 自動適用（`unit_id_col` 経路を含む）、目的関数ユーザー上書きのテストが追加されること。
-- 既存テストが全パスし、Stable API（`veldra.api.*`）の互換性が維持されること。
 
-## 13 Phase 26: ジョブキュー強化 & 優先度システム
+1. **Step 1**: `veldra.diagnostics` パッケージが作成され、全 API のユニットテストがパスすること。
+2. **Step 2**: 各 `*TrainingOutput` に `observation_table` が追加され、既存テストが全パスすること（後方互換維持）。
+3. **Step 3**: `DREstimationOutput` に `nuisance_diagnostics` が追加され、因果テストがパスすること。
+4. **Step 4**: UC-1〜UC-6 の Notebook が完全版に更新され、Multiclass / TimeSeries の新規 Notebook が追加されていること。
+5. **Step 5**: UC-7, UC-8 の Notebook に診断出力が追加されていること。
+6. **Step 6**: `examples/out/phase26_*/summary.json` が生成され、全 Notebook の出力ファイルが検証済みであること。
+7. **後方互換**: `veldra.api.*` の公開シグネチャが未変更であること。`RunResult`, `EvalResult`, `CausalResult` の既存フィールドが維持されていること。
+8. **依存制約**: 外部ライブラリの追加なし（matplotlib は既存依存）。SHAP は LightGBM 内蔵のみ使用。
+
+### Decision（provisional）
+- 内容: Phase26.3 は `config_version=1` を維持し、`train.metrics` / `tuning.metrics_candidates` を optional 追加で拡張する。
+- 理由: Stable API と既存 Config 運用の互換性を保持しつつ、Notebook 詳細化に必要な設定表現力を増やすため。
+- 影響範囲: `src/veldra/config/models.py` / tuning objective validation / GUI-config serialization
+
+### Decision（confirmed）
+- 内容: Notebook 証跡はハイブリッド運用とし、構造契約テストは常時実行、重い証跡検証は `notebook_e2e` marker で分離する。
+- 理由: CI 負荷と実行時間を抑制しつつ、Phase26.3 の成果物検証を維持するため。
+- 影響範囲: `pyproject.toml` marker / `tests/test_quickref_structure.py` / `tests/test_notebook_execution_*` / summary evidence 運用
+
+### Decision（confirmed）
+- 内容: Phase26.3 の Notebook は `UC-1〜UC-8 + UC-11/12` を実行済み状態でコミットし、placeholder 出力を撤廃する。`UC-9/10` は export 中心の最小更新を維持する。
+- 理由: Notebook を開いた時点で図表・表・指標を確認可能にし、実行証跡の再現性を担保するため。
+- 影響範囲: `notebooks/quick_reference/*.ipynb` / `examples/out/phase26_*/summary.json`
+
+### Decision（confirmed）
+- 内容: `tuning.metrics_candidates` は tuning objective 許可セットとは独立した task 別許可セットで検証する（regression: `rmse/huber/mae`, binary: `logloss/auc`, multiclass: `multi_logloss/multi_error`）。
+- 理由: モニタリング/診断用 metrics 候補と最適化 objective の責務を分離し、設計意図と実装契約を一致させるため。
+- 影響範囲: `src/veldra/config/models.py` / `tests/test_phase263_config_extensions.py` / `tests/test_runconfig_validation.py`
+
+### Phase26.3 実装評価（2026-02-17）
+
+#### 完了状況
+
+Phase26.3 の全 6 Step を完了。テスト **27 passed, 0 failed**。
+
+| Step | 内容 | 状況 |
+|---|---|---|
+| Step 1 | `veldra.diagnostics` パッケージ新設（7 モジュール） | 完了 |
+| Step 2 | `observation_table` を全 TrainingOutput + Artifact に追加 | 完了 |
+| Step 3 | 因果推定層の nuisance 診断拡張 | 完了 |
+| Step 4 | Notebook 詳細化（UC-1〜UC-6 + UC-11/UC-12 新規） | 完了 |
+| Step 5 | UC-7/UC-8 の診断出力追加 | 完了 |
+| Step 6 | 実行証跡 manifest + 契約テスト | 完了 |
+
+#### 残課題（Phase26.4 へ引き継ぎ）
+
+1. **Notebook の教育的品質が低い**: 自動生成 Notebook（UC-1〜UC-12）は実行証跡としては十分だが、学習教材としては不十分（概念説明なし、パラメーター未解説、結果解釈なし）。
+2. **手書き Workflow Notebook との品質格差**: `*_analysis_workflow.ipynb` 群は教育的品質 7-8/10 だが、Phase26 UC Notebook は 0-2/10。
+3. **テストカバレッジの偏り**: 統合テスト 90% 超だが、ユニットテスト（特に core API happy path、エッジケース、数値安定性）が不足。
+
+---
+
+## 13.4 Phase26.4: Notebook 教育化 & テスト品質強化
+
+### 目的
+
+Phase26.3 で完成した診断・可視化基盤の上に、**Notebook を初学者向け教材**として再構成し、併せて**テストカバレッジの構造的ギャップ**を解消する。
+
+### 前提
+
+- Notebook の2系統（自動生成 UC 系 / 手書き Workflow 系）は統合せず、役割を明確に分離する。
+- UC 系は「実行証跡 + クイックリファレンス」として維持し、教育的補強を最小限に留める。
+- Workflow 系を「公式チュートリアル」として位置づけ、重点的に教育品質を向上させる。
+- テスト追加は既存の公開 API シグネチャを変更しない。
+- 命名規約は **英語スネークケース** を採用し、ユーザー向け名称から `phase26` 識別子を除去する。
+- Notebook 配置は `notebooks/tutorials` と `notebooks/quick_reference` の 2 系統に分離する。
+- legacy 互換スタブは cleanup で撤去し、canonical notebook のみを運用対象とする。
+
+---
+
+### 実装ステップ（Step 0-6）
+
+#### Step 0: 設計記録更新（先行）
+
+- 本節（13.4）に命名再編方針、実装順序、互換期限を明記する。
+- `HISTORY.md` に以下の Decision を記録する。
+  - `Decision: confirmed` 命名規約（英語スネークケース）と配置規約（tutorials / quick_reference）
+  - `Decision: confirmed` 旧名スタブ撤去（Phase27 前 cleanup）
+
+#### Step 1: Notebook 配置再編
+
+##### 1-1. Workflow → Tutorials（canonical）
+
+| 旧ファイル | 新ファイル（canonical） |
+|---|---|
+| `notebooks/regression_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_01_regression_basics.ipynb` |
+| `notebooks/binary_tuning_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_02_binary_classification_tuning.ipynb` |
+| `notebooks/frontier_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_03_frontier_quantile_regression.ipynb` |
+| `notebooks/simulate_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_04_scenario_simulation.ipynb` |
+| `notebooks/lalonde_dr_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_05_causal_dr_lalonde.ipynb` |
+| `notebooks/lalonde_drdid_analysis_workflow.ipynb` | `notebooks/tutorials/tutorial_06_causal_drdid_lalonde.ipynb` |
+| （新規） | `notebooks/tutorials/tutorial_00_quickstart.ipynb` |
+| （新規） | `notebooks/tutorials/tutorial_07_model_evaluation_guide.ipynb` |
+
+##### 1-2. UC 実行証跡 → Quick Reference（canonical）
+
+| 旧ファイル | 新ファイル（canonical） |
+|---|---|
+| `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb` | `notebooks/quick_reference/reference_02_binary_tune_evaluate.ipynb` |
+| `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_03_frontier_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb` | `notebooks/quick_reference/reference_04_causal_dr_estimate.ipynb` |
+| `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb` | `notebooks/quick_reference/reference_05_causal_drdid_estimate.ipynb` |
+| `notebooks/phase26_2_uc06_causal_dr_tune.ipynb` | `notebooks/quick_reference/reference_06_causal_dr_tune.ipynb` |
+| `notebooks/phase26_2_uc07_artifact_evaluate.ipynb` | `notebooks/quick_reference/reference_07_artifact_evaluate.ipynb` |
+| `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb` | `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` |
+| `notebooks/phase26_2_uc09_export_python_onnx.ipynb` | `notebooks/quick_reference/reference_09_export_python_onnx.ipynb` |
+| `notebooks/phase26_2_uc10_export_html_excel.ipynb` | `notebooks/quick_reference/reference_10_export_html_excel.ipynb` |
+| `notebooks/phase26_3_uc_multiclass_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` |
+| `notebooks/phase26_3_uc_timeseries_fit_evaluate.ipynb` | `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` |
+| `notebooks/phase26_2_ux_audit.ipynb` | `notebooks/reference_index.ipynb` |
+
+##### 1-3. legacy ノートブック削除（cleanup 後）
+
+- 旧名 Notebook は root 配下から削除済み。
+- `notebooks/` 直下は canonical 補助ファイル（`reference_index.ipynb`）のみを残す。
+
+#### Step 2: Tutorials の教育強化（Part A-1 + A-3）
+
+- 対象: `tutorial_01`〜`tutorial_06` + 新規 `tutorial_00`, `tutorial_07`
+- 全 tutorial に共通して以下を追加する。
+  - Concept primer
+  - Config 解説表
+  - 結果解釈セル
+  - If-then 感度分析セル
+  - よくある失敗
+  - Further reading
+
+#### Step 3: Quick Reference 12本の整備（Part A-2）
+
+- `scripts/generate_phase263_notebooks.py` の出力先を `notebooks/quick_reference` に変更する。
+- 各 notebook に以下を追加する。
+  - 冒頭 3行の Overview
+  - Config コメント
+  - 出力注釈
+  - 対応 tutorial へのリンク
+- 実行証跡は `examples/out/phase26_*/summary.json` と outputs 実体で管理する。
+- `examples/out/phase26_2_*` / `examples/out/phase26_3_*` は互換維持のため変更しない。
+
+#### Step 4: テスト品質強化（Part B）
+
+##### P0
+- `tests/test_runner_fit_happy.py`
+- `tests/test_runner_evaluate_happy.py`
+- `tests/test_runner_predict_happy.py`
+- `tests/test_runner_tune_happy.py`
+- `tests/test_edge_cases.py`
+
+##### P1
+- `tests/test_numerical_stability.py`
+- `tests/test_config_cross_field.py`
+- `tests/conftest.py` fixture 追加
+  - `unbalanced_binary_frame`
+  - `categorical_frame`
+  - `timeseries_frame`
+  - `missing_values_frame`
+  - `outlier_frame`
+
+##### P2
+- `tests/test_data_loader_edge.py`
+
+#### Step 5: 既存参照の全面更新
+
+- `README.md` の notebook 導線を canonical 名へ更新。
+- `docs/phase26_2_parity_report.md` は削除し、履歴は `HISTORY.md` に集約する。
+- Notebook 構造/契約テスト（`tests/test_notebook_*`）の対象パスを canonical 名へ更新。
+- `tests/e2e_playwright/conftest.py` の fixture を summary/output 直参照へ更新する。
+
+#### Step 6: 受け入れ確認
+
+```bash
+uv run pytest tests/test_runner_fit_happy.py tests/test_runner_evaluate_happy.py tests/test_runner_predict_happy.py tests/test_runner_tune_happy.py -v
+uv run pytest tests/test_edge_cases.py tests/test_numerical_stability.py tests/test_config_cross_field.py tests/test_data_loader_edge.py -v
+uv run pytest tests/test_quickref_structure.py tests/test_quickref_paths.py tests/test_notebook_execution_evidence.py -v
+uv run pytest tests/test_notebook_execution_outputs.py -m notebook_e2e -v
+uv run pytest tests -x --tb=short
+```
+
+### 完了条件
+
+1. `notebooks/tutorials` / `notebooks/quick_reference` の canonical Notebook が全件存在する。
+2. `notebooks/reference_index.ipynb` が tutorial / quick reference を全件リンクする。
+3. 旧名 notebook（legacy root files）が削除されている。
+4. quick reference 12本が `Setup / Workflow / Result Summary / SUMMARY` を維持している。
+5. tutorial 8本が教育セクション（Concept primer など）を含む。
+6. `examples/out/phase26_*/summary.json` が対象 UC をカバーし、outputs が実在する。
+7. Part B の新規テストがパスし、`veldra.api.*` の公開シグネチャ互換を維持している。
+
+## 13.5 Phase26.5: 13.3 A/B Notebook適用 + gui_e2e 安定化
+
+### 背景
+
+- 13.3 で定義した A（固定学習パラメーター）/B（tuning search space と objective）が、Phase26.4 後の canonical Notebook（`quick_reference` / `tutorials`）へ十分に反映されていなかった。
+- `tests/e2e_playwright` は hidden input を `visible` 前提で待機/操作する実装が残り、`gui_e2e` 実行で不安定な失敗が発生していた。
+
+### 目的
+
+- 13.3 A/B 契約を canonical Notebook に再適用し、Notebook と設計書の乖離を解消する。
+- tuning の `standard` 既定探索空間を 13.3 B に揃える（公開 API シグネチャは変更しない）。
+- Playwright E2E を UI 実装に依存しすぎない待機/操作へ修正し、`gui_e2e` の安定性を回復する。
+
+### 適用範囲
+
+- Notebook: `notebooks/quick_reference/*`（UC-1〜8,11,12）と `notebooks/tutorials/tutorial_01..06.ipynb`
+- 生成スクリプト: `scripts/generate_phase263_notebooks.py`
+- tuning 既定探索空間: `src/veldra/modeling/tuning.py`
+- E2E テスト: `tests/e2e_playwright/_helpers.py`, `tests/e2e_playwright/test_uc01_*`, `test_uc02_*`, `test_uc04_*`, `test_uc05_*`, `test_uc09_*`
+- 契約テスト: `tests/test_notebook_reference_ab_contract.py`, `tests/test_tuning_search_space.py`
+
+### 固定方針
+
+- 13.3 A の `epochs/patience/validation_ratio` は `num_boost_round/early_stopping_rounds/early_stopping_validation_fraction` へ対応付ける。
+- 13.3 A の LightGBM 値は `train.lgb_params` で明示し、`auto_num_leaves=True` と ratio パラメーターを併用する。
+- Frontier は `train.metrics=['quantile']` を維持し、A の固定値のみ適用する。
+- E2E 修正は GUI 側を変更せず、テスト側の待機/操作を堅牢化する。
+- legacy stub Notebook は cleanup で撤去済みとし、canonical notebook のみを運用対象とする。
+
+### 実装ステップ
+
+#### Step 1: 設計・履歴の先行記録
+
+- `DESIGN_BLUEPRINT.md` に本節（13.5）を追加する。
+- `HISTORY.md` に Phase26.5 の provisional / confirmed Decision を記録する。
+
+#### Step 2: quick_reference 生成ロジックの A/B 適用
+
+- `scripts/generate_phase263_notebooks.py` で UC-1/2/3/4/5/6/11/12 の config を A 準拠へ更新。
+- UC-2 と UC-6 の tuning を B 準拠へ更新。
+  - `learning_rate(0.01-0.1, log)`
+  - `train.num_leaves_ratio(0.5-1.0)`
+  - `train.early_stopping_validation_fraction(0.1-0.3)`
+  - `max_bin(127-255)`
+  - `train.min_data_in_leaf_ratio(0.01-0.1)`
+  - `train.min_data_in_bin_ratio(0.01-0.1)`
+  - `max_depth(3-15)`
+  - `feature_fraction(0.5-1.0)`
+  - `bagging_fraction=1.0`, `bagging_freq=0`, `lambda_l1=0`
+  - `lambda_l2(0.000001-0.1)`
+- UC-2 objective は `brier`、UC-6 objective は `dr_balance_priority` を維持する。
+
+#### Step 3: tutorials（01..06）の config セル再整合
+
+- `tutorial_01..06` の config セルに A 固定値を明示する。
+- `tutorial_02` は objective を `brier` へ更新し、B search space を明示する。
+- `tutorial_02` の tuned fit は `train.*` と LightGBM パラメーターを分離して best_params を反映する。
+
+#### Step 4: tuning 既定探索空間の B 準拠化
+
+- `src/veldra/modeling/tuning.py` の `_default_search_space(..., "standard")` を B に合わせて更新する。
+- `fast` preset は維持する。
+- 旧 `path_smooth` / `min_gain_to_split` は custom `tuning.search_space` 明示指定時のみ利用可能とする。
+
+#### Step 5: gui_e2e テストの堅牢化
+
+- `tests/e2e_playwright/_helpers.py`
+  - `goto()` に `#page-content` 待機を追加
+  - `assert_ids()` を `state="attached"` / `state="visible"` 切替可能に変更
+- 対象 E2E を hidden 要素依存から脱却するよう更新。
+  - `test_uc01_*`: heading 文字列断定から主要 selector 待機へ変更
+  - `test_uc02_*`: task type 選択の locator を container scope 化
+  - `test_uc04_*`, `test_uc05_*`: causal switch を label 経由で操作
+  - `test_uc09_*`: manual mode 切替後に visible state を待機して select を操作
+
+#### Step 6: 契約テスト追加・更新
+
+- 新規: `tests/test_notebook_reference_ab_contract.py`
+  - canonical Notebook の A/B キーと値を正規表現で検証
+- 更新: `tests/test_tuning_search_space.py`
+  - `standard` preset の探索空間契約を 13.3 B に合わせる
+
+### テスト計画
+
+```bash
+uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_reference_ab_contract.py
+uv run pytest -q tests/test_quickref_paths.py tests/test_quickref_structure.py
+uv run pytest -q tests/e2e_playwright -m gui_e2e
+uv run pytest -q -m "not gui_e2e"
+```
+
+### 完了条件
+
+1. canonical Notebook（`quick_reference` + `tutorials 01..06`）が 13.3 A/B 契約を満たすこと。
+2. `standard` preset の search space が 13.3 B と一致すること。
+3. `gui_e2e` が hidden input 待機起因のタイムアウトなしで通過すること。
+4. `veldra.api.*` の公開シグネチャ互換が維持されること。
+5. 実行証跡（`examples/out/phase26_*/summary.json`）が canonical notebook outputs と整合すること。
+
+### Decision（confirmed）
+
+- 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）のみとし、legacy stub は cleanup で撤去する。
+- 理由: 実利用導線へ対象を限定し、保守コストと契約混在を解消するため。
+- 影響範囲: notebooks / notebook tests / generation script / docs
+
+### Decision（confirmed）
+
+- 内容: `gui_e2e` の不安定要因は GUI 実装変更ではなく、Playwright テストの待機/操作戦略を見直して収束させる。
+- 理由: Stable API と GUI 実装互換を維持し、検証層のみで flaky 要因を除去できるため。
+- 影響範囲: tests/e2e_playwright/*
+
+## 13.6 Phase26.6: テスト品質向上（命名整理 + カバレッジ強化）
+
+### 背景
+
+- Phase26.2〜26.5 で Notebook を legacy → `quick_reference/` / `tutorials/` へ再編成したが、テストファイルの命名が旧構造のまま残っており、ソースとの対応関係が不明瞭になっている。
+- 削除済みワークフロー Notebook（`regression_analysis_workflow.ipynb` 等）を想起させるテスト名が 10 ファイル、「phase26_2」「phase26_3」を冠するが実態は `quick_reference/` をテストするファイルが 5 ファイル存在する。
+- コアモジュール（artifact store/exporter, config I/O, causal diagnostics）にテストが皆無であり、modeling/causal モジュールもエッジケース・数値安定性テストが不足している。
+
+### 目的
+
+- テストファイル命名を実態に合わせてリネーム・統合し、保守性と可読性を回復する。
+- 重複テスト（`phase26_2_uc_structure` / `phase26_3_uc_structure` の重複等）を統合して不要なファイルを削除する。
+- カバレッジが皆無の Critical モジュールにテストを追加する。
+- 正常系・エッジケース・数値安定系の不足箇所を体系的に補完する。
+
+### 適用範囲
+
+- Notebook テスト: `tests/test_notebook_*.py`（18 ファイル対象）
+- コアモジュールテスト: `tests/test_artifact_*.py`, `tests/test_config_*.py`, `tests/test_causal_*.py`
+- エッジケーステスト: `tests/test_*_edge_cases.py`
+- 数値安定性テスト: `tests/test_numerical_stability.py`
+
+### 固定方針
+
+- テストファイルのリネームは `git mv` で実施し、git 履歴を保持する。
+- テスト内容（アサーション）は原則変更せず、命名とファイル構成のみを整理する。
+- 新規テストは既存の fixture（`regression_frame`, `binary_frame` 等）を再利用し、新規 fixture の追加は最小限とする。
+- `veldra.api.*` の公開シグネチャは変更しない。
+
+### 実装ステップ
+
+#### Stage A: テストファイル命名整理
+
+##### Step A-1: Tutorial テストのリネーム（10 ファイル）
+
+削除済みワークフロー Notebook を想起させる名前を、テスト対象の tutorial 番号に合わせてリネームする。
+
+| 現在の名前 | テスト対象（実態） | リネーム先 |
+|---|---|---|
+| `test_notebook_regression_paths.py` | `tutorial_01_regression_basics.ipynb` | `test_tutorial_01_regression_paths.py` |
+| `test_notebook_regression_structure.py` | 同上 | `test_tutorial_01_regression_structure.py` |
+| `test_notebook_binary_tune_structure.py` | `tutorial_02_binary_classification_tuning.ipynb` | `test_tutorial_02_binary_tune_structure.py` |
+| `test_notebook_frontier_structure.py` | `tutorial_03_frontier_quantile_regression.ipynb` | `test_tutorial_03_frontier_structure.py` |
+| `test_notebook_frontier_paths.py` | 同上 | `test_tutorial_03_frontier_paths.py` |
+| `test_notebook_simulate_structure.py` | `tutorial_04_scenario_simulation.ipynb` | `test_tutorial_04_simulate_structure.py` |
+| `test_notebook_lalonde_structure.py` | `tutorial_05_causal_dr_lalonde.ipynb` | `test_tutorial_05_lalonde_dr_structure.py` |
+| `test_notebook_lalonde_paths.py` | 同上 | `test_tutorial_05_lalonde_dr_paths.py` |
+| `test_notebook_lalonde_drdid_structure.py` | `tutorial_06_causal_drdid_lalonde.ipynb` | `test_tutorial_06_lalonde_drdid_structure.py` |
+| `test_notebook_lalonde_drdid_paths.py` | 同上 | `test_tutorial_06_lalonde_drdid_paths.py` |
+
+##### Step A-2: Quick Reference テストの統合・リネーム（3 ファイル → 2 ファイル）
+
+- `test_notebook_phase26_2_uc_structure.py` と `test_notebook_phase26_3_uc_structure.py` は共に `quick_reference/` をテストしており重複がある。
+- 後者（phase26_3）の方が厳密な検証（execution_count, outputs, matplotlib, diagnostics import）を含む。
+- 前者の独自テスト（legacy removal check, reference_index link check）を後者に統合し、`test_quickref_structure.py` としてリネームする。
+- `test_notebook_phase26_2_paths.py` → `test_quickref_paths.py` にリネーム。
+
+| 現在の名前 | 操作 |
+|---|---|
+| `test_notebook_phase26_2_uc_structure.py` | 独自テストを統合後、削除 |
+| `test_notebook_phase26_3_uc_structure.py` | 統合先 → `test_quickref_structure.py` にリネーム |
+| `test_notebook_phase26_2_paths.py` | `test_quickref_paths.py` にリネーム |
+
+##### Step A-3: Execution Evidence テストの整理（2 ファイル → 1 ファイル）
+
+- `test_notebook_phase26_3_execution_evidence.py` は `test_notebook_execution_evidence.py`（新規追加済み）でカバー済みのため削除。
+- `test_notebook_phase26_3_outputs.py` → `test_notebook_execution_outputs.py` にリネーム。
+
+| 現在の名前 | 操作 |
+|---|---|
+| `test_notebook_phase26_3_execution_evidence.py` | 削除（`test_notebook_execution_evidence.py` でカバー済み） |
+| `test_notebook_phase26_3_outputs.py` | `test_notebook_execution_outputs.py` にリネーム |
+
+##### Step A-4: 全テスト通過確認
+
+リネーム・統合・削除後にテストを実行し、既存の検証がすべて通過することを確認する。
+
+#### Stage B: カバレッジ強化
+
+##### Step B-1: Critical モジュールのテスト追加（不足領域を補完）
+
+| 新規テストファイル | テスト対象 | テスト内容 |
+|---|---|---|
+| `test_artifact_store.py` | `artifact/store.py` | save/load ラウンドトリップ、破損/欠損ファイル、calibrator joblib シリアライズ、オプションフィールド永続化 |
+| `test_exporter_internal.py`（既存） | `artifact/exporter.py` | Python パッケージ構造検証、ONNX export バリデーション、依存不在時エラー、不正 feature schema |
+| `test_config_io.py` | `config/io.py` | save→load ラウンドトリップ、不正 YAML エラー、存在しないパス、親ディレクトリ自動作成 |
+| `test_causal_diagnostics_unit.py` | `causal/diagnostics.py` | max SMD 計算正常系、overlap 境界値（全 treated/全 control）、空の重み分布 |
+
+##### Step B-2: 数値安定性テスト（既存 `test_numerical_stability.py` 拡張）
+
+- DR score 計算での極端な propensity（0 に近い / 1 に近い）
+- importance 累積の精度劣化検証
+- 極小ターゲットスケール + 不均衡の複合条件
+- NaN 伝播の検証（causal / modeling パス）
+
+##### Step B-3: Modeling エッジケース強化
+
+| 新規テストファイル | テスト内容 |
+|---|---|
+| `test_binary_edge_cases.py` | 極端なクラス不均衡、全同一予測、NaN feature、threshold 境界 |
+| `test_regression_edge_cases.py` | 極小ターゲットスケール（1e-6）、定数ターゲット、外れ値混在 |
+| `test_frontier_edge_cases.py` | alpha 境界値（0.01, 0.99）、単一分位点、efficiency 計算 |
+| `test_multiclass_edge_cases.py` | 2 クラス / 多クラス（10+）境界、低頻度クラス |
+
+##### Step B-4: Tuning エッジケース強化（新規 `test_tune_edge_cases.py`）
+
+- DuplicatedStudyError ハンドリング
+- search_space 解決ロジックの検証
+- trial 例外時のフォールバック動作
+
+##### Step B-5: Data / Split テスト強化
+
+| 新規テストファイル | テスト内容 |
+|---|---|
+| `test_data_loader_edge.py` | エンコーディング問題、欠損カラム、存在しないファイル |
+| `test_split_time_series.py` | ギャップ分割、単一期間、期間数不足 |
+
+### 優先順位
+
+1. **Stage A 全体** → 最優先（命名整理は他のテスト追加の前提）
+2. **B-1**（Critical: テスト皆無モジュール）→ 高優先
+3. **B-2**（数値安定性）→ 高優先
+4. **B-3, B-4**（エッジケース強化）→ 中優先
+5. **B-5**（data/split）→ 低優先
+
+### 実装状況（2026-02-18）
+
+- Stage A（命名整理）を完了し、notebook テストの phase 接頭辞を撤廃した。
+  - tutorial テスト: `test_tutorial_01_*`〜`test_tutorial_06_*` へ統一
+  - quick reference テスト: `test_quickref_structure.py`, `test_quickref_paths.py` へ統合
+  - execution evidence テスト: `test_notebook_execution_evidence.py`, `test_notebook_execution_outputs.py` に一本化
+  - AB 契約テスト: `test_notebook_reference_ab_contract.py` へリネーム
+- Stage B（カバレッジ強化）を完了した。
+  - 新規: `tests/test_artifact_store.py`, `tests/test_config_io.py`, `tests/test_causal_diagnostics_unit.py`
+  - 拡張: `tests/test_numerical_stability.py`
+  - 新規: `tests/test_binary_edge_cases.py`, `tests/test_regression_edge_cases.py`, `tests/test_frontier_edge_cases.py`, `tests/test_multiclass_edge_cases.py`, `tests/test_tune_edge_cases.py`
+  - リネーム + 強化: `tests/test_data_loader_edge.py`, `tests/test_split_time_series.py`
+- 検証結果:
+  - `uv run pytest -q tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` → `34 passed`
+  - `uv run pytest -q tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` → `20 passed`
+  - `uv run pytest -q tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py tests/test_tune_edge_cases.py tests/test_data_loader_edge.py tests/test_split_time_series.py` → `31 passed`
+  - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` → `658 passed, 11 deselected`
+
+### テスト計画
+
+```bash
+# Stage A 完了後
+uv run pytest tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_*.py -v
+
+# Stage B 完了後（Critical）
+uv run pytest tests/test_artifact_store.py tests/test_artifact_exporter.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py -v
+
+# Stage B 完了後（エッジケース・数値安定性）
+uv run pytest tests/test_numerical_stability.py tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py -v
+
+# 全テスト通過確認
+uv run pytest -q -m "not gui_e2e and not notebook_e2e"
+```
+
+### 完了条件
+
+1. 旧命名の notebook 関連テストファイルがすべてリネーム / 統合 / 削除され、命名が実態と一致すること。
+2. 重複テスト（`phase26_2_uc_structure` / `phase26_3_uc_structure`、`phase26_3_execution_evidence` / `execution_evidence`）が統合されていること。
+3. Critical モジュール（artifact store, exporter, config I/O, causal diagnostics）のテストが存在すること。
+4. 各 modeling モジュールにエッジケーステストが追加されていること。
+5. 数値安定性テストが causal / modeling の主要計算パスをカバーしていること。
+6. 既存テストがすべて通過すること（`-m "not gui_e2e and not notebook_e2e"`）。
+
+### Decision（provisional）
+
+- 内容: テストファイル命名は「テスト対象のノートブック種別 + 番号」を基準とし、フェーズ番号（phase26_2 等）を冠しない方針とする。
+- 理由: ノートブック再編成が繰り返されても命名が安定し、テスト対象との対応が明瞭になるため。
+- 影響範囲: tests/test_notebook_*.py, tests/test_tutorial_*.py, tests/test_quickref_*.py
+
+### Decision（provisional）
+
+- 内容: カバレッジ強化は Critical（テスト皆無）→ 数値安定性 → エッジケース → data/split の優先順で段階的に実施する。
+- 理由: 本番影響度の高いモジュールから着手し、投入工数に対するカバレッジ改善効果を最大化するため。
+- 影響範囲: tests/ 配下の新規テストファイル群
+
+### Decision（confirmed）
+
+- 内容: notebook テスト命名は「対象種別 + 連番」を基準とし、phase 番号依存を廃止する。
+- 理由: notebook 構成変更時の追従コストを抑え、責務境界を命名から即時判別できるようにするため。
+- 影響範囲: `tests/test_tutorial_*.py`, `tests/test_quickref_*.py`, `tests/test_notebook_execution_*.py`, `tests/test_notebook_reference_ab_contract.py`
+
+### Decision（confirmed）
+
+- 内容: Phase26.6 は Stage A/B を 3PR 粒度（命名整理 → Critical+数値安定 → edge/data/split）で実行し、全ステージ完了をもって閉じる。
+- 理由: 変更リスクを段階分離しつつ、最終的に `not gui_e2e and not notebook_e2e` 回帰のグリーンを完了条件として固定するため。
+- 影響範囲: tests/ 配下全体, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+
+## 14 Phase 27: ジョブキュー強化 & 優先度システム
 
 **目的:** 優先度ベースのジョブスケジューリングと並列worker実行により、スループットとユーザー制御を向上させる。
 
@@ -1099,7 +1508,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/pages/run_page.py` - 優先度選択UI追加
 * `src/veldra/gui/server.py` - worker-count設定
 
-## 14 Phase 27: リアルタイム進捗追跡 & ストリーミングログ
+## 15 Phase 28: リアルタイム進捗追跡 & ストリーミングログ
 
 **目的:** ジョブ実行中のリアルタイムフィードバックとして、進捗インジケーターとストリーミングログを提供する。
 
@@ -1141,7 +1550,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/app.py` - 進捗ポーリング用コールバックの追加
 * `src/veldra/gui/components/` - 新規 `progress_viewer` コンポーネントの作成
 
-## 15 Phase 28: キャンセル強化 & エラーリカバリ
+## 16 Phase 29: キャンセル強化 & エラーリカバリ
 
 **目的:** Action単位の協調キャンセル改善と、失敗ジョブのリトライ機構を追加することで、システムの堅牢性と操作性を向上させる。
 
@@ -1182,7 +1591,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/types.py` - `RetryPolicy` データクラスの定義追加
 * `src/veldra/api/runner.py` - キャンセルチェックフックの注入（共通パターン参照）
 
-## 16 Phase 29: Config管理 & テンプレートライブラリ
+## 17 Phase 30: Config管理 & テンプレートライブラリ
 
 **目的:** Config テンプレート、バリデーション、バージョン管理を追加し、Config作成の効率化と人為的ミスの削減を実現する。
 
@@ -1222,7 +1631,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/app.py` - テンプレート読込およびバリデーション用コールバック
 * `src/veldra/gui/components/` - 新規 `config_wizard` コンポーネントの作成
 
-## 17 Phase 30: 高度可視化 & Artifact比較
+## 18 Phase 31: 高度可視化 & Artifact比較
 
 **目的:** 時系列比較、因果診断、マルチArtifact分析を導入し、モデルの性能評価と意思決定の精度を向上させる。
 
@@ -1262,7 +1671,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/app.py` - 比較ロジックおよびレポート生成用のコールバック実装
 * `src/veldra/artifact/` - fold-levelメトリクス保存のためのスキーマ拡張（必要に応じて）
 
-## 18 Phase 31: パフォーマンス最適化 & スケーラビリティ
+## 19 Phase 32: パフォーマンス最適化 & スケーラビリティ
 
 **目的:** ページネーション、遅延読込、データベースチューニングを導入し、大規模データ運用時におけるGUIの応答性能とスケーラビリティを確保する。
 
@@ -1303,7 +1712,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `src/veldra/gui/pages/results_page.py` - ページネーション対応ArtifactリストUIへの刷新
 * `src/veldra/gui/pages/data_page.py` - 仮想スクロールを用いたデータプレビュー機能の導入
 
-## 19 Phase 32: 洗練 & プロダクション対応
+## 20 Phase 33: 洗練 & プロダクション対応
 
 **目的:** 最終的なシステムの洗練、ドキュメントの整備、およびプロダクション環境へのデプロイを容易にする機能の実装。
 
@@ -1345,7 +1754,7 @@ Phase25.7/25.8 で実装された LightGBM 機能強化に対し、既存テス�
 * `Dockerfile`, `docker-compose.yml` - プロダクションデプロイ用設定ファイルの追加
 * `src/veldra/gui/app.py` - キーボードショートカットのイベント処理およびテレメトリ送信ロジック
 
-## 20 Phase 33: GUIメモリ再最適化 & テスト分離（提案）
+## 21 Phase 34: GUIメモリ再最適化 & テスト分離（提案）
 
 ### Proposal
 - GUI adapter（`veldra.gui.app` / `veldra.gui.services`）で、重量級依存

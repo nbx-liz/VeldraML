@@ -22,19 +22,40 @@ from dash import Input, Output, State, callback_context, dcc, html
 from veldra.gui.components.charts import (
     plot_comparison_bar,
     plot_feature_importance,
+    plot_learning_curves,
     plot_metrics_bar,
 )
+from veldra.gui.components.guardrail import render_guardrails
+from veldra.gui.components.help_texts import HELP_TEXTS
+from veldra.gui.components.help_ui import context_card, guide_alert, recommendation_badge
 from veldra.gui.components.kpi_cards import kpi_card
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.toast import make_toast, toast_container
-from veldra.gui.pages import config_page, data_page, results_page, run_page
+from veldra.gui.components.yaml_diff import render_yaml_diff
+from veldra.gui.pages import (
+    compare_page,
+    data_page,
+    results_page,
+    run_page,
+    runs_page,
+    target_page,
+    train_page,
+    validation_page,
+)
 from veldra.gui.services import (
+    GuardRailChecker,
+    GuardRailResult,
     cancel_run_job,
+    compare_artifacts,
+    delete_run_jobs,
     get_run_job,
+    infer_task_type,
     inspect_data,
     list_artifacts,
     list_run_jobs,
+    list_run_jobs_filtered,
     load_config_yaml,
+    load_job_config_yaml,
     migrate_config_file_via_gui,
     migrate_config_from_yaml,
     normalize_gui_error,
@@ -163,6 +184,223 @@ def _cleanup_gui_system_temp_files(max_age_seconds: int | None = None) -> None:
             continue
 
 
+def _default_split_for_task(
+    task_type: str | None, *, causal_enabled: bool = False
+) -> dict[str, Any]:
+    if causal_enabled:
+        return {"type": "group", "n_splits": 5, "seed": 42, "group_col": None}
+    task = (task_type or "regression").strip().lower()
+    split_type = "stratified" if task in {"binary", "multiclass"} else "kfold"
+    return {"type": split_type, "n_splits": 5, "seed": 42}
+
+
+def _default_train_config() -> dict[str, Any]:
+    return {
+        "learning_rate": 0.05,
+        "num_boost_round": 300,
+        "num_leaves": 31,
+        "max_depth": -1,
+        "min_child_samples": 20,
+        "subsample": 1.0,
+        "colsample_bytree": 1.0,
+        "reg_alpha": 0.0,
+        "reg_lambda": 0.0,
+        "early_stopping_rounds": 100,
+        "auto_class_weight": True,
+        "class_weight_text": "",
+    }
+
+
+def _default_tuning_config() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "preset": "standard",
+        "n_trials": 30,
+        "objective": None,
+    }
+
+
+def _ensure_workflow_state_defaults(state: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(state or {})
+    task_type = str(current.get("task_type") or current.get("task", "regression"))
+    causal_cfg = current.get("causal_config") or {}
+    current.setdefault("task_type", task_type)
+    current.setdefault("exclude_cols", [])
+    current.setdefault("causal_config", causal_cfg)
+    if not isinstance(current.get("split_config"), dict) or not current.get("split_config"):
+        current["split_config"] = _default_split_for_task(task_type)
+    if not isinstance(current.get("train_config"), dict) or not current.get("train_config"):
+        current["train_config"] = _default_train_config()
+    if not isinstance(current.get("tuning_config"), dict) or not current.get("tuning_config"):
+        current["tuning_config"] = _default_tuning_config()
+    current.setdefault("artifact_dir", "artifacts")
+    current.setdefault("config_yaml", "")
+    current.setdefault("last_job_succeeded", False)
+    current.setdefault("results_shortcut_focus", None)
+    current.setdefault("run_action_override", {"mode": "auto", "action": None})
+    return current
+
+
+def _build_config_payload_from_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    task_type = str(current.get("task_type") or "regression")
+    data_path = current.get("data_path")
+    target_col = current.get("target_col")
+    exclude_cols = list(current.get("exclude_cols") or [])
+    split_cfg = dict(current.get("split_config") or {})
+    train_cfg = dict(current.get("train_config") or {})
+    tuning_cfg = dict(current.get("tuning_config") or {})
+    causal_cfg = dict(current.get("causal_config") or {})
+
+    payload: dict[str, Any] = {
+        "config_version": 1,
+        "task": {"type": task_type},
+        "data": {
+            "path": data_path or "",
+            "target": target_col or "",
+        },
+        "split": {
+            "type": split_cfg.get("type", "kfold"),
+            "n_splits": int(split_cfg.get("n_splits", 5)),
+            "seed": int(split_cfg.get("seed", 42)),
+        },
+        "train": {
+            "num_boost_round": int(train_cfg.get("num_boost_round", 300)),
+            "lgb_params": {
+                "learning_rate": float(train_cfg.get("learning_rate", 0.05)),
+                "num_leaves": int(train_cfg.get("num_leaves", 31)),
+                "max_depth": int(train_cfg.get("max_depth", -1)),
+                "min_child_samples": int(train_cfg.get("min_child_samples", 20)),
+                "subsample": float(train_cfg.get("subsample", 1.0)),
+                "colsample_bytree": float(train_cfg.get("colsample_bytree", 1.0)),
+                "reg_alpha": float(train_cfg.get("reg_alpha", 0.0)),
+                "reg_lambda": float(train_cfg.get("reg_lambda", 0.0)),
+            },
+            "early_stopping_rounds": int(train_cfg.get("early_stopping_rounds", 100)),
+            "seed": 42,
+        },
+        "tuning": {
+            "enabled": bool(tuning_cfg.get("enabled", False)),
+        },
+        "export": {
+            "artifact_dir": current.get("artifact_dir") or "artifacts",
+        },
+    }
+
+    if exclude_cols:
+        payload["data"]["drop_cols"] = exclude_cols
+
+    if task_type in {"binary", "multiclass"}:
+        payload["train"]["auto_class_weight"] = bool(train_cfg.get("auto_class_weight", True))
+        class_weight_text = str(train_cfg.get("class_weight_text") or "").strip()
+        if not payload["train"]["auto_class_weight"] and class_weight_text:
+            try:
+                parsed = yaml.safe_load(class_weight_text)
+                if isinstance(parsed, dict):
+                    payload["train"]["class_weight"] = {str(k): float(v) for k, v in parsed.items()}
+            except Exception:
+                pass
+
+    split_type = str(split_cfg.get("type", "kfold"))
+    if split_type == "group" and split_cfg.get("group_col"):
+        payload["split"]["group_col"] = split_cfg.get("group_col")
+    if split_type == "timeseries":
+        if split_cfg.get("time_col"):
+            payload["split"]["time_col"] = split_cfg.get("time_col")
+        payload["split"]["timeseries_mode"] = split_cfg.get("timeseries_mode", "expanding")
+        if split_cfg.get("test_size"):
+            payload["split"]["test_size"] = int(split_cfg.get("test_size"))
+        payload["split"]["gap"] = int(split_cfg.get("gap", 0))
+        payload["split"]["embargo"] = int(split_cfg.get("embargo", 0))
+
+    if payload["tuning"]["enabled"]:
+        payload["tuning"]["preset"] = tuning_cfg.get("preset", "standard")
+        payload["tuning"]["n_trials"] = int(tuning_cfg.get("n_trials", 30))
+        objective = tuning_cfg.get("objective")
+        if objective:
+            payload["tuning"]["objective"] = objective
+
+    if causal_cfg.get("enabled") and causal_cfg.get("method"):
+        payload["task"]["causal_method"] = causal_cfg.get("method")
+        causal_payload: dict[str, Any] = {}
+        if causal_cfg.get("treatment_col"):
+            causal_payload["treatment_col"] = causal_cfg.get("treatment_col")
+        if causal_cfg.get("unit_id_col"):
+            causal_payload["unit_id_col"] = causal_cfg.get("unit_id_col")
+        if causal_payload:
+            payload["causal"] = causal_payload
+    return payload
+
+
+def _build_config_from_state(state: dict[str, Any] | None) -> str:
+    payload = _build_config_payload_from_state(state)
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+
+def _state_from_config_payload(
+    payload: dict[str, Any], base_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    state = _ensure_workflow_state_defaults(base_state)
+    task = payload.get("task") or {}
+    data_obj = payload.get("data") or {}
+    split_obj = payload.get("split") or {}
+    train_obj = payload.get("train") or {}
+    lgb_obj = train_obj.get("lgb_params") or {}
+    tuning_obj = payload.get("tuning") or {}
+    causal_obj = payload.get("causal") or {}
+
+    state["task_type"] = task.get("type", state.get("task_type", "regression"))
+    if isinstance(data_obj.get("path"), str):
+        state["data_path"] = data_obj.get("path")
+    if isinstance(data_obj.get("target"), str):
+        state["target_col"] = data_obj.get("target")
+    state["exclude_cols"] = list(data_obj.get("drop_cols") or [])
+    state["split_config"] = {
+        "type": split_obj.get("type", "kfold"),
+        "n_splits": int(split_obj.get("n_splits", 5)),
+        "seed": int(split_obj.get("seed", 42)),
+        "group_col": split_obj.get("group_col"),
+        "time_col": split_obj.get("time_col"),
+        "timeseries_mode": split_obj.get("timeseries_mode", "expanding"),
+        "test_size": split_obj.get("test_size"),
+        "gap": int(split_obj.get("gap", 0)) if split_obj.get("gap") is not None else 0,
+        "embargo": int(split_obj.get("embargo", 0)) if split_obj.get("embargo") is not None else 0,
+    }
+    state["train_config"] = {
+        "learning_rate": float(lgb_obj.get("learning_rate", 0.05)),
+        "num_boost_round": int(train_obj.get("num_boost_round", 300)),
+        "num_leaves": int(lgb_obj.get("num_leaves", 31)),
+        "max_depth": int(lgb_obj.get("max_depth", -1)),
+        "min_child_samples": int(lgb_obj.get("min_child_samples", 20)),
+        "subsample": float(lgb_obj.get("subsample", 1.0)),
+        "colsample_bytree": float(lgb_obj.get("colsample_bytree", 1.0)),
+        "reg_alpha": float(lgb_obj.get("reg_alpha", 0.0)),
+        "reg_lambda": float(lgb_obj.get("reg_lambda", 0.0)),
+        "early_stopping_rounds": int(train_obj.get("early_stopping_rounds", 100)),
+        "auto_class_weight": bool(train_obj.get("auto_class_weight", True)),
+        "class_weight_text": (
+            yaml.safe_dump(train_obj.get("class_weight"), sort_keys=False).strip()
+            if train_obj.get("class_weight")
+            else ""
+        ),
+    }
+    state["tuning_config"] = {
+        "enabled": bool(tuning_obj.get("enabled", False)),
+        "preset": tuning_obj.get("preset", "standard"),
+        "n_trials": int(tuning_obj.get("n_trials", 30)),
+        "objective": tuning_obj.get("objective"),
+    }
+    state["artifact_dir"] = str((payload.get("export") or {}).get("artifact_dir", "artifacts"))
+    state["causal_config"] = {
+        "enabled": bool(task.get("causal_method")),
+        "method": task.get("causal_method"),
+        "treatment_col": causal_obj.get("treatment_col"),
+        "unit_id_col": causal_obj.get("unit_id_col"),
+    }
+    state["config_yaml"] = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    return state
+
+
 def _sidebar() -> html.Div:
     return html.Div(
         [
@@ -180,8 +418,20 @@ def _sidebar() -> html.Div:
                         className="nav-link",
                     ),
                     dbc.NavLink(
-                        [html.I(className="bi bi-gear me-2"), "Config"],
-                        href="/config",
+                        [html.I(className="bi bi-bullseye me-2"), "Target"],
+                        href="/target",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-scissors me-2"), "Validation"],
+                        href="/validation",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-sliders me-2"), "Train"],
+                        href="/train",
                         active="exact",
                         className="nav-link",
                     ),
@@ -197,6 +447,19 @@ def _sidebar() -> html.Div:
                         active="exact",
                         className="nav-link",
                     ),
+                    html.Hr(className="w-100 my-2"),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-clock-history me-2"), "Runs"],
+                        href="/runs",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-shuffle me-2"), "Compare"],
+                        href="/compare",
+                        active="exact",
+                        className="nav-link",
+                    ),
                 ],
                 vertical=True,
                 pills=True,
@@ -207,34 +470,47 @@ def _sidebar() -> html.Div:
     )
 
 
-def _stepper_bar(pathname: str) -> html.Div:
+def _stepper_bar(pathname: str, state: dict[str, Any] | None = None) -> html.Div:
     steps = [
         {"label": "Data", "path": "/data"},
-        {"label": "Config", "path": "/config"},
+        {"label": "Target", "path": "/target"},
+        {"label": "Validation", "path": "/validation"},
+        {"label": "Train", "path": "/train"},
         {"label": "Run", "path": "/run"},
         {"label": "Results", "path": "/results"},
     ]
 
-    step_elems = []
-    current_idx = -1
+    normalized_state = _ensure_workflow_state_defaults(state)
+    completed_map = {
+        "/data": bool(normalized_state.get("data_path")),
+        "/target": bool(normalized_state.get("target_col"))
+        and bool(normalized_state.get("task_type")),
+        "/validation": bool(normalized_state.get("split_config")),
+        "/train": bool(normalized_state.get("train_config")),
+        "/run": bool(normalized_state.get("last_job_succeeded")),
+        "/results": bool(normalized_state.get("last_run_artifact")),
+    }
 
-    # Find current step index
+    step_elems = []
+    current_idx = 0
+    normalized_path = "/target" if pathname == "/config" else (pathname or "/data")
     for i, step in enumerate(steps):
-        if pathname and step["path"] in pathname:
+        if step["path"] == normalized_path or normalized_path.startswith(step["path"]):
             current_idx = i
             break
-    if current_idx == -1 and pathname == "/":  # Default to data
-        current_idx = 0
 
     for i, step in enumerate(steps):
         status_class = ""
         icon = str(i + 1)
+        is_completed = bool(completed_map.get(step["path"])) or i < current_idx
 
-        if i < current_idx:
+        if is_completed:
             status_class = "completed"
             icon = "✓"
-        elif i == current_idx:
+        if i == current_idx:
             status_class = "active"
+            if is_completed:
+                icon = "✓"
 
         step_content = html.Div(
             [html.Div(icon, className="step-circle"), html.Span(step["label"])],
@@ -244,9 +520,12 @@ def _stepper_bar(pathname: str) -> html.Div:
             dcc.Link(step_content, href=step["path"], style={"textDecoration": "none"})
         )
 
-        # Add connector line if not last item
         if i < len(steps) - 1:
-            connector_color = "var(--success)" if i < current_idx else "rgba(148, 163, 184, 0.1)"
+            connector_color = (
+                "var(--success)"
+                if (is_completed or i < current_idx)
+                else "rgba(148, 163, 184, 0.1)"
+            )
             step_elems.append(
                 html.Div(
                     style={
@@ -291,11 +570,33 @@ def render_page(pathname: str, state: dict | None = None) -> html.Div:
     if pathname == "/data" or pathname == "/":
         return data_page.layout()
     if pathname == "/config":
-        return config_page.layout()
+        return html.Div(
+            [
+                dbc.Alert(
+                    (
+                        "The /config route is kept for compatibility. "
+                        "Please use Target/Validation/Train."
+                    ),
+                    color="info",
+                    className="mb-3",
+                ),
+                target_page.layout(state),
+            ]
+        )
+    if pathname == "/target":
+        return target_page.layout(state)
+    if pathname == "/validation":
+        return validation_page.layout(state)
+    if pathname == "/train":
+        return train_page.layout(state)
     if pathname == "/run":
         return run_page.layout(state)
     if pathname == "/results":
         return results_page.layout()
+    if pathname == "/runs":
+        return runs_page.layout()
+    if pathname == "/compare":
+        return compare_page.layout()
     return data_page.layout()
 
 
@@ -377,7 +678,7 @@ def create_app() -> dash.Dash:
         State("workflow-state", "data"),
     )
     def _render_page(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
-        return render_page(pathname, state), _stepper_bar(pathname or "/")
+        return render_page(pathname, state), _stepper_bar(pathname or "/", state)
 
     # --- Data Page Callbacks ---
     app.callback(
@@ -562,13 +863,230 @@ def create_app() -> dash.Dash:
         Input("cfg-task-type", "value"),
     )(_cb_update_top_k_visibility)
 
+    # --- Phase26 Target / Validation / Train callbacks ---
+    app.callback(
+        Output("target-data-path", "value"),
+        Output("target-col-select", "options"),
+        Output("target-col-select", "value"),
+        Output("target-exclude-cols", "options"),
+        Output("target-exclude-cols", "value"),
+        Output("target-treatment-col", "options"),
+        Output("target-unit-id-col", "options"),
+        Output("target-task-type", "value"),
+        Output("target-task-hint", "children"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_target_page)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("target-col-select", "value"),
+        Input("target-task-type", "value"),
+        Input("target-exclude-cols", "value"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+        Input("target-treatment-col", "value"),
+        Input("target-unit-id-col", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_target_state)
+
+    app.callback(
+        Output("target-task-context", "children"),
+        Output("target-frontier-alpha-guide", "children"),
+        Input("target-task-type", "value"),
+    )(_cb_target_task_guides)
+
+    app.callback(
+        Output("target-causal-method-hint", "children"),
+        Output("target-causal-context", "children"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+    )(_cb_target_causal_guides)
+
+    app.callback(
+        Output("target-guardrail-container", "children"),
+        Input("target-col-select", "value"),
+        Input("target-task-type", "value"),
+        Input("target-exclude-cols", "value"),
+        Input("target-causal-enabled", "value"),
+        Input("target-causal-method", "value"),
+        Input("target-treatment-col", "value"),
+        Input("target-unit-id-col", "value"),
+        State("workflow-state", "data"),
+    )(_cb_target_guardrails)
+
+    app.callback(
+        Output("validation-group-col", "options"),
+        Output("validation-time-col", "options"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_validation_options)
+
+    app.callback(
+        Output("validation-group-container", "style"),
+        Output("validation-timeseries-container", "style"),
+        Input("validation-split-type", "value"),
+    )(_cb_update_split_options)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("validation-split-type", "value"),
+        Input("validation-n-splits", "value"),
+        Input("validation-seed", "value"),
+        Input("validation-group-col", "value"),
+        Input("validation-time-col", "value"),
+        Input("validation-ts-mode", "value"),
+        Input("validation-test-size", "value"),
+        Input("validation-gap", "value"),
+        Input("validation-embargo", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_validation_state)
+
+    app.callback(
+        Output("validation-guardrail-container", "children"),
+        Input("validation-split-type", "value"),
+        Input("validation-n-splits", "value"),
+        Input("validation-group-col", "value"),
+        Input("validation-time-col", "value"),
+        State("workflow-state", "data"),
+    )(_cb_validation_guardrails)
+
+    app.callback(
+        Output("validation-split-context", "children"),
+        Input("validation-split-type", "value"),
+    )(_cb_validation_split_context)
+
+    app.callback(
+        Output("validation-recommendation", "children"),
+        Input("workflow-state", "data"),
+    )(_cb_validation_recommendation)
+
+    app.callback(
+        Output("train-tune-objective", "options"),
+        Input("workflow-state", "data"),
+    )(_cb_update_train_tune_objectives)
+
+    app.callback(
+        Output("train-learning-rate", "value"),
+        Output("train-num-leaves", "value"),
+        Output("train-min-child", "value"),
+        Input("train-preset-conservative-btn", "n_clicks"),
+        Input("train-preset-balanced-btn", "n_clicks"),
+        State("train-learning-rate", "value"),
+        State("train-num-leaves", "value"),
+        State("train-min-child", "value"),
+        prevent_initial_call=True,
+    )(_cb_apply_train_preset)
+
+    app.callback(
+        Output("train-objective-help", "children"),
+        Input("train-tune-objective", "value"),
+    )(_cb_train_objective_help)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("train-learning-rate", "value"),
+        Input("train-num-boost-round", "value"),
+        Input("train-num-leaves", "value"),
+        Input("train-max-depth", "value"),
+        Input("train-min-child", "value"),
+        Input("train-early-stopping", "value"),
+        Input("train-auto-class-weight", "value"),
+        Input("train-class-weight", "value"),
+        Input("train-tune-enabled", "value"),
+        Input("train-tune-preset", "value"),
+        Input("train-tune-trials", "value"),
+        Input("train-tune-objective", "value"),
+        Input("train-artifact-dir", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_train_state)
+
+    app.callback(
+        Output("train-config-yaml-preview", "value"),
+        Output("train-summary-container", "children"),
+        Input("workflow-state", "data"),
+    )(_cb_update_train_yaml_preview)
+
+    app.callback(
+        Output("train-config-yaml-preview", "value", allow_duplicate=True),
+        Output("train-config-validate-result", "children"),
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("train-config-load-btn", "n_clicks"),
+        Input("train-config-save-btn", "n_clicks"),
+        Input("train-config-validate-btn", "n_clicks"),
+        Input("train-config-yaml-import-btn", "n_clicks"),
+        State("train-config-yaml-preview", "value"),
+        State("train-config-file-path", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_train_yaml_actions)
+
+    app.callback(
+        Output("train-guardrail-container", "children"),
+        Input("train-learning-rate", "value"),
+        Input("train-num-boost-round", "value"),
+        State("workflow-state", "data"),
+    )(_cb_train_guardrails)
+
+    app.callback(
+        Output("run-data-path", "value", allow_duplicate=True),
+        Output("run-config-yaml", "value", allow_duplicate=True),
+        Output("run-config-path", "value", allow_duplicate=True),
+        Output("run-artifact-path", "value", allow_duplicate=True),
+        Input("url", "pathname"),
+        Input("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_sync_run_inputs_from_state)
+
+    app.callback(
+        Output("run-action-override-mode", "value"),
+        Output("run-action-manual", "value"),
+        Input("url", "pathname"),
+        Input("workflow-state", "data"),
+    )(_cb_sync_run_override_from_state)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("run-action-override-mode", "value"),
+        Input("run-action-manual", "value"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_save_run_action_override)
+
+    app.callback(
+        Output("run-action-manual-container", "style"),
+        Input("run-action-override-mode", "value"),
+    )(_cb_run_action_manual_visibility)
+
     # --- Run Page Auto-Action ---
     app.callback(
         Output("run-action", "value"),
         Output("run-action-display", "children"),
         Output("run-action-display", "className"),
         Input("run-config-yaml", "value"),
+        Input("run-action-override-mode", "value"),
+        Input("run-action-manual", "value"),
     )(_cb_detect_run_action)
+
+    app.callback(
+        Output("run-action-description", "children"),
+        Input("run-action", "value"),
+        Input("run-action-override-mode", "value"),
+    )(_cb_run_action_description)
+
+    app.callback(
+        Output("run-guardrail-container", "children"),
+        Output("run-guardrail-has-error", "data"),
+        Input("run-action", "value"),
+        Input("run-data-path", "value"),
+        Input("run-config-yaml", "value"),
+        Input("run-config-path", "value"),
+        Input("run-artifact-path", "value"),
+        Input("run-scenarios-path", "value"),
+    )(_cb_run_guardrails)
 
     app.callback(
         Output("run-execute-btn", "disabled"),
@@ -581,6 +1099,7 @@ def create_app() -> dash.Dash:
         Input("run-config-path", "value"),
         Input("run-artifact-path", "value"),
         Input("run-scenarios-path", "value"),
+        Input("run-guardrail-has-error", "data"),
     )(_cb_update_run_launch_state)
 
     # --- Run Page Callbacks ---
@@ -669,6 +1188,112 @@ def create_app() -> dash.Dash:
         State("artifact-eval-data-path", "value"),
         prevent_initial_call=True,
     )(_cb_evaluate_artifact_action)
+
+    app.callback(
+        Output("result-learning-curve", "figure"),
+        Output("result-config-view", "children"),
+        Output("result-overview-summary", "children"),
+        Input("artifact-select", "value"),
+    )(_cb_update_result_extras)
+
+    app.callback(
+        Output("result-export-help", "children"),
+        Input("artifact-select", "value"),
+    )(_cb_result_export_help_for_artifact)
+
+    app.callback(
+        Output("artifact-eval-precheck", "children"),
+        Input("artifact-select", "value"),
+        Input("artifact-eval-data-path", "value"),
+    )(_cb_result_eval_precheck)
+
+    app.callback(
+        Output("artifact-evaluate-btn", "className"),
+        Output("result-export-excel-btn", "className"),
+        Output("result-export-html-btn", "className"),
+        Input("workflow-state", "data"),
+        Input("url", "pathname"),
+    )(_cb_result_shortcut_highlight)
+
+    app.callback(
+        Output("result-export-status", "children"),
+        Output("result-export-job-store", "data"),
+        Output("result-export-poll-interval", "disabled"),
+        Output("result-export-poll-interval", "n_intervals"),
+        Input("result-export-excel-btn", "n_clicks"),
+        Input("result-export-html-btn", "n_clicks"),
+        State("artifact-select", "value"),
+        prevent_initial_call=True,
+    )(_cb_result_export_actions)
+
+    app.callback(
+        Output("result-report-download", "data"),
+        Output("result-export-status", "children", allow_duplicate=True),
+        Output("result-export-job-store", "data", allow_duplicate=True),
+        Output("result-export-poll-interval", "disabled", allow_duplicate=True),
+        Input("result-export-poll-interval", "n_intervals"),
+        State("result-export-job-store", "data"),
+        prevent_initial_call=True,
+    )(_cb_poll_result_export_job)
+
+    app.callback(
+        Output("result-config-download", "data"),
+        Input("result-download-config-btn", "n_clicks"),
+        State("artifact-select", "value"),
+        prevent_initial_call=True,
+    )(_cb_result_download_config)
+
+    # --- Runs / Compare Callbacks ---
+    app.callback(
+        Output("runs-table", "data"),
+        Input("runs-refresh-btn", "n_clicks"),
+        Input("url", "pathname"),
+        Input("runs-status-filter", "value"),
+        Input("runs-action-filter", "value"),
+        Input("runs-search", "value"),
+    )(_cb_refresh_runs_table)
+
+    app.callback(
+        Output("runs-detail", "children"),
+        Output("runs-selection-store", "data"),
+        Input("runs-table", "selected_rows"),
+        State("runs-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_runs_selection_detail)
+
+    app.callback(
+        Output("workflow-state", "data", allow_duplicate=True),
+        Output("url", "pathname", allow_duplicate=True),
+        Output("runs-feedback", "children"),
+        Input("runs-compare-btn", "n_clicks"),
+        Input("runs-clone-btn", "n_clicks"),
+        Input("runs-delete-btn", "n_clicks"),
+        Input("runs-view-results-btn", "n_clicks"),
+        Input("runs-migrate-btn", "n_clicks"),
+        Input("runs-table", "active_cell"),
+        State("runs-selection-store", "data"),
+        State("workflow-state", "data"),
+        State("runs-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_runs_actions)
+
+    app.callback(
+        Output("compare-artifact-a", "options"),
+        Output("compare-artifact-b", "options"),
+        Output("compare-artifact-a", "value"),
+        Output("compare-artifact-b", "value"),
+        Input("url", "pathname"),
+        State("workflow-state", "data"),
+    )(_cb_populate_compare_options)
+
+    app.callback(
+        Output("compare-checks", "children"),
+        Output("compare-metrics-table", "data"),
+        Output("compare-chart", "figure"),
+        Output("compare-config-diff", "children"),
+        Input("compare-artifact-a", "value"),
+        Input("compare-artifact-b", "value"),
+    )(_cb_compare_runs)
 
     # --- Preset Synchronization Callbacks ---
 
@@ -791,8 +1416,24 @@ def _cb_inspect_data(
     label = (
         f"✔ {display_name}  ({result['stats']['n_rows']} rows × {result['stats']['n_cols']} cols)"
     )
-    next_state = dict(current_state)
+    next_state = _ensure_workflow_state_defaults(current_state)
     next_state["data_path"] = final_path
+    next_state["data_stats"] = result.get("stats", {})
+    cols = list(result.get("stats", {}).get("columns", []))
+    if not next_state.get("target_col") and cols:
+        next_state["target_col"] = cols[-1]
+    if next_state.get("target_col") and cols:
+        try:
+            data_preview_df = _get_load_tabular_data()(final_path)
+            inferred = infer_task_type(data_preview_df, str(next_state["target_col"]))
+            next_state["task_type"] = inferred
+        except Exception:
+            next_state["task_type"] = next_state.get("task_type") or "regression"
+    next_state["split_config"] = _default_split_for_task(
+        str(next_state.get("task_type") or "regression"),
+        causal_enabled=bool((next_state.get("causal_config") or {}).get("enabled")),
+    )
+    next_state["config_yaml"] = _build_config_from_state(next_state)
     return _ret(
         html.Div([stats_div, preview_div], className="data-inspection-zone"),
         "",
@@ -803,10 +1444,10 @@ def _cb_inspect_data(
 
 
 def _cb_save_target_col(target_col: str, state: dict) -> dict:
-    if not state:
-        state = {}
-    state["target_col"] = target_col
-    return state
+    current = _ensure_workflow_state_defaults(state)
+    current["target_col"] = target_col
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
 
 
 def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[str, str]:
@@ -820,10 +1461,9 @@ def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[st
 
 
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
-    if not state:
-        state = {}
-    state["config_yaml"] = config_yaml or ""
-    return state
+    current = _ensure_workflow_state_defaults(state)
+    current["config_yaml"] = config_yaml or ""
+    return current
 
 
 def _cb_handle_config_actions(
@@ -945,8 +1585,35 @@ def _cb_update_tune_visibility(enabled: bool) -> dict:
     return {"display": "block"} if enabled else {"display": "none"}
 
 
-def _cb_detect_run_action(yaml_text: str) -> tuple[str, str, str]:
+_RUN_ACTION_DISPLAY = {
+    "fit": ("Ready: TRAIN", "badge bg-primary fs-6 p-2 mb-3"),
+    "tune": ("Ready: TUNE", "badge bg-warning text-dark fs-6 p-2 mb-3"),
+    "evaluate": ("Ready: EVALUATE", "badge bg-info fs-6 p-2 mb-3"),
+    "simulate": ("Ready: SIMULATE", "badge bg-secondary fs-6 p-2 mb-3"),
+    "export": ("Ready: EXPORT", "badge bg-secondary fs-6 p-2 mb-3"),
+    "estimate_dr": ("Ready: CAUSAL ANALYSIS", "badge bg-info text-dark fs-6 p-2 mb-3"),
+}
+
+_RUN_ACTION_DESCRIPTIONS = {
+    "fit": "Train model with cross-validation.",
+    "tune": "Run Optuna optimization, then train with best parameters.",
+    "evaluate": "Evaluate predictions using an existing artifact or config.",
+    "simulate": "Run counterfactual simulation with scenarios.",
+    "export": "Export trained model in Python/ONNX package format.",
+    "estimate_dr": "Estimate causal effects with Doubly Robust methods.",
+}
+
+
+def _cb_detect_run_action(
+    yaml_text: str,
+    override_mode: str | None = None,
+    manual_action: str | None = None,
+) -> tuple[str, str, str]:
     default_vals = ("fit", "Ready: TRAIN", "badge bg-primary fs-6 p-2 mb-3")
+    if (override_mode or "auto") == "manual" and manual_action in _RUN_ACTION_DISPLAY:
+        text, klass = _RUN_ACTION_DISPLAY[str(manual_action)]
+        return str(manual_action), text, klass
+
     if not yaml_text:
         return default_vals
 
@@ -957,18 +1624,44 @@ def _cb_detect_run_action(yaml_text: str) -> tuple[str, str, str]:
 
         # Check Tuning
         if cfg.get("tuning", {}).get("enabled", False):
-            return "tune", "Ready: TUNE", "badge bg-warning text-dark fs-6 p-2 mb-3"
+            text, klass = _RUN_ACTION_DISPLAY["tune"]
+            return "tune", text, klass
 
         # Check Causal
         if "causal_method" in cfg.get("task", {}):
-            return "fit", "Ready: CAUSAL ANALYSIS", "badge bg-info text-dark fs-6 p-2 mb-3"
+            text, klass = _RUN_ACTION_DISPLAY["estimate_dr"]
+            return "fit", text, klass
 
         return default_vals
     except Exception:
         return default_vals
 
 
-def _cb_update_tune_objectives(task_type: str) -> list[dict]:
+def _cb_run_action_manual_visibility(override_mode: str | None) -> dict[str, str]:
+    if (override_mode or "auto") == "manual":
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+def _cb_run_action_description(action: str | None, override_mode: str | None) -> str:
+    mode = "MANUAL" if (override_mode or "auto") == "manual" else "AUTO"
+    description = _RUN_ACTION_DESCRIPTIONS.get(str(action), "Run action is selected.")
+    return f"{mode} mode: {description}"
+
+
+def _cb_update_tune_objectives(
+    task_type: str,
+    *,
+    causal_enabled: bool = False,
+    causal_method: str | None = None,
+) -> list[dict]:
+    if causal_enabled:
+        if str(causal_method or "") == "dr_did":
+            opts = ["drdid_balance_priority", "drdid_std_error", "drdid_overlap_penalty"]
+            return [{"label": o.upper(), "value": o} for o in opts]
+        opts = ["dr_balance_priority", "dr_std_error", "dr_overlap_penalty"]
+        return [{"label": o.upper(), "value": o} for o in opts]
+
     objectives = {
         "regression": ["rmse", "mae", "r2"],
         "binary": [
@@ -986,6 +1679,534 @@ def _cb_update_tune_objectives(task_type: str) -> list[dict]:
     }
     opts = objectives.get(task_type, [])
     return [{"label": o.upper(), "value": o} for o in opts]
+
+
+def _load_data_from_state(state: dict[str, Any] | None) -> pd.DataFrame | None:
+    current = _ensure_workflow_state_defaults(state)
+    data_path = current.get("data_path")
+    if not isinstance(data_path, str) or not data_path.strip():
+        return None
+    try:
+        return _get_load_tabular_data()(data_path)
+    except Exception:
+        return None
+
+
+def _cb_populate_target_page(pathname: str, state: dict | None) -> tuple[Any, ...]:
+    source_state = dict(state or {})
+    current = _ensure_workflow_state_defaults(state)
+    if pathname not in {"/target", "/config"}:
+        return (
+            current.get("data_path", ""),
+            [],
+            current.get("target_col", ""),
+            [],
+            current.get("exclude_cols", []),
+            [],
+            [],
+            current.get("task_type", "regression"),
+            "",
+        )
+
+    frame = _load_data_from_state(current)
+    columns = list(frame.columns) if frame is not None else []
+    target_col = current.get("target_col")
+    if not target_col and columns:
+        target_col = columns[-1]
+
+    inferred = current.get("task_type")
+    if frame is not None and target_col:
+        inferred = infer_task_type(frame, str(target_col))
+    task_type = source_state.get("task_type") or inferred or "regression"
+
+    options = [{"label": c, "value": c} for c in columns]
+    non_target = [{"label": c, "value": c} for c in columns if c != target_col]
+    hint = f"Recommended task type: {inferred}" if inferred else ""
+    return (
+        current.get("data_path", ""),
+        options,
+        target_col,
+        non_target,
+        current.get("exclude_cols", []),
+        options,
+        options,
+        task_type,
+        hint,
+    )
+
+
+def _help_text(topic_key: str, field: str) -> str:
+    entry = HELP_TEXTS.get(topic_key, {})
+    if not isinstance(entry, dict):
+        return ""
+    return str(entry.get(field, ""))
+
+
+def _cb_target_task_guides(task_type: str | None) -> tuple[Any, Any]:
+    task = str(task_type or "regression")
+    if task == "binary":
+        card = context_card(
+            "Binary classification",
+            _help_text("task_type_binary", "detail"),
+            variant="info",
+        )
+        return card, ""
+    if task == "multiclass":
+        card = context_card(
+            "Multiclass classification",
+            _help_text("task_type_multiclass", "detail"),
+            variant="info",
+        )
+        return card, ""
+    if task == "frontier":
+        card = context_card(
+            "Frontier analysis",
+            _help_text("task_type_frontier", "detail"),
+            variant="info",
+        )
+        alpha = context_card(
+            "Frontier alpha guidance",
+            _help_text("frontier_alpha", "detail"),
+            variant="warning",
+        )
+        return card, alpha
+    card = context_card(
+        "Regression",
+        _help_text("task_type_regression", "detail"),
+        variant="info",
+    )
+    return card, ""
+
+
+def _cb_target_causal_guides(
+    causal_enabled: bool | None,
+    causal_method: str | None,
+) -> tuple[str, Any]:
+    if not causal_enabled:
+        return "", ""
+    method = str(causal_method or "dr")
+    if method == "dr_did":
+        hint = "DR-DiD selected."
+        card = context_card(
+            "DR-DiD guidance",
+            _help_text("causal_drdid", "detail"),
+            variant="warning",
+        )
+        return hint, card
+    hint = "DR selected."
+    card = context_card(
+        "DR guidance",
+        _help_text("causal_dr", "detail"),
+        variant="info",
+    )
+    return hint, card
+
+
+def _cb_save_target_state(
+    target_col: str | None,
+    task_type: str | None,
+    exclude_cols: list[str] | None,
+    causal_enabled: bool | None,
+    causal_method: str | None,
+    treatment_col: str | None,
+    unit_id_col: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    current["target_col"] = target_col
+    if task_type:
+        current["task_type"] = task_type
+    current["exclude_cols"] = list(exclude_cols or [])
+    current["causal_config"] = {
+        "enabled": bool(causal_enabled),
+        "method": causal_method if causal_enabled else None,
+        "treatment_col": treatment_col if causal_enabled else None,
+        "unit_id_col": unit_id_col if causal_enabled else None,
+    }
+    if not current.get("split_config"):
+        current["split_config"] = _default_split_for_task(
+            current.get("task_type"),
+            causal_enabled=bool(causal_enabled),
+        )
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _cb_target_guardrails(
+    target_col: str | None,
+    task_type: str | None,
+    exclude_cols: list[str] | None,
+    causal_enabled: bool | None,
+    causal_method: str | None,
+    treatment_col: str | None,
+    unit_id_col: str | None,
+    state: dict | None,
+) -> Any:
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return render_guardrails([{"level": "info", "message": "Load data first."}])
+    checker = GuardRailChecker()
+    findings = checker.check_target(
+        frame,
+        target_col,
+        task_type,
+        exclude_cols=list(exclude_cols or []),
+    )
+    payload = [asdict(item) for item in findings]
+    if causal_enabled and not (treatment_col or "").strip():
+        payload.append(
+            {
+                "level": "warning",
+                "message": "Causal mode requires a binary treatment column.",
+                "suggestion": "Select Treatment column in Target page.",
+            }
+        )
+    if causal_enabled and str(causal_method or "") == "dr_did" and not (unit_id_col or "").strip():
+        payload.append(
+            {
+                "level": "info",
+                "message": "DR-DiD is more stable with Unit ID column.",
+                "suggestion": "Select Unit ID when panel-style data is available.",
+            }
+        )
+    return render_guardrails(payload)
+
+
+def _cb_populate_validation_options(
+    pathname: str, state: dict | None
+) -> tuple[list[dict], list[dict]]:
+    if pathname != "/validation":
+        return [], []
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return [], []
+    cols = [{"label": c, "value": c} for c in frame.columns]
+    return cols, cols
+
+
+def _cb_save_validation_state(
+    split_type: str | None,
+    n_splits: int | None,
+    seed: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    ts_mode: str | None,
+    test_size: int | None,
+    gap: int | None,
+    embargo: int | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    current["split_config"] = {
+        "type": split_type or current.get("split_config", {}).get("type", "kfold"),
+        "n_splits": int(n_splits or 5),
+        "seed": int(seed or 42),
+        "group_col": group_col,
+        "time_col": time_col,
+        "timeseries_mode": ts_mode or "expanding",
+        "test_size": int(test_size) if test_size not in (None, "") else None,
+        "gap": int(gap or 0),
+        "embargo": int(embargo or 0),
+    }
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _cb_validation_guardrails(
+    split_type: str | None,
+    n_splits: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    state: dict | None,
+) -> Any:
+    frame = _load_data_from_state(state)
+    if frame is None:
+        return render_guardrails([{"level": "info", "message": "Load data first."}])
+    current = _ensure_workflow_state_defaults(state)
+    split_config = {
+        "type": split_type or "kfold",
+        "n_splits": int(n_splits or 5),
+        "group_col": group_col,
+        "time_col": time_col,
+    }
+    checker = GuardRailChecker()
+    findings = checker.check_validation(
+        frame,
+        split_config,
+        task_type=current.get("task_type"),
+        exclude_cols=list(current.get("exclude_cols") or []),
+    )
+    task_type = str(current.get("task_type") or "regression")
+    causal_cfg = current.get("causal_config") or {}
+    if task_type in {"binary", "multiclass"} and split_config["type"] != "stratified":
+        findings.append(
+            GuardRailResult(
+                "warning",
+                "Classification tasks are recommended to use stratified split.",
+                "Switch split type to stratified.",
+            )
+        )
+    if bool(causal_cfg.get("enabled")) and split_config["type"] == "stratified":
+        findings.append(
+            GuardRailResult(
+                "info",
+                "Causal workflows often use kfold/group over stratified split.",
+                "Review split strategy in Validation page.",
+            )
+        )
+    return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_validation_split_context(split_type: str | None) -> Any:
+    split = str(split_type or "kfold")
+    key = {
+        "kfold": "split_kfold",
+        "stratified": "split_stratified",
+        "group": "split_group",
+        "timeseries": "split_timeseries",
+    }.get(split, "split_kfold")
+    title = split.title() if split != "timeseries" else "TimeSeries"
+    return context_card(f"{title} split", _help_text(key, "detail"), variant="info")
+
+
+def _cb_validation_recommendation(state: dict | None) -> Any:
+    current = _ensure_workflow_state_defaults(state)
+    task_type = str(current.get("task_type") or "regression")
+    split_cfg = current.get("split_config") or {}
+    split_type = str(split_cfg.get("type") or "kfold")
+    badges: list[Any] = []
+    if task_type in {"binary", "multiclass"}:
+        badges.append(recommendation_badge("Recommended: Stratified split", "info"))
+    if bool((current.get("causal_config") or {}).get("enabled")):
+        badges.append(recommendation_badge("Recommended: KFold/Group split for causal", "warning"))
+    if split_type == "timeseries":
+        badges.append(recommendation_badge("TimeSeries split selected", "ok"))
+    return html.Div(badges) if badges else ""
+
+
+def _cb_update_train_tune_objectives(state: dict | None) -> list[dict]:
+    current = _ensure_workflow_state_defaults(state)
+    causal_cfg = current.get("causal_config") or {}
+    return _cb_update_tune_objectives(
+        str(current.get("task_type") or "regression"),
+        causal_enabled=bool(causal_cfg.get("enabled")),
+        causal_method=causal_cfg.get("method"),
+    )
+
+
+def _cb_apply_train_preset(
+    _conservative_clicks: int,
+    _balanced_clicks: int,
+    current_lr: float | None,
+    current_leaves: int | None,
+    current_child: int | None,
+) -> tuple[float, int, int]:
+    try:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "train-preset-conservative-btn":
+        return 0.01, 31, 50
+    if triggered == "train-preset-balanced-btn":
+        return 0.05, 63, 20
+    return float(current_lr or 0.05), int(current_leaves or 31), int(current_child or 20)
+
+
+def _cb_train_objective_help(objective: str | None) -> Any:
+    objective_key = str(objective or "").strip().lower()
+    if not objective_key:
+        return ""
+    mapping = {
+        "rmse": ("RMSE objective", "objective_rmse"),
+        "mae": ("MAE objective", "objective_mae"),
+        "auc": ("AUC objective", "objective_auc"),
+        "f1": ("F1 objective", "objective_f1"),
+        "logloss": ("Logloss objective", "objective_logloss"),
+        "pinball": ("Pinball objective", "objective_pinball"),
+        "dr_balance_priority": ("DR balance priority", "objective_dr_balance_priority"),
+        "dr_std_error": ("DR standard error", "objective_dr_std_error"),
+        "dr_overlap_penalty": ("DR overlap penalty", "objective_dr_overlap_penalty"),
+        "drdid_balance_priority": ("DR-DiD balance priority", "objective_dr_balance_priority"),
+        "drdid_std_error": ("DR-DiD standard error", "objective_dr_std_error"),
+        "drdid_overlap_penalty": ("DR-DiD overlap penalty", "objective_dr_overlap_penalty"),
+    }
+    title, help_key = mapping.get(
+        objective_key,
+        (f"{objective_key.upper()} objective", "objective_logloss"),
+    )
+    return context_card(title, _help_text(help_key, "detail"), variant="info")
+
+
+def _cb_save_train_state(
+    learning_rate: float | None,
+    num_boost_round: int | None,
+    num_leaves: int | None,
+    max_depth: int | None,
+    min_child: int | None,
+    early_stopping: int | None,
+    auto_class_weight: bool | None,
+    class_weight: str | None,
+    tune_enabled: bool | None,
+    tune_preset: str | None,
+    tune_trials: int | None,
+    tune_objective: str | None,
+    artifact_dir: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    train_cfg = dict(current.get("train_config") or {})
+    train_cfg.update(
+        {
+            "learning_rate": float(learning_rate or train_cfg.get("learning_rate", 0.05)),
+            "num_boost_round": int(num_boost_round or train_cfg.get("num_boost_round", 300)),
+            "num_leaves": int(num_leaves or train_cfg.get("num_leaves", 31)),
+            "max_depth": int(
+                max_depth if max_depth is not None else train_cfg.get("max_depth", -1)
+            ),
+            "min_child_samples": int(
+                min_child if min_child is not None else train_cfg.get("min_child_samples", 20)
+            ),
+            "early_stopping_rounds": int(
+                early_stopping
+                if early_stopping is not None
+                else train_cfg.get("early_stopping_rounds", 100)
+            ),
+            "auto_class_weight": bool(
+                auto_class_weight
+                if auto_class_weight is not None
+                else train_cfg.get("auto_class_weight", True)
+            ),
+            "class_weight_text": class_weight or "",
+        }
+    )
+    current["train_config"] = train_cfg
+    current["tuning_config"] = {
+        "enabled": bool(tune_enabled),
+        "preset": tune_preset or "standard",
+        "n_trials": int(tune_trials or 30),
+        "objective": tune_objective,
+    }
+    current["artifact_dir"] = artifact_dir or "artifacts"
+    current["config_yaml"] = _build_config_from_state(current)
+    return current
+
+
+def _render_train_summary(state: dict | None) -> html.Div:
+    current = _ensure_workflow_state_defaults(state)
+    split = current.get("split_config") or {}
+    train = current.get("train_config") or {}
+    tune = current.get("tuning_config") or {}
+    return html.Ul(
+        [
+            html.Li(f"Task: {current.get('task_type', 'regression')}"),
+            html.Li(f"Split: {split.get('type', 'kfold')} ({split.get('n_splits', 5)} folds)"),
+            html.Li(
+                "Train: "
+                f"lr={train.get('learning_rate', 0.05)}, "
+                f"rounds={train.get('num_boost_round', 300)}, "
+                f"leaves={train.get('num_leaves', 31)}"
+            ),
+            html.Li(f"Tuning: {'ON' if tune.get('enabled') else 'OFF'}"),
+        ],
+        className="mb-0",
+    )
+
+
+def _cb_update_train_yaml_preview(state: dict | None) -> tuple[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    yaml_text = _build_config_from_state(current)
+    return yaml_text, _render_train_summary(current)
+
+
+def _cb_train_yaml_actions(
+    _load_clicks: int,
+    _save_clicks: int,
+    _validate_clicks: int,
+    _import_clicks: int,
+    yaml_text: str,
+    config_path: str,
+    state: dict | None,
+) -> tuple[Any, str, dict[str, Any]]:
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    current = _ensure_workflow_state_defaults(state)
+    message = ""
+    out_yaml = yaml_text or ""
+
+    try:
+        if triggered == "train-config-load-btn":
+            out_yaml = load_config_yaml(config_path or "configs/gui_run.yaml")
+            payload = yaml.safe_load(out_yaml) or {}
+            if isinstance(payload, dict):
+                current = _state_from_config_payload(payload, current)
+            message = f"Loaded: {config_path}"
+        elif triggered == "train-config-save-btn":
+            saved = save_config_yaml(config_path or "configs/gui_run.yaml", out_yaml)
+            message = f"Saved: {saved}"
+        elif triggered == "train-config-validate-btn":
+            validate_config(out_yaml)
+            message = "Config validation passed."
+        elif triggered == "train-config-yaml-import-btn":
+            payload = yaml.safe_load(out_yaml) or {}
+            if not isinstance(payload, dict):
+                raise ValueError("YAML must deserialize to a mapping.")
+            current = _state_from_config_payload(payload, current)
+            message = "Imported YAML into workflow state."
+        current["config_yaml"] = out_yaml
+        return out_yaml, message, current
+    except Exception as exc:
+        current["config_yaml"] = out_yaml
+        return out_yaml, f"Error: {exc}", current
+
+
+def _cb_train_guardrails(
+    learning_rate: float | None,
+    num_boost_round: int | None,
+    state: dict | None,
+) -> Any:
+    checker = GuardRailChecker()
+    findings = checker.check_train(
+        {
+            "learning_rate": float(learning_rate or 0.05),
+            "num_boost_round": int(num_boost_round or 300),
+        }
+    )
+    return render_guardrails([asdict(item) for item in findings])
+
+
+def _cb_save_run_action_override(
+    override_mode: str | None,
+    manual_action: str | None,
+    state: dict | None,
+) -> dict[str, Any]:
+    current = _ensure_workflow_state_defaults(state)
+    mode = "manual" if (override_mode or "auto") == "manual" else "auto"
+    action = str(manual_action) if mode == "manual" else None
+    current["run_action_override"] = {"mode": mode, "action": action}
+    return current
+
+
+def _cb_sync_run_inputs_from_state(
+    pathname: str | None, state: dict | None
+) -> tuple[Any, Any, Any, Any]:
+    if pathname != "/run":
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    current = _ensure_workflow_state_defaults(state)
+    config_yaml = current.get("config_yaml") or _build_config_from_state(current)
+    artifact_dir = current.get("artifact_dir") or "artifacts"
+    return (
+        current.get("data_path", ""),
+        config_yaml,
+        "configs/gui_run.yaml",
+        artifact_dir,
+    )
+
+
+def _cb_sync_run_override_from_state(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
+    if pathname != "/run":
+        return dash.no_update, dash.no_update
+    current = _ensure_workflow_state_defaults(state)
+    override = current.get("run_action_override") or {}
+    return override.get("mode", "auto"), override.get("action") or "fit"
 
 
 class _PopulateBuilderLegacyResult:
@@ -1251,6 +2472,64 @@ def _cb_update_top_k_visibility(task_type: str | None) -> dict[str, str]:
     return {"display": "block"} if task_type == "binary" else {"display": "none"}
 
 
+def _cb_run_guardrails(
+    action: str | None,
+    data_path: str | None,
+    config_yaml: str | None,
+    config_path: str | None,
+    artifact_path: str | None,
+    scenarios_path: str | None,
+) -> tuple[Any, bool]:
+    checker = GuardRailChecker()
+    act = (action or "fit").strip().lower()
+    payload: list[dict[str, Any]] = []
+
+    if act in {"fit", "tune", "estimate_dr", "evaluate"}:
+        yaml_text = (config_yaml or "").strip()
+        if not yaml_text and (config_path or "").strip():
+            try:
+                yaml_text = load_config_yaml(config_path or "")
+            except Exception:
+                yaml_text = ""
+        if yaml_text:
+            payload.extend(
+                [
+                    asdict(item)
+                    for item in checker.check_pre_run(yaml_text, data_path or None)
+                    if item.level in {"error", "warning", "info"}
+                ]
+            )
+    if act in {"evaluate", "simulate"} and not (data_path or "").strip():
+        payload.append(
+            {
+                "level": "error",
+                "message": "Data Source is required for evaluate/simulate action.",
+                "suggestion": "Set Data Source in Data page.",
+            }
+        )
+    if act in {"evaluate", "simulate", "export"} and not (artifact_path or "").strip():
+        payload.append(
+            {
+                "level": "warning" if act == "evaluate" else "error",
+                "message": "Artifact Path is required.",
+                "suggestion": "Select artifact from Results or Runs page.",
+            }
+        )
+    if act == "simulate" and not (scenarios_path or "").strip():
+        payload.append(
+            {
+                "level": "error",
+                "message": "Scenarios Path is required for simulate action.",
+                "suggestion": "Set scenario file path before launch.",
+            }
+        )
+
+    has_error = any(str(item.get("level")) == "error" for item in payload)
+    if not payload:
+        payload = [{"level": "ok", "message": "Pre-run checks passed."}]
+    return render_guardrails(payload, sort_by_severity=True), has_error
+
+
 def _cb_update_run_launch_state(
     action: str | None,
     data_path: str | None,
@@ -1258,6 +2537,7 @@ def _cb_update_run_launch_state(
     config_path: str | None,
     artifact_path: str | None,
     scenarios_path: str | None,
+    run_guardrail_has_error: bool | None = None,
 ) -> tuple[bool, str, str, str]:
     act = (action or "fit").strip().lower()
     has_data = bool((data_path or "").strip())
@@ -1296,6 +2576,13 @@ def _cb_update_run_launch_state(
             f"Missing required inputs: {req}",
             f"Not ready ({act.upper()}): {req}",
             "warning",
+        )
+    if bool(run_guardrail_has_error):
+        return (
+            True,
+            "Guardrail error detected. Resolve errors before launch.",
+            f"Not ready ({act.upper()}): guardrail errors exist.",
+            "danger",
         )
 
     return (
@@ -1368,6 +2655,8 @@ def _cb_refresh_run_jobs(
 
             if job.status == "succeeded" and not is_batch and current_path == "/run":
                 next_path = "/results"
+            if job.status == "succeeded":
+                next_state["last_job_succeeded"] = True
             payload = (
                 job.result.payload if (job.result and isinstance(job.result.payload, dict)) else {}
             )
@@ -1380,7 +2669,7 @@ def _cb_refresh_run_jobs(
             "job_id": job.job_id,
             "action": job.action,
             "status": _status_badge(job.status),
-            "created_at_utc": job.created_at_utc,
+            "created_at_utc": _format_jst_timestamp(job.created_at_utc),
             "id": job.job_id,
         }
         for job in jobs
@@ -1431,15 +2720,24 @@ def _cb_show_selected_job_detail(
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Created: ", className="fw-bold"), html.Span(job.created_at_utc)],
+            [
+                html.Span("Created: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.created_at_utc)),
+            ],
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Started: ", className="fw-bold"), html.Span(job.started_at_utc or "-")],
+            [
+                html.Span("Started: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.started_at_utc)),
+            ],
             className="mb-2",
         ),
         html.Div(
-            [html.Span("Finished: ", className="fw-bold"), html.Span(job.finished_at_utc or "-")],
+            [
+                html.Span("Finished: ", className="fw-bold"),
+                html.Span(_format_jst_timestamp(job.finished_at_utc)),
+            ],
             className="mb-2",
         ),
     ]
@@ -1715,6 +3013,364 @@ def _cb_evaluate_artifact_action(_n_clicks: int, artifact_path: str, data_path: 
         return _json_dumps(payload)
     except Exception as exc:
         return f"Evaluation failed: {exc}"
+
+
+def _cb_update_result_extras(artifact_path: str | None) -> tuple[Any, str, Any]:
+    if not artifact_path:
+        return go.Figure(), "", "Select artifact to view details."
+    try:
+        art = Artifact.load(artifact_path)
+        history = getattr(art, "training_history", None)
+        curve_fig = plot_learning_curves(history if isinstance(history, dict) else {})
+        cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
+        cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
+
+        schema = getattr(art, "feature_schema", {}) or {}
+        summary = html.Ul(
+            [
+                html.Li(f"Features: {len(schema.get('feature_names', []))}"),
+                html.Li(f"Rows: {schema.get('n_rows', 'n/a')}"),
+                html.Li(f"Task: {getattr(art, 'task_type', 'n/a')}"),
+            ],
+            className="mb-0",
+        )
+        return curve_fig, cfg_text, summary
+    except Exception as exc:
+        return go.Figure(), f"Error: {exc}", f"Error: {exc}"
+
+
+def _cb_result_export_help() -> str:
+    return (
+        "Excel: feature importance, predictions, residual views by sheets. "
+        "HTML: self-contained shareable report."
+    )
+
+
+def _cb_result_export_help_for_artifact(_artifact_path: str | None) -> str:
+    return _cb_result_export_help()
+
+
+def _cb_result_eval_precheck(artifact_path: str | None, data_path: str | None) -> Any:
+    if not artifact_path:
+        return guide_alert(["Select an artifact first."], severity="info")
+    if not (data_path or "").strip():
+        return guide_alert(["Set Evaluation Data Path to run feature compatibility check."], "info")
+    try:
+        art = Artifact.load(artifact_path)
+        schema = getattr(art, "feature_schema", {}) or {}
+        expected = set(schema.get("feature_names") or [])
+        frame = _get_load_tabular_data()(str(data_path))
+        actual = set(frame.columns)
+        if not expected:
+            return guide_alert(["Feature schema is not available in this artifact."], "warning")
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        if not missing and not extra:
+            return guide_alert(["Feature schema check passed."], "ok")
+        messages: list[str] = []
+        severity = "warning"
+        if missing:
+            severity = "error"
+            messages.append(f"Missing features: {', '.join(missing[:8])}")
+        if extra:
+            messages.append(f"Extra columns: {', '.join(extra[:8])}")
+        messages.append("Align columns before running re-evaluate.")
+        return guide_alert(messages, severity=severity)
+    except Exception as exc:
+        return guide_alert([f"Precheck failed: {exc}"], severity="warning")
+
+
+def _cb_result_shortcut_highlight(
+    state: dict[str, Any] | None,
+    pathname: str | None,
+) -> tuple[str, str, str]:
+    if pathname != "/results":
+        return "w-100 mb-3", "me-2 result-export-btn", "me-2 result-export-btn"
+    current = _ensure_workflow_state_defaults(state)
+    focus = current.get("results_shortcut_focus")
+    eval_class = "w-100 mb-3"
+    excel_class = "me-2 result-export-btn"
+    html_class = "me-2 result-export-btn"
+    if focus == "evaluate":
+        eval_class += " border border-warning"
+    if focus == "export":
+        excel_class += " border border-warning"
+        html_class += " border border-warning"
+    return eval_class, excel_class, html_class
+
+
+def _cb_result_export_actions(
+    _excel_clicks: int,
+    _html_clicks: int,
+    artifact_path: str | None,
+) -> tuple[str, dict[str, str] | None, bool, int]:
+    if not artifact_path:
+        return "Select an artifact first.", None, True, 0
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if not triggered:
+        triggered = (
+            "result-export-excel-btn"
+            if (_excel_clicks or 0) >= (_html_clicks or 0)
+            else "result-export-html-btn"
+        )
+    action = "export_excel" if triggered == "result-export-excel-btn" else "export_html_report"
+    try:
+        result = submit_run_job(RunInvocation(action=action, artifact_path=artifact_path))
+        state = {"job_id": result.job_id, "action": action}
+        return f"生成中... ({action}, Job ID: {result.job_id})", state, False, 0
+    except Exception as exc:
+        return f"[ERROR] {exc}", None, True, 0
+
+
+def _cb_poll_result_export_job(
+    _n_intervals: int,
+    export_state: dict[str, Any] | None,
+) -> tuple[Any, str, dict[str, Any] | None, bool]:
+    if not export_state:
+        return dash.no_update, dash.no_update, dash.no_update, True
+
+    job_id = str(export_state.get("job_id") or "")
+    action = str(export_state.get("action") or "export")
+    if not job_id:
+        return dash.no_update, "[ERROR] Export job id is missing.", None, True
+
+    job = get_run_job(job_id)
+    if job is None:
+        return dash.no_update, f"[ERROR] Export job not found: {job_id}", None, True
+
+    if job.status in {"queued", "running", "cancel_requested"}:
+        return dash.no_update, f"生成中... ({action}, Job ID: {job_id})", export_state, False
+
+    if job.status == "succeeded":
+        payload = (
+            job.result.payload if (job.result and isinstance(job.result.payload, dict)) else {}
+        )
+        output_path = str(payload.get("output_path") or "")
+        if not output_path:
+            return dash.no_update, "[ERROR] Export output path is missing.", None, True
+        path_obj = Path(output_path)
+        if not path_obj.is_file():
+            return dash.no_update, f"[ERROR] Export file not found: {path_obj}", None, True
+        return dcc.send_file(str(path_obj)), "ダウンロード完了", None, True
+
+    if job.status in {"failed", "canceled"}:
+        message = job.error_message or (job.result.message if job.result else "Export failed.")
+        return dash.no_update, f"[ERROR] {message}", None, True
+
+    return dash.no_update, f"[INFO] Export status: {job.status}", export_state, False
+
+
+def _cb_result_download_config(_n_clicks: int, artifact_path: str | None) -> Any:
+    if not artifact_path:
+        return dash.no_update
+    try:
+        art = Artifact.load(artifact_path)
+        cfg_obj = getattr(art, "config", None) or getattr(art, "run_config", None)
+        cfg_text = yaml.safe_dump(_to_jsonable(cfg_obj), sort_keys=False, allow_unicode=True)
+        return dcc.send_string(cfg_text, filename="run_config.yaml")
+    except Exception:
+        return dash.no_update
+
+
+def _cb_refresh_runs_table(
+    _refresh_clicks: int,
+    pathname: str | None,
+    status_filter: str | None,
+    action_filter: str | None,
+    query: str | None,
+) -> list[dict[str, Any]]:
+    if pathname != "/runs":
+        return []
+    jobs = list_run_jobs_filtered(
+        limit=300,
+        status=status_filter or None,
+        action=action_filter or None,
+        query=query or None,
+    )
+    rows: list[dict[str, Any]] = []
+    for job in jobs:
+        artifact_path = job.invocation.artifact_path or ""
+        if job.result and isinstance(job.result.payload, dict):
+            artifact_path = str(job.result.payload.get("artifact_path") or artifact_path)
+        rows.append(
+            {
+                "job_id": job.job_id,
+                "status": job.status,
+                "action": job.action,
+                "created_at_utc": _format_jst_timestamp(job.created_at_utc),
+                "started_at_utc": _format_jst_timestamp(job.started_at_utc),
+                "finished_at_utc": _format_jst_timestamp(job.finished_at_utc),
+                "artifact_path": artifact_path,
+                "export_shortcut": "Export",
+                "reeval_shortcut": "Re-evaluate",
+            }
+        )
+    return rows
+
+
+def _cb_runs_selection_detail(
+    selected_rows: list[int] | None, data: list[dict] | None
+) -> tuple[str, list[str]]:
+    if not selected_rows or not data:
+        return "Select one or more runs.", []
+    job_ids: list[str] = []
+    details: list[str] = []
+    for idx in selected_rows:
+        if idx >= len(data):
+            continue
+        row = data[idx]
+        job_id = str(row.get("job_id") or "")
+        if not job_id:
+            continue
+        job = get_run_job(job_id)
+        if job is None:
+            continue
+        job_ids.append(job_id)
+        details.append(
+            f"Job ID: {job.job_id}\n"
+            f"Status: {job.status}\n"
+            f"Action: {job.action}\n"
+            f"Created: {_format_jst_timestamp(job.created_at_utc)}\n"
+            f"Started: {_format_jst_timestamp(job.started_at_utc)}\n"
+            f"Finished: {_format_jst_timestamp(job.finished_at_utc)}\n"
+            f"Artifact: {job.invocation.artifact_path or ''}\n"
+        )
+    return "\n---\n".join(details) or "No details.", job_ids
+
+
+def _cb_runs_actions(
+    _compare_clicks: int,
+    _clone_clicks: int,
+    _delete_clicks: int,
+    _view_results_clicks: int,
+    _migrate_clicks: int,
+    active_cell: dict[str, Any] | None,
+    selected_job_ids: list[str] | None,
+    state: dict | None,
+    table_data: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], Any, str]:
+    current = _ensure_workflow_state_defaults(state)
+    job_ids = list(selected_job_ids or [])
+    triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+
+    if triggered == "runs-table":
+        if not active_cell or not table_data:
+            return current, dash.no_update, "Select a run row first."
+        row = active_cell.get("row")
+        col = active_cell.get("column_id")
+        if row is None or row >= len(table_data):
+            return current, dash.no_update, "Invalid run row selected."
+        row_data = table_data[row]
+        artifact_path = str(row_data.get("artifact_path") or "")
+        if not artifact_path:
+            return current, dash.no_update, "No artifact path available for selected run."
+        current["last_run_artifact"] = artifact_path
+        if col == "export_shortcut":
+            current["results_shortcut_focus"] = "export"
+            return current, "/results", "Moved to Results (Export shortcut)."
+        if col == "reeval_shortcut":
+            current["results_shortcut_focus"] = "evaluate"
+            return current, "/results", "Moved to Results (Re-evaluate shortcut)."
+        return current, dash.no_update, "No shortcut action."
+
+    if not job_ids:
+        return current, dash.no_update, "Select one or more runs."
+
+    try:
+        if triggered == "runs-delete-btn":
+            count = delete_run_jobs(job_ids)
+            return current, dash.no_update, f"Deleted {count} run records."
+
+        if triggered == "runs-compare-btn":
+            if len(job_ids) != 2:
+                return current, dash.no_update, "Select exactly two runs for compare."
+            paths: list[str] = []
+            for job_id in job_ids:
+                job = get_run_job(job_id)
+                if not job:
+                    continue
+                path = job.invocation.artifact_path or ""
+                if job.result and isinstance(job.result.payload, dict):
+                    path = str(job.result.payload.get("artifact_path") or path)
+                if path:
+                    paths.append(path)
+            if len(paths) != 2:
+                return current, dash.no_update, "Artifacts not found for selected runs."
+            current["compare_selection"] = paths
+            return current, "/compare", "Moved to Compare."
+
+        primary = get_run_job(job_ids[0])
+        if primary is None:
+            return current, dash.no_update, "Run not found."
+
+        if triggered == "runs-clone-btn":
+            yaml_text = load_job_config_yaml(primary)
+            payload = yaml.safe_load(yaml_text) or {}
+            if not isinstance(payload, dict):
+                return current, dash.no_update, "Invalid config payload."
+            current = _state_from_config_payload(payload, current)
+            return (
+                current,
+                "/train",
+                "Config cloned. Review settings in Train page, then re-run.",
+            )
+
+        if triggered == "runs-view-results-btn":
+            path = primary.invocation.artifact_path or ""
+            if primary.result and isinstance(primary.result.payload, dict):
+                path = str(primary.result.payload.get("artifact_path") or path)
+            if not path:
+                return current, dash.no_update, "No artifact path available."
+            current["last_run_artifact"] = path
+            current["results_shortcut_focus"] = None
+            return current, "/results", "Moved to Results."
+
+        if triggered == "runs-migrate-btn":
+            if not primary.invocation.config_path:
+                return current, dash.no_update, "No config path stored for selected run."
+            msg = migrate_config_file_via_gui(primary.invocation.config_path, target_version=1)
+            return current, dash.no_update, msg
+    except Exception as exc:
+        return current, dash.no_update, f"Run action failed: {exc}"
+
+    return current, dash.no_update, "No action."
+
+
+def _cb_populate_compare_options(
+    pathname: str | None, state: dict | None
+) -> tuple[list[dict[str, str]], list[dict[str, str]], Any, Any]:
+    if pathname != "/compare":
+        return [], [], None, None
+    options = [
+        {"label": f"{item.task_type} | {item.run_id}", "value": item.path}
+        for item in list_artifacts("artifacts")
+    ]
+    compare_selection = (_ensure_workflow_state_defaults(state)).get("compare_selection") or []
+    value_a = compare_selection[0] if len(compare_selection) > 0 else None
+    value_b = compare_selection[1] if len(compare_selection) > 1 else None
+    return options, options, value_a, value_b
+
+
+def _cb_compare_runs(
+    artifact_a: str | None, artifact_b: str | None
+) -> tuple[Any, list[dict], Any, Any]:
+    if not artifact_a or not artifact_b:
+        return "Select both artifacts.", [], go.Figure(), ""
+    try:
+        payload = compare_artifacts(artifact_a, artifact_b)
+        checks = render_guardrails(payload.get("checks", []))
+        fig = plot_comparison_bar(
+            payload.get("metrics_a", {}), payload.get("metrics_b", {}), "Run A", "Run B"
+        )
+        diff = render_yaml_diff(payload.get("config_yaml_a", ""), payload.get("config_yaml_b", ""))
+        return checks, payload.get("metric_rows", []), fig, diff
+    except Exception as exc:
+        return f"Compare failed: {exc}", [], go.Figure(), ""
 
 
 def _sync_path_preset(preset_val: str, current_path: str) -> tuple[str, str]:

@@ -265,6 +265,38 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
     metrics["smd_max_weighted"] = smd_max_weighted
 
     summary = dict(dr_out.summary)
+    means_by_group = (
+        frame.assign(
+            _treatment=pd.to_numeric(frame[treatment_col], errors="coerce").astype(int),
+            _post=pd.to_numeric(frame[post_col], errors="coerce").astype(int),
+            _outcome=pd.to_numeric(frame[config.data.target], errors="coerce").astype(float),
+        )
+        .groupby(["_treatment", "_post"])["_outcome"]
+        .mean()
+        .unstack(fill_value=np.nan)
+    )
+    parallel_trends = {
+        "treated_pre": (
+            float(means_by_group.loc[1, 0])
+            if 1 in means_by_group.index and 0 in means_by_group
+            else None
+        ),
+        "treated_post": (
+            float(means_by_group.loc[1, 1])
+            if 1 in means_by_group.index and 1 in means_by_group
+            else None
+        ),
+        "control_pre": (
+            float(means_by_group.loc[0, 0])
+            if 0 in means_by_group.index and 0 in means_by_group
+            else None
+        ),
+        "control_post": (
+            float(means_by_group.loc[0, 1])
+            if 0 in means_by_group.index and 1 in means_by_group
+            else None
+        ),
+    }
     summary.update(
         {
             "method": "dr_did",
@@ -284,8 +316,11 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
                 "risk_difference_att" if config.task.type == "binary" else "continuous_att"
             ),
             "metrics": metrics,
+            "parallel_trends": parallel_trends,
         }
     )
+    nuisance_diagnostics = dict(dr_out.nuisance_diagnostics)
+    nuisance_diagnostics["parallel_trends"] = parallel_trends
 
     return replace(
         dr_out,
@@ -293,4 +328,5 @@ def run_dr_did_estimation(config: RunConfig, frame: pd.DataFrame) -> DREstimatio
         metrics=metrics,
         observation_table=obs,
         summary=summary,
+        nuisance_diagnostics=nuisance_diagnostics,
     )

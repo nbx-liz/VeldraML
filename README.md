@@ -78,10 +78,12 @@ Implemented:
   - `causal.method=dr` with `task.type=regression|binary` (ATT default, OOF-calibrated propensity)
   - `causal.method=dr_did` with `task.type=regression|binary` (2-period panel/repeated cross-section)
 - Dash GUI adapter MVP:
-  - Config editor + validation
-  - Config migrate workflow (preview/diff/apply)
+  - Guided workflow: `Data -> Target -> Validation -> Train -> Run -> Results`
+  - Runs history + Compare view
   - Run console async queue (`fit/evaluate/tune/simulate/export/estimate_dr`)
-  - Artifact explorer + re-evaluate
+  - Results explorer with learning curves and config view
+  - Async report export (`export_excel`, `export_html_report`)
+  - `/config` route is retained as compatibility entrypoint and redirects users to new flow
 - Config migration utility:
   - `veldra config migrate --input <path> [--output <path>]`
   - strict validation + non-destructive output (`*.migrated.yaml`)
@@ -120,6 +122,15 @@ Optional GUI dependencies:
 ```bash
 uv sync --extra gui
 ```
+
+Optional report-export extra:
+
+```bash
+uv sync --extra export-report
+```
+
+Note: `export-report` is a placeholder extra for environment-specific report dependencies
+(e.g. SHAP). Install those packages manually when your NumPy/runtime combination is compatible.
 
 ### Verify installation
 
@@ -462,7 +473,13 @@ uv run python examples/run_demo_simulate.py --data-path examples/data/california
 Notebook sample (regression workflow with diagnostics):
 
 ```bash
-# Open and run notebooks/regression_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_01_regression_basics.ipynb
+```
+
+Notebook index (tutorials + quick references):
+
+```bash
+# Open and run notebooks/reference_index.ipynb
 ```
 
 Notebook includes:
@@ -475,7 +492,7 @@ Notebook includes:
 Notebook sample (frontier workflow with diagnostics):
 
 ```bash
-# Open and run notebooks/frontier_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_03_frontier_quantile_regression.ipynb
 ```
 
 Notebook includes:
@@ -488,7 +505,7 @@ Notebook includes:
 Notebook sample (simulate-focused what-if analysis):
 
 ```bash
-# Open and run notebooks/simulate_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_04_scenario_simulation.ipynb
 ```
 
 Notebook includes:
@@ -501,7 +518,7 @@ Notebook includes:
 Notebook sample (binary + tune analysis):
 
 ```bash
-# Open and run notebooks/binary_tuning_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_02_binary_classification_tuning.ipynb
 ```
 
 Notebook includes:
@@ -514,7 +531,7 @@ Notebook includes:
 Notebook sample (Lalonde DR causal analysis):
 
 ```bash
-# Open and run notebooks/lalonde_dr_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_05_causal_dr_lalonde.ipynb
 ```
 
 Notebook includes:
@@ -527,7 +544,7 @@ Notebook includes:
 Notebook sample (Lalonde DR-DiD causal analysis):
 
 ```bash
-# Open and run notebooks/lalonde_drdid_analysis_workflow.ipynb
+# Open and run notebooks/tutorials/tutorial_06_causal_drdid_lalonde.ipynb
 ```
 
 Notebook includes:
@@ -540,6 +557,11 @@ Notebook includes:
 - Naive/IPW/DR/DR-DiD comparison table with CI
 - Propensity diagnostics (`e_raw` and `e_hat`) and overlap summary
 - Balance diagnostics via SMD (unweighted vs ATT-weighted)
+
+Phase26.3 notebook execution policy:
+- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` 〜 `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` と `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` / `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
+- 実行証跡は `examples/out/phase26_*/summary.json` と生成物ファイル群で管理します。
+- 構造契約は通常テストで検証し、重い証跡検証は `pytest -m notebook_e2e` で実行します。
 
 Export demo:
 
@@ -597,7 +619,10 @@ GUI run behavior:
 - `/run` enqueues jobs asynchronously and keeps history in SQLite.
 - queued jobs can be canceled immediately.
 - running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
-- `/config` includes migrate preview/diff and file migrate apply (overwrite is rejected).
+- Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.
+- `/runs` provides history, clone, compare, and migrate actions.
+- `/compare` shows metric/config diffs for two artifacts.
+- `/config` remains available for compatibility and forwards users to `/target`.
 - default run config path is `configs/gui_run.yaml` (auto-created if missing).
 
 Windows quick start (launch server + open browser):
@@ -643,6 +668,7 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `split.train_size` | `int | None` | no | `None` | - | - | Fixed train window size in blocked mode. |
 | `train` | `TrainConfig` | no | `<factory>` | - | - | Model training settings. |
 | `train.lgb_params` | `dict[str, Any]` | no | `{}` | - | - | LightGBM parameter overrides. |
+| `train.metrics` | `list[str] | None` | no | `None` | - | - | Training metric list passed to LightGBM. |
 | `train.early_stopping_rounds` | `int | None` | no | `100` | - | - | Early stopping rounds. |
 | `train.early_stopping_validation_fraction` | `float` | no | `0.1` | - | - | Train-row fraction used for ES validation split. |
 | `train.num_boost_round` | `int` | no | `300` | - | - | Maximum boosting iterations. |
@@ -659,6 +685,7 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 | `tuning.enabled` | `bool` | no | `false` | - | - | Enable/disable tuning path. |
 | `tuning.n_trials` | `int` | no | `30` | - | - | Optuna trial count. |
 | `tuning.search_space` | `dict[str, Any]` | no | `{}` | - | - | Explicit search space spec. |
+| `tuning.metrics_candidates` | `list[str] | None` | no | `None` | - | - | Candidate metrics list for tuning diagnostics/reporting. |
 | `tuning.preset` | ``fast` | `standard`` | no | `standard` | `fast`, `standard` | - | Default search space preset. |
 | `tuning.objective` | `str | None` | no | `None` | - | - | Objective metric name. |
 | `tuning.resume` | `bool` | no | `false` | - | - | Resume an existing study. |
@@ -702,9 +729,9 @@ _This section is auto-generated from `src/veldra/config/models.py`. Do not edit 
 
 | task.type | allowed objectives | default |
 | --- | --- | --- |
-| regression | `rmse`, `mae`, `r2` | `rmse` |
+| regression | `rmse`, `mae`, `r2`, `mape` | `rmse` |
 | binary | `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, `precision_at_k` | `auc` |
-| multiclass | `accuracy`, `macro_f1`, `logloss` | `macro_f1` |
+| multiclass | `accuracy`, `macro_f1`, `logloss`, `multi_logloss`, `multi_error` | `macro_f1` |
 | frontier | `pinball`, `pinball_coverage_penalty` | `pinball` |
 
 #### Causal
@@ -811,6 +838,16 @@ causal:
 export: {artifact_dir: artifacts}
 ```
 <!-- RUNCONFIG_REF:END -->
+
+### Phase26.3 Config Notes
+
+`tuning.metrics_candidates` は objective とは独立した候補セットです。task ごとの許可値は以下です。
+
+| task.type | allowed `tuning.metrics_candidates` |
+| --- | --- |
+| regression | `rmse`, `huber`, `mae` |
+| binary | `logloss`, `auc` |
+| multiclass | `multi_logloss`, `multi_error` |
 
 ## Config Migration
 

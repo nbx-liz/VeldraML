@@ -29,6 +29,7 @@ class MulticlassTrainingOutput:
     cv_results: pd.DataFrame
     feature_schema: dict[str, Any]
     training_history: dict[str, Any]
+    observation_table: pd.DataFrame
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
@@ -91,10 +92,11 @@ def _train_single_booster(
     num_class: int,
     evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
+    metric_value: str | list[str] = config.train.metrics or "multi_logloss"
     params = {
         "objective": "multiclass",
         "num_class": num_class,
-        "metric": "multi_logloss",
+        "metric": metric_value,
         "verbosity": -1,
         "seed": config.train.seed,
         **config.train.lgb_params,
@@ -166,10 +168,16 @@ def _normalize_proba(raw: np.ndarray, n_rows: int, num_class: int) -> np.ndarray
 def _multiclass_metrics(y_true: np.ndarray, proba: np.ndarray) -> dict[str, float]:
     y_pred = np.argmax(proba, axis=1)
     labels = list(range(proba.shape[1]))
+    accuracy = float(accuracy_score(y_true, y_pred))
+    logloss_value = float(log_loss(y_true, proba, labels=labels))
+    error_rate = float(1.0 - accuracy)
     return {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "accuracy": accuracy,
         "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
-        "logloss": float(log_loss(y_true, proba, labels=labels)),
+        "logloss": logloss_value,
+        "multi_logloss": logloss_value,
+        "error_rate": error_rate,
+        "multi_error": error_rate,
     }
 
 
@@ -199,6 +207,7 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
     splits = iter_cv_splits(config, data, x, y)
 
     oof_proba = np.full((len(x), num_class), np.nan, dtype=float)
+    fold_ids = np.full(len(x), -1, dtype=int)
     fold_records: list[dict[str, float | int]] = []
     history_folds: list[dict[str, Any]] = []
 
@@ -227,6 +236,7 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
         )
         pred_proba = _normalize_proba(pred_raw, len(valid_idx), num_class)
         oof_proba[valid_idx, :] = pred_proba
+        fold_ids[valid_idx] = fold_idx
 
         fold_metrics = _multiclass_metrics(y.iloc[valid_idx].to_numpy(), pred_proba)
         best_iteration, num_iterations = _booster_iteration_stats(
@@ -246,6 +256,7 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
                 "accuracy": fold_metrics["accuracy"],
                 "macro_f1": fold_metrics["macro_f1"],
                 "logloss": fold_metrics["logloss"],
+                "multi_error": fold_metrics["multi_error"],
                 "n_train": int(len(train_idx)),
                 "n_valid": int(len(valid_idx)),
             }
@@ -296,10 +307,22 @@ def train_multiclass_with_cv(config: RunConfig, data: pd.DataFrame) -> Multiclas
         "task_type": config.task.type,
         "target_classes": target_classes,
     }
+    oof_pred_idx = np.argmax(oof_proba, axis=1)
+    observation_table = pd.DataFrame(
+        {
+            "fold_id": fold_ids,
+            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+            "y_true": y.to_numpy(dtype=int),
+            "label_pred": oof_pred_idx.astype(int),
+        }
+    )
+    for idx, class_label in enumerate(target_classes):
+        observation_table[f"proba_{class_label}"] = oof_proba[:, idx]
     return MulticlassTrainingOutput(
         model_text=final_model.model_to_string(),
         metrics=metrics,
         cv_results=cv_results,
         feature_schema=feature_schema,
         training_history=training_history,
+        observation_table=observation_table,
     )

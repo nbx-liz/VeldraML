@@ -41,12 +41,30 @@ def test_render_data_stats():
         "n_cols": 2,
         "numeric_cols": ["a"],
         "categorical_cols": ["b"],
+        "datetime_cols": [],
         "missing_count": 0,
         "columns": ["a", "b"],
+        "column_profiles": [
+            {
+                "name": "a",
+                "kind": "numeric",
+                "dtype": "float64",
+                "missing_rate": 0.0,
+                "unique_count": 10,
+            },
+            {
+                "name": "b",
+                "kind": "categorical",
+                "dtype": "object",
+                "missing_rate": 0.0,
+                "unique_count": 2,
+            },
+        ],
+        "warnings": [],
     }
     div = data_page.render_data_stats(stats)
     assert isinstance(div, html.Div)
-    next_btn = _find_component_by_id(div, "data-to-config-btn")
+    next_btn = _find_component_by_id(div, "data-to-target-btn")
     assert next_btn is not None
     assert next_btn.color == "primary"
 

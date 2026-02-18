@@ -16,7 +16,7 @@ CausalMethod = Literal["dr", "dr_did"]
 CausalDesign = Literal["panel", "repeated_cross_section"]
 
 _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
-    "regression": {"rmse", "mae", "r2"},
+    "regression": {"rmse", "mae", "r2", "mape"},
     "binary": {
         "auc",
         "logloss",
@@ -27,7 +27,7 @@ _TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
         "recall",
         "precision_at_k",
     },
-    "multiclass": {"accuracy", "macro_f1", "logloss"},
+    "multiclass": {"accuracy", "macro_f1", "logloss", "multi_logloss", "multi_error"},
     "frontier": {"pinball", "pinball_coverage_penalty"},
 }
 _TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
@@ -47,6 +47,18 @@ _CAUSAL_TUNE_ALLOWED_OBJECTIVES: dict[str, set[str]] = {
 _CAUSAL_TUNE_DEFAULT_OBJECTIVES: dict[str, str] = {
     "dr": "dr_balance_priority",
     "dr_did": "drdid_balance_priority",
+}
+_TUNE_METRICS_CANDIDATES: dict[str, set[str]] = {
+    "regression": {"rmse", "huber", "mae"},
+    "binary": {"logloss", "auc"},
+    "multiclass": {"multi_logloss", "multi_error"},
+    "frontier": {"pinball", "coverage", "mae"},
+}
+_TRAIN_ALLOWED_METRICS: dict[str, set[str]] = {
+    "regression": {"rmse", "mae", "huber", "mape"},
+    "binary": {"logloss", "auc", "binary_logloss"},
+    "multiclass": {"multi_logloss", "multi_error"},
+    "frontier": {"quantile"},
 }
 
 
@@ -81,6 +93,7 @@ class SplitConfig(BaseModel):
 class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lgb_params: dict[str, Any] = Field(default_factory=dict)
+    metrics: list[str] | None = None
     early_stopping_rounds: int | None = 100
     early_stopping_validation_fraction: float = 0.1
     num_boost_round: int = 300
@@ -100,6 +113,7 @@ class TuningConfig(BaseModel):
     enabled: bool = False
     n_trials: int = 30
     search_space: dict[str, Any] = Field(default_factory=dict)
+    metrics_candidates: list[str] | None = None
     preset: TuningPreset = "standard"
     objective: str | None = None
     resume: bool = False
@@ -258,6 +272,19 @@ class RunConfig(BaseModel):
 
         if self.train.num_boost_round < 1:
             raise ValueError("train.num_boost_round must be >= 1")
+        if self.train.metrics is not None:
+            if len(self.train.metrics) == 0:
+                raise ValueError("train.metrics must not be empty when set")
+            if self.task.type not in _TRAIN_ALLOWED_METRICS:
+                raise ValueError(f"Unsupported task type for train.metrics: '{self.task.type}'")
+            invalid_metrics = sorted(
+                {m for m in self.train.metrics if m not in _TRAIN_ALLOWED_METRICS[self.task.type]}
+            )
+            if invalid_metrics:
+                raise ValueError(
+                    f"train.metrics contains unsupported values for task.type='{self.task.type}': "
+                    f"{invalid_metrics}. Allowed: {sorted(_TRAIN_ALLOWED_METRICS[self.task.type])}"
+                )
         if not (0.0 < self.train.early_stopping_validation_fraction < 1.0):
             raise ValueError(
                 "train.early_stopping_validation_fraction must satisfy 0 < value < 1"
@@ -372,6 +399,19 @@ class RunConfig(BaseModel):
                         f"tuning.objective '{objective}' is not allowed for task.type="
                         f"'{self.task.type}'. Allowed: {allowed}"
                     )
+            if self.tuning.metrics_candidates is not None:
+                if len(self.tuning.metrics_candidates) == 0:
+                    raise ValueError("tuning.metrics_candidates must not be empty when set")
+                allowed_candidates = _TUNE_METRICS_CANDIDATES[self.task.type]
+                invalid_candidates = sorted(
+                    {m for m in self.tuning.metrics_candidates if m not in allowed_candidates}
+                )
+                if invalid_candidates:
+                    raise ValueError(
+                        "tuning.metrics_candidates contains unsupported values for task.type="
+                        f"'{self.task.type}': {invalid_candidates}. Allowed: "
+                        f"{sorted(allowed_candidates)}"
+                    )
             if self.tuning.causal_penalty_weight != 1.0:
                 raise ValueError(
                     "tuning.causal_penalty_weight can only be customized when causal is configured"
@@ -389,6 +429,18 @@ class RunConfig(BaseModel):
                     f"tuning.objective '{objective}' is not allowed for causal.method="
                     f"'{self.causal.method}'. Allowed: {sorted(allowed)}"
                 )
+            if self.tuning.metrics_candidates is not None:
+                if len(self.tuning.metrics_candidates) == 0:
+                    raise ValueError("tuning.metrics_candidates must not be empty when set")
+                invalid_candidates = sorted(
+                    {m for m in self.tuning.metrics_candidates if m not in allowed}
+                )
+                if invalid_candidates:
+                    raise ValueError(
+                        "tuning.metrics_candidates contains unsupported values for causal.method="
+                        f"'{self.causal.method}': {invalid_candidates}. Allowed: "
+                        f"{sorted(allowed)}"
+                    )
             if self.tuning.causal_penalty_weight < 0:
                 raise ValueError("tuning.causal_penalty_weight must be >= 0")
             if self.tuning.causal_balance_threshold <= 0:

@@ -43,6 +43,7 @@ class Artifact:
         threshold: dict[str, Any] | None = None,
         threshold_curve: pd.DataFrame | None = None,
         training_history: dict[str, Any] | None = None,
+        observation_table: pd.DataFrame | None = None,
     ) -> None:
         self.run_config = run_config
         self.manifest = manifest
@@ -55,6 +56,7 @@ class Artifact:
         self.threshold = threshold or {"policy": "fixed", "value": 0.5}
         self.threshold_curve = threshold_curve
         self.training_history = training_history
+        self.observation_table = observation_table
         self._booster: lgb.Booster | None = None
 
     @classmethod
@@ -71,6 +73,7 @@ class Artifact:
         threshold: dict[str, Any] | None = None,
         threshold_curve: pd.DataFrame | None = None,
         training_history: dict[str, Any] | None = None,
+        observation_table: pd.DataFrame | None = None,
     ) -> "Artifact":
         """Construct an artifact object from training outputs.
 
@@ -107,6 +110,7 @@ class Artifact:
             threshold=threshold,
             threshold_curve=threshold_curve,
             training_history=training_history,
+            observation_table=observation_table,
         )
 
     @classmethod
@@ -141,6 +145,7 @@ class Artifact:
             threshold=extras.get("threshold"),
             threshold_curve=extras.get("threshold_curve"),
             training_history=extras.get("training_history"),
+            observation_table=extras.get("observation_table"),
         )
 
     def save(self, path: str | Path) -> None:
@@ -169,6 +174,7 @@ class Artifact:
             threshold=self.threshold,
             threshold_curve=self.threshold_curve,
             training_history=self.training_history,
+            observation_table=self.observation_table,
         )
 
     def _get_booster(self) -> lgb.Booster:

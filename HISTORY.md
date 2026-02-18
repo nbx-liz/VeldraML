@@ -1015,3 +1015,479 @@
 - `uv run pytest -q tests/test_num_boost_round.py tests/test_early_stopping_validation.py tests/test_dr_internal.py` : **26 passed**
 - `uv run ruff check .` : passed
 - `uv run pytest -q -m "not gui"` : **399 passed, 100 deselected**
+
+### 2026-02-16（作業/PR: phase26-ux-ui-implementation）
+**背景**
+- Phase26（UX/UI 改善）を 4画面構成から 6+2画面構成へ再編し、初学者導線の完遂率を上げる必要があった。
+- 実装着手前に、ロールアウト方式・Export 範囲・`/config` 互換方針を固定する必要があった。
+
+**変更内容**
+- 画面と導線を拡張: `Target / Validation / Train / Runs / Compare` を新設し、`/config` は互換メッセージ付きで `/target` 導線へ集約。
+- `workflow-state` を拡張し、`_build_config_from_state` / `_state_from_config_payload` を導入して state 駆動で RunConfig YAML を生成。
+- `services.py` に `GuardRailChecker`、`infer_task_type`、Artifact 比較ロジック、Excel/HTML レポート生成を追加。
+- `job_store.py` に `get_jobs` / `delete_jobs` を追加し、Runs ページの複数選択操作（削除/比較/複製）を実装。
+- Results を拡張し、Learning Curves タブ・Config タブ・Export ジョブ（`export_excel` / `export_html_report`）を追加。
+- テスト追加/更新:
+  - 新規: `tests/test_gui_target_page.py`, `tests/test_gui_validation_page.py`, `tests/test_gui_train_page.py`, `tests/test_gui_runs_page.py`, `tests/test_gui_compare_page.py`, `tests/test_gui_guardrail.py`, `tests/test_gui_workflow_state.py`, `tests/test_gui_config_from_state.py`, `tests/test_gui_stepper.py`, `tests/test_gui_export_excel.py`, `tests/test_gui_export_html.py`, `tests/test_gui_results_enhanced.py`, `tests/test_gui_data_enhanced.py`, `tests/test_gui_e2e_flow.py`
+  - 更新: `tests/test_gui_pages_logic.py`, `tests/test_gui_app_additional_branches.py`
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26 は Stage A/B/C の 3 段階分割で実装し、各 Stage ごとに GUI テストを通して段階収束する。
+  - 理由: 変更範囲が `app.py`/ページ/非同期ジョブに跨るため、単発導入より回帰抑止がしやすい。
+  - 影響範囲: gui app/pages/services/tests/docs
+- Decision: provisional（暫定）
+  - 内容: Phase26 の Export は Excel + HTML までを必須実装とし、SHAP は `export-report` extra 導入時のみ有効化する。
+  - 理由: GUI 基盤改修と同時に必須依存を増やし過ぎず、機能を段階導入するため。
+  - 影響範囲: gui services/job actions/dependencies
+- Decision: provisional（暫定）
+  - 内容: `/config` 導線は 1 フェーズ互換を維持し、画面導線は `/target` へ誘導する。
+  - 理由: 既存テストと運用導線の急激な破壊を避けつつ、新導線へ移行するため。
+  - 影響範囲: gui routing/tests/user workflow
+- Decision: confirmed（確定）
+  - 内容: Stage A/B/C の 3 段階分割方針で Phase26 実装を完了し、各 Stage の機能（画面分割/ガードレール/Results拡張/Runs比較/Export）を同一PRで収束させる。
+  - 理由: 段階ごとの回帰確認を維持しつつ、利用者導線を中途半端な状態で残さないため。
+  - 影響範囲: gui app/pages/services/components/tests/docs
+- Decision: confirmed（確定）
+  - 内容: Export は Excel + HTML を GUI 非同期ジョブとして実装し、SHAP は依存未導入時にシートへ「未生成」表示でフォールバックする。
+  - 理由: 依存差異でジョブを失敗させず、レポート導線を常時利用可能にするため。
+  - 影響範囲: gui services/results page/job queue/dependencies
+- Decision: confirmed（確定）
+  - 内容: `/config` は互換経路として維持し、新規操作導線は `Data -> Target -> Validation -> Train -> Run -> Results` を正規経路とする。
+  - 理由: 既存テスト契約と新UX導線を両立するため。
+  - 影響範囲: gui routing/stepper/sidebar/tests
+
+**検証結果**
+- `uv run ruff check src/veldra/gui tests` を通過。
+- `uv run pytest -q -m "gui"`: **126 passed, 399 deselected**
+- `uv run pytest tests -x --tb=short`: **525 passed, 0 failed**
+
+### 2026-02-16（作業/PR: design-blueprint-phase25-summary-compression）
+**背景**
+- `DESIGN_BLUEPRINT.md` の Phase25〜25.9 が詳細化により長文化し、完了済みフェーズの参照コストが高かった。
+- 実装・決定・検証結果を保持したまま、要点中心に圧縮する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `12`〜`12.9` を再構成し、各フェーズを「目的/実装要点/検証結果」中心の短縮版へ置換。
+- 重複していた背景説明・擬似コード・詳細手順を削減し、以下を明示的に保持:
+  - Phase25: 非同期ジョブ基盤、config migrate、callback堅牢化
+  - Phase25.5: テストDRY化、regression契約補完、公開ユーティリティ化
+  - Phase25.6: CSS/HTML限定のUX改善と非スコープ
+  - Phase25.7: TrainConfig拡張、ES分割、class weight、自動split、training_history、GUI/migration
+  - Phase25.8: 追加パラメータ、top_k連携、GUI拡張、search space拡張、provisional decision
+  - Phase25.9: 不足テスト補完、最小本体修正、confirmed decision
+- Phase26 以降の記述は未変更。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 完了済みフェーズ（25〜25.9）は、将来の実装手順書ではなく運用参照向けに圧縮表現へ統一する。
+  - 理由: 主要契約・意思決定・検証実績を維持しつつ、読み取りコストを下げるため。
+  - 影響範囲: docs（`DESIGN_BLUEPRINT.md`）
+
+**検証結果**
+- ドキュメント編集のみ（コード/テスト変更なし）。
+- `DESIGN_BLUEPRINT.md` にて Phase25〜25.9 の情報欠落がないことを目視確認。
+
+### 2026-02-16（作業/PR: phase26.1-stage1-bugfixes）
+**背景**
+- Phase26.1 Stage1 の必須修正（JST表示統一 / Exportブラウザダウンロード / Learning Curves 表示）を、既存GUI基盤を維持したまま収束させる必要があった。
+
+**変更内容**
+- `src/veldra/gui/app.py`
+  - Runジョブ一覧テーブルの created 時刻を JST 表示へ統一。
+  - Run詳細の Created/Started/Finished を `_format_jst_timestamp()` 経由に統一し、欠損時は `n/a` 表示へ統一。
+  - Results Export を「ジョブ投入 + `dcc.Store` 保持 + `dcc.Interval` ポーリング」へ拡張。
+  - Export ジョブ完了時に `dcc.send_file()` で HTML/Excel をブラウザダウンロードするコールバックを追加。
+  - `_cb_update_result_extras()` の learning history 参照を `art.training_history` 優先に修正し、metadata/file fallback 依存を削除。
+  - Runs テーブルデータに `started_at_utc` / `finished_at_utc` を追加し、JST 表示へ統一。
+- `src/veldra/gui/pages/results_page.py`
+  - `result-report-download` / `result-export-job-store` / `result-export-poll-interval` を追加。
+- `src/veldra/gui/pages/runs_page.py`
+  - Runs DataTable に `started` / `finished` 列を追加。
+- `src/veldra/gui/services.py`
+  - `_export_output_path()` の出力ファイル名 timestamp を JST 基準へ変更。
+- テスト:
+  - 新規: `tests/test_gui_phase26_1.py`（Stage1受け入れ観点を集約）
+  - 更新: `tests/test_gui_runs_page.py`, `tests/test_gui_results_enhanced.py`
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.1 の正式定義は `DESIGN_BLUEPRINT.md` の 13.1 を唯一の正とする。
+  - 理由: 旧サブフェーズ表と 13.1 の解釈ズレを解消し、実装単位を固定するため。
+  - 影響範囲: docs / phase planning
+- Decision: confirmed（確定）
+  - 内容: Phase26.1 は Stage1（コード修正）/Stage2（設計成果物）を 2PR 分割で運用する。
+  - 理由: 回帰確認と設計レビューを分離し、変更責務を明確化するため。
+  - 影響範囲: delivery process / docs
+- Decision: confirmed（確定）
+  - 内容: Stage2 成果物（対応マトリクス・ギャップ一覧・Phase26.2ドラフト）は `DESIGN_BLUEPRINT.md` に集約する。
+  - 理由: 設計判断と次フェーズ実装計画を単一参照元に固定するため。
+  - 影響範囲: docs
+
+**検証結果**
+- `uv run ruff check src/veldra/gui tests` を通過。
+- `uv run pytest -q tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py tests/test_gui_export_excel.py tests/test_gui_export_html.py` を通過。
+- `uv run pytest -q -m "gui"` を通過。
+
+### 2026-02-16（作業/PR: phase26.1-stage2-usecase-design）
+**背景**
+- Phase26.2 実装に向け、現行GUIのユースケース対応状況を設計文書として固定し、ギャップと優先度を明文化する必要があった。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の 13.1 配下へ以下を追加:
+  - 現行GUI対応状況マトリクス（全ユースケース対象）
+  - 優先度付きギャップ一覧（P0/P1/P2）
+  - 画面単位の Phase26.2 実装計画ドラフト（実装順/依存/完了条件/テスト観点）
+- `DESIGN_BLUEPRINT.md` の旧サブフェーズ依存表に注記を追加し、
+  `13.1` を Phase26.1 の正定義として明示。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: 26.1 旧依存表は履歴として保持し、現在運用の意思決定は 13.1 を正とする。
+  - 理由: 履歴保全と現行運用の明確化を両立するため。
+  - 影響範囲: docs
+
+**検証結果**
+- 文書更新の相互参照（旧依存表注記 / 13.1 / Stage2成果物）を目視確認。
+
+### 2026-02-17（作業/PR: phase26.2-usecase-guided-ui-implementation）
+**背景**
+- Phase26.1 Stage2 で確定した P0-P2 ギャップを、Core/API 非変更のまま GUI adapter 層で解消する必要があった。
+
+**変更内容**
+- Step0: `notebooks/phase26_2_ux_audit.ipynb` を追加し、UC-1〜UC-10 の監査テンプレートと優先度固定欄を整備。
+- Step1: `src/veldra/gui/components/help_ui.py` / `src/veldra/gui/components/help_texts.py` を追加し、共通ヘルプUI基盤を導入。
+- Step2-4: `target_page` / `validation_page` / `train_page` にガイドUI、推奨表示、プリセット、objective説明を追加。
+- Step5: `run_page` に action manual override + pre-run guardrail 表示を追加。`runs_page` に Export/Re-evaluate ショートカット列を追加。`results_page` に再評価前 feature schema 診断とショートカットハイライトを追加。
+- `src/veldra/gui/app.py` の callback を拡張し、`workflow-state` に `results_shortcut_focus` / `run_action_override` を追加。
+- テスト追加/更新: `tests/test_gui_help_ui.py`, `tests/test_gui_run_presets.py`, `tests/test_gui_target_page.py`, `tests/test_gui_validation_page.py`, `tests/test_gui_train_page.py`, `tests/test_gui_runs_page.py`, `tests/test_gui_results_enhanced.py`。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.2 は 13.2 の Step0-5 を一括で実装し、ヘルプUI基盤を全画面で再利用する。
+  - 理由: 画面ごとの文言・導線を重複実装すると保守性が下がるため。
+  - 影響範囲: gui components/pages/app/tests
+- Decision: confirmed（確定）
+  - 内容: Run の実行可否は「必須入力チェック + guardrail error」で制御し、warning/info は実行をブロックしない。
+  - 理由: 過剰ブロックを避けつつ、重大な設定ミスのみ事前停止するため。
+  - 影響範囲: run page callbacks / UX
+
+**検証結果**
+- `uv run pytest -q tests/test_gui_help_ui.py tests/test_gui_target_page.py tests/test_gui_validation_page.py tests/test_gui_train_page.py tests/test_gui_run_presets.py tests/test_gui_runs_page.py tests/test_gui_results_enhanced.py tests/test_gui_e2e_flow.py` を実施。
+- `uv run pytest -q -m "gui"` で GUI 回帰確認を実施。
+
+### 2026-02-17（作業/PR: phase26.2-correction-notebook-evidence-and-gui-parity）
+**背景**
+- Phase26.2 の Step0 は監査テンプレート整備までに留まり、UC-1〜UC-10 の実行証跡と GUI 同等性（到達+成果物一致）の証跡が不足していた。
+- 完了条件を補正し、Notebook 実行証跡・Playwright E2E・parity report を追加する必要があった。
+
+**変更内容**
+- Notebook 補正:
+  - `notebooks/phase26_2_ux_audit.ipynb` を監査ハブ化（UC索引・A-D分類・優先度固定）。
+  - UC別 Notebook を 10 冊追加。
+    - `notebooks/phase26_2_uc01_regression_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc02_binary_tune_evaluate.ipynb`
+    - `notebooks/phase26_2_uc03_frontier_fit_evaluate.ipynb`
+    - `notebooks/phase26_2_uc04_causal_dr_estimate.ipynb`
+    - `notebooks/phase26_2_uc05_causal_drdid_estimate.ipynb`
+    - `notebooks/phase26_2_uc06_causal_dr_tune.ipynb`
+    - `notebooks/phase26_2_uc07_artifact_evaluate.ipynb`
+    - `notebooks/phase26_2_uc08_artifact_reevaluate.ipynb`
+    - `notebooks/phase26_2_uc09_export_python_onnx.ipynb`
+    - `notebooks/phase26_2_uc10_export_html_excel.ipynb`
+  - 実行証跡を `notebooks/phase26_2_execution_manifest.json` に固定。
+- Notebook 契約テスト追加:
+  - `tests/test_notebook_phase26_2_uc_structure.py`
+  - `tests/test_notebook_phase26_2_execution_evidence.py`
+  - `tests/test_notebook_phase26_2_paths.py`
+- GUI parity（Playwright）追加:
+  - `tests/e2e_playwright/conftest.py`
+  - `tests/e2e_playwright/test_uc01_regression_flow.py`
+  - `tests/e2e_playwright/test_uc02_binary_tune_flow.py`
+  - `tests/e2e_playwright/test_uc03_frontier_flow.py`
+  - `tests/e2e_playwright/test_uc04_causal_dr_flow.py`
+  - `tests/e2e_playwright/test_uc05_causal_drdid_flow.py`
+  - `tests/e2e_playwright/test_uc06_causal_tune_flow.py`
+  - `tests/e2e_playwright/test_uc07_evaluate_existing_artifact_flow.py`
+  - `tests/e2e_playwright/test_uc08_reevaluate_flow.py`
+  - `tests/e2e_playwright/test_uc09_export_python_onnx_flow.py`
+  - `tests/e2e_playwright/test_uc10_export_html_excel_flow.py`
+- ドキュメント/設定更新:
+  - `docs/phase26_2_parity_report.md` を追加。
+  - `DESIGN_BLUEPRINT.md` 13.2 に補正フェーズ完了状況を追記。
+  - `pyproject.toml` / `tests/conftest.py` に `gui_e2e` / `gui_smoke` marker を追加。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26.2 の完了条件を「テンプレート整備」から「Notebook実行証跡 + GUI parity pass（到達+成果物一致）」へ再定義する。
+  - 理由: 実行証跡を欠いた状態では UX 改善の実効性を担保できないため。
+  - 影響範囲: notebooks / tests / docs / release gate
+- Decision: confirmed（確定）
+  - 内容: 同等性判定は Notebook と GUI の数値同値比較ではなく、到達導線と成果物生成一致を正とする。
+  - 理由: 実行環境差でのノイズを避けつつ、利用者導線の品質保証にフォーカスするため。
+  - 影響範囲: parity report / E2E acceptance
+
+**検証結果**
+- Notebook 実行証跡を `notebooks/phase26_2_execution_manifest.json` に記録（UC-1〜UC-10）。
+- Optional 依存の graceful degradation を記録（例: `openpyxl` 未導入時の Excel export）。
+- Playwright E2E は `gui_e2e`/`gui_smoke` marker で手動全件・CIスモーク運用を可能化。
+- `.venv/bin/ruff check tests/e2e_playwright tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_2_paths.py` を通過。
+- `.venv/bin/pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_execution_evidence.py tests/test_notebook_phase26_2_paths.py` を実施（`9 passed`）。
+- `.venv/bin/pytest -q tests/e2e_playwright --collect-only` を実施（10件収集）。
+- `.venv/bin/pytest -q -m "gui"` を実施（`146 passed, 418 deselected`）。
+- `.venv/bin/pytest -q -m "gui_e2e and gui_smoke"` を実施（`3 skipped, 561 deselected`）。
+- `.venv/bin/pytest -q -m "gui_e2e"` を実施（`10 skipped, 554 deselected`）。
+
+### 2026-02-17（作業/PR: phase26.3-core-diagnostics-and-notebook-delivery）
+**背景**
+- Phase26.3 で定義したユースケース詳細化（Core拡張 + Notebook完全版 + 証跡運用）を、既存 Stable API 互換を維持したまま実装する必要があった。
+- Notebook の重実行を常時CIに載せるとコストが高いため、証跡検証を marker 分離する運用方針を固定する必要があった。
+
+**変更内容**
+- Core/Config拡張:
+  - `train.metrics` / `tuning.metrics_candidates` を RunConfig に追加し、task/causal method 別バリデーションを実装。
+  - tuning objective に `mape` / `multi_logloss` / `multi_error` を追加し、`multi_logloss -> logloss`, `multi_error -> error_rate` の alias 解決を導入。
+  - tuning search space で `train.*` プレフィックス指定を解釈し、`TrainConfig` フィールドへ直接注入できるよう拡張。
+- Modeling/Artifact拡張:
+  - `RegressionTrainingOutput` / `BinaryTrainingOutput` / `MulticlassTrainingOutput` / `FrontierTrainingOutput` に `observation_table` を追加。
+  - Artifact save/load に `observation_table.parquet` の optional 永続化を追加（後方互換維持）。
+- Causal拡張:
+  - `DREstimationOutput` に `nuisance_diagnostics` を追加。
+  - DR で nuisance importance と OOF diagnostics を生成し、DR-DiD で `parallel_trends` を summary/diagnostics に追加。
+  - `causal.diagnostics` に `compute_ess` / `extreme_weight_ratio` / `overlap_summary` を追加。
+- Diagnosticsパッケージ新設:
+  - `src/veldra/diagnostics/`（importance/shap_native/metrics/plots/tables/causal_diag）を追加。
+- Notebook/証跡:
+  - UC-1〜UC-10 Notebook を Phase26.3 契約（`matplotlib.use('Agg')`, `savefig`, `SUMMARY`）へ更新。
+  - `phase26_3_uc_multiclass_fit_evaluate.ipynb` / `phase26_3_uc_timeseries_fit_evaluate.ipynb` を追加。
+  - `notebooks/phase26_3_execution_manifest.json` を追加。
+- テスト追加:
+  - diagnostics系: `tests/test_diagnostics_*.py`
+  - config/tuning拡張: `tests/test_phase263_config_extensions.py`, `tests/test_phase263_tuning_aliases.py`
+  - observation/causal: `tests/test_observation_table.py`, `tests/test_causal_dr.py`, `tests/test_causal_drdid.py`
+  - notebook契約: `tests/test_notebook_phase26_3_*.py`（`notebook_e2e` marker 運用）
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: `config_version` は 1 を維持し、Phase26.3 の設定拡張は optional フィールド追加で収める。
+  - 理由: Config migration の破壊的変更を回避し、既存運用への影響を最小化するため。
+  - 影響範囲: config / tuning / GUI-config 互換
+- Decision: confirmed（確定）
+  - 内容: Notebook 証跡は「常時構造テスト + `notebook_e2e` で重証跡検証」のハイブリッド運用とする。
+  - 理由: 検証強度と CI 実行コストを両立するため。
+  - 影響範囲: pyproject markers / notebook tests / release gate
+
+**検証結果**
+- `uv run ruff check`（Phase26.3 対象ファイル群）を通過。
+- 主要新規テスト（config/tuning/modeling/causal/diagnostics/notebook構造）を実行対象として追加済み。
+
+### 2026-02-17（作業/PR: phase26.3-residual-notebook-visibility-closure）
+**背景**
+- Phase26.3 の骨組み実装後、Notebook が placeholder 出力中心で、図表/表/指標の可視性と証跡契約が不足していた。
+- `tuning.metrics_candidates` の許可ルールが objective 制約と同一化され、設計テーブル（task別候補）と不整合が残っていた。
+
+**変更内容**
+- Config 契約:
+  - `tuning.metrics_candidates` を objective 許可セットから分離し、task別許可セットで検証する実装へ修正。
+  - 関連テストを拡張（許可/拒否・causal時の既存契約維持）。
+- Notebook 実体化:
+  - `UC-1〜UC-8` と `UC-11/12` を実データ実行セルへ更新し、実行済み出力（グラフ・表・指標）をコミット。
+  - 生成ファイルを `examples/out/phase26_2_*` / `examples/out/phase26_3_*` に再生成し、PNG 実体ファイル化を確認。
+  - `notebooks/phase26_3_execution_manifest.json` を実実行値（artifact_path / outputs / metrics）で更新。
+- Notebook テスト強化:
+  - 構造テストに `placeholder` 禁止、diagnostics import、実行済みセル契約を追加。
+  - evidence テストに対象 UC 固定（`UC-1〜8,11,12`）と `artifact_path/metrics/outputs` 契約を追加。
+  - outputs テストに PNG signature 検証、CSV列契約、主要指標レンジ検証を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Phase26.3 Notebook は「実行済みで可視化済み」を完了条件にし、placeholder 出力を残さない。
+  - 理由: 利用者が Notebook を開いた瞬間に診断結果を確認できる状態を保証するため。
+  - 影響範囲: notebooks / execution manifest / notebook_e2e tests
+- Decision: confirmed（確定）
+  - 内容: `metrics_candidates` は objective と独立した task別候補セットで検証し、causal時は causal objective セットを流用する。
+  - 理由: 設計テーブルと実装契約を一致させ、運用時の誤設定を早期検出するため。
+  - 影響範囲: config validation / tuning diagnostics
+
+**検証結果**
+- `uv run pytest -q tests/test_phase263_config_extensions.py tests/test_runconfig_validation.py tests/test_notebook_phase26_3_uc_structure.py` を通過（`37 passed`）。
+- `uv run pytest -q tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を通過（`2 passed`）。
+- `uv run pytest -q tests -m "not gui_e2e"` を通過（`584 passed, 10 deselected`）。
+
+### 2026-02-17（作業/PR: phase26.4-notebook-ux-rename-and-test-hardening）
+**背景**
+- Phase26.4 の実装着手にあたり、`phase26_*` 命名が利用者導線として理解しづらく、Notebook 情報設計の再編が必要だった。
+- Notebook 契約テストは構造寄りに偏っており、runner happy path / edge / 数値安定性 / data loader 堅牢性を補完する必要があった。
+
+**変更内容**
+- 設計更新:
+  - `DESIGN_BLUEPRINT.md` 13.4 を Step0-6 の実装順序、命名再編マップ、互換期限（1リリース）つきで具体化。
+- Notebook 再編:
+  - `notebooks/tutorials/` と `notebooks/quick_reference/` を新設し、canonical Notebook を用途別に再配置。
+  - 新規 tutorial: `tutorial_00_quickstart.ipynb`, `tutorial_07_model_evaluation_guide.ipynb` を追加。
+  - `notebooks/reference_index.ipynb` を追加し、Tutorial/Quick Reference の索引を統一。
+  - 旧名 Notebook（workflow / phase26 UC / phase26 audit）を `Moved to ...` 明記の互換スタブへ置換。
+- 生成/証跡更新:
+  - `scripts/generate_phase263_notebooks.py` を `notebooks/quick_reference/` 出力へ更新し、Overview / Learn More / Config Notes / Output Annotation を追加。
+  - `notebooks/phase26_3_execution_manifest.json` の `notebook` フィールドを canonical パスへ更新。
+- 参照更新:
+  - `README.md` の notebook 導線を `notebooks/tutorials/*` へ更新。
+  - `docs/phase26_2_parity_report.md` の Notebook 証跡パスを `notebooks/quick_reference/*` へ更新。
+  - Notebook テスト群の参照先を canonical へ更新し、互換スタブ検証を追加。
+- テスト強化:
+  - 追加: `tests/test_runner_fit_happy.py`, `tests/test_runner_evaluate_happy.py`, `tests/test_runner_predict_happy.py`, `tests/test_runner_tune_happy.py`
+  - 追加: `tests/test_edge_cases.py`, `tests/test_numerical_stability.py`, `tests/test_config_cross_field.py`, `tests/test_data_loader_robust.py`
+  - 追加: `tests/test_notebook_tutorial_catalog.py`
+  - 拡張: `tests/conftest.py` に `unbalanced_binary_frame` / `categorical_frame` / `timeseries_frame` / `missing_values_frame` / `outlier_frame` を追加。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: Notebook 命名規約は英語スネークケースとし、canonical 配置を `notebooks/tutorials` / `notebooks/quick_reference` の2系統へ固定する。
+  - 理由: 学習導線（チュートリアル）と実行証跡（クイックリファレンス）の責務を分離し、利用者が目的別に辿れるようにするため。
+  - 影響範囲: notebooks / README / docs / notebook tests / manifest notebook paths
+- Decision: provisional（暫定）
+  - 内容: 旧名 Notebook は 1リリース互換スタブとして維持し、次期リリースで削除可否を確定する。
+  - 理由: 既存リンク・運用手順の破壊を避けながら段階移行するため。
+  - 影響範囲: notebooks root 旧名ファイル群 / 移行ガイド
+
+**検証結果**
+- `uv run ruff check`（Phase26.4 変更対象の scripts/tests）を通過。
+- `uv run pytest -q`（Phase26.4 追加/更新テスト群 25ファイル）を実施し、`70 passed`。
+- `uv run pytest -q tests -m "not gui_e2e"` を実施し、`624 passed, 10 deselected`。
+- `rg --files notebooks | rg \"phase26_.*\\.ipynb\"` のヒットが互換スタブのみであることを確認。
+
+### 2026-02-17（作業/PR: docs-phase26-blueprint-compression）
+**背景**
+- `DESIGN_BLUEPRINT.md` の Phase26〜26.2 が詳細手順中心で肥大化し、現状把握に必要な要点を素早く参照しにくくなっていた。
+
+**変更内容**
+- `DESIGN_BLUEPRINT.md` の `13 Phase 26` / `13.1 Phase 26.1` / `13.2 Phase 26.2` を要約再編。
+- 各セクションを「目的 / 固定方針 / 実装結果 / 完了条件」中心に圧縮し、詳細な手順列挙を削減。
+- 26.2 の補正フェーズ（実行証跡 + parity 検証）と成果物（Notebook群、manifest、E2E、parity report）は保持。
+- 詳細トレースは `HISTORY.md` を正とする運用メモを `DESIGN_BLUEPRINT.md` に明記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: DESIGN_BLUEPRINT の Phase26〜26.2 は「設計状態の要約」に徹し、実装手順の詳細は HISTORY に集約する。
+  - 理由: 設計書の可読性と履歴トレース性を両立するため。
+  - 影響範囲: docs
+
+**検証結果**
+- `DESIGN_BLUEPRINT.md` の 13〜13.2 が要約形で連続し、`13.3` 以降へ接続されることを確認。
+
+### 2026-02-17（作業/PR: phase26.5-notebook-ab-alignment-and-gui-e2e-hardening）
+**背景**
+- `DESIGN_BLUEPRINT.md` 13.3 の A/B 契約（固定学習パラメーター / tuning search space）が、Phase26.4 後の canonical Notebook（`quick_reference` / `tutorials`）と不整合だった。
+- `tests/e2e_playwright` は hidden input の `visible` 待機に依存し、`gui_e2e` がタイムアウトで失敗していた。
+
+**変更内容**
+- 設計/履歴:
+  - `DESIGN_BLUEPRINT.md` に `13.5 Phase26.5` を追加（背景/目的/適用範囲/実装ステップ/テスト計画/完了条件/Decision）。
+- Notebook A/B 適用:
+  - `scripts/generate_phase263_notebooks.py` を更新し、UC-1/2/3/4/5/6/11/12 の train 設定を 13.3 A へ統一。
+  - UC-2 objective を `brier` へ更新し、UC-2/UC-6 search space を 13.3 B へ統一。
+  - `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py` を再実行し、`quick_reference` と `phase26_3_execution_manifest.json` を再生成。
+  - `notebooks/tutorials/tutorial_01..06.ipynb` の config セルを A/B 準拠へ更新（`tutorial_02` は `train.*` best_params 反映ロジックへ修正）。
+- Core/tuning:
+  - `src/veldra/modeling/tuning.py` の `standard` preset 既定探索空間を 13.3 B 契約へ更新。
+  - `tests/test_tuning_search_space.py` を新契約に合わせて更新。
+- E2E 安定化:
+  - `tests/e2e_playwright/_helpers.py` の `goto` に `#page-content` 待機を追加。
+  - `assert_ids` を `attached/visible` 切替対応へ変更。
+  - `tests/e2e_playwright/test_uc01_*`, `test_uc02_*`, `test_uc04_*`, `test_uc05_*`, `test_uc09_*` を hidden input 非依存の操作へ更新。
+- 契約テスト:
+  - `tests/test_notebook_phase26_5_ab_contract.py` を追加し、canonical Notebook の A/B キー・値を機械検証可能にした。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: 13.3 A/B の適用対象は canonical Notebook（`quick_reference` + `tutorials`）とし、legacy stub は対象外とする。
+  - 理由: 互換スタブの責務を維持しつつ、実利用導線の契約整合を優先するため。
+  - 影響範囲: notebooks / notebook tests / generation script
+- Decision: confirmed（確定）
+  - 内容: `gui_e2e` の失敗は GUI 実装を変更せず、Playwright テストの待機/操作戦略の見直しで収束させる。
+  - 理由: 既存 UI 互換性を保持しながら flaky 要因を除去できるため。
+  - 影響範囲: tests/e2e_playwright/*
+
+**検証結果**
+- `uv run ruff check scripts/generate_phase263_notebooks.py src/veldra/modeling/tuning.py tests/e2e_playwright tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py` を通過。
+- `uv run pytest -q tests/test_tuning_search_space.py tests/test_notebook_phase26_5_ab_contract.py` を実施（`3 passed`）。
+- `uv run pytest -q tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_3_uc_structure.py` を実施（`5 passed`）。
+- `uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 passed`）。
+- `uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。
+
+### 2026-02-18（作業/PR: phase26.6-legacy-notebook-manifest-cleanup）
+**背景**
+- Phase26.4 で導入した legacy notebook 互換スタブの運用期限が終了し、canonical notebook への一本化が必要だった。
+- notebook 証跡が `notebooks/phase26_*_execution_manifest.json` に分散しており、`examples/out/*` 実体との二重管理を解消する必要があった。
+
+**変更内容**
+- legacy notebook を削除し、`notebooks/tutorials/*` / `notebooks/quick_reference/*` / `notebooks/reference_index.ipynb` のみを canonical として残した。
+- `notebooks/phase26_2_execution_manifest.json` と `notebooks/phase26_3_execution_manifest.json` を削除し、証跡参照を `examples/out/phase26_*/summary.json` + outputs 実体へ移行した。
+- `tests/e2e_playwright/conftest.py` の fixture を manifest 依存から固定パス解決（`latest_artifact_path.txt`, `reeval_missing_col.csv` 等）へ置換し、`test_uc07/08/10` を新 IF に更新した。
+- `tests/test_notebook_phase26_2_execution_evidence.py` を削除し、`tests/test_notebook_execution_evidence.py` を追加。`tests/test_notebook_phase26_3_execution_evidence.py` / `tests/test_notebook_phase26_3_outputs.py` を summary ベースへ更新した。
+- `scripts/generate_phase263_notebooks.py` から manifest 生成ロジックを削除し、quick reference 生成 + 実行に責務を限定した。
+- `README.md` と `DESIGN_BLUEPRINT.md` を更新し、manifest 前提・legacy stub 維持前提・phase26.2 parity report 依存を撤去した。
+- `docs/phase26_2_parity_report.md` と未使用 `src/veldra/postprocess/__init__.py`（および空ディレクトリ）を削除した。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: legacy notebook 互換スタブ運用を終了し、canonical notebook のみを正とする。
+  - 理由: ドキュメント導線とテスト契約を一本化し、保守対象を縮小するため。
+  - 影響範囲: notebooks / notebook tests / DESIGN_BLUEPRINT / README
+- Decision: confirmed（確定）
+  - 内容: notebook 証跡は manifest ファイルを廃止し、`examples/out/phase26_*/summary.json` と outputs 実体で管理する。
+  - 理由: 生成物の実体を単一の真実源にして、証跡の二重管理を防ぐため。
+  - 影響範囲: tests/e2e_playwright / notebook_e2e tests / scripts/generate_phase263_notebooks.py / docs
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check README.md DESIGN_BLUEPRINT.md tests/e2e_playwright tests/test_notebook_tutorial_catalog.py tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py scripts/generate_phase263_notebooks.py` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_tutorial_catalog.py tests/test_notebook_phase26_2_uc_structure.py tests/test_notebook_phase26_2_paths.py tests/test_notebook_execution_evidence.py` を実施（`12 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_phase26_3_uc_structure.py tests/test_notebook_phase26_3_execution_evidence.py tests/test_notebook_phase26_3_outputs.py -m notebook_e2e` を実施（`2 passed, 1 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/e2e_playwright -m gui_e2e` を実施（`10 skipped`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e"` を実施（`626 passed, 10 deselected`）。
+
+### 2026-02-18（作業/PR: phase26.6-test-quality-rename-and-coverage）
+**背景**
+- Phase26.6 の計画（命名整理 + カバレッジ強化）に対し、notebook テスト命名と実体の不一致、および一部コアモジュールの直接ユニットテスト不足を解消する必要があった。
+- `tests/test_notebook_*.py` は実測 18 ファイルで、設計上の対象数と差分があり、実態同期が必要だった。
+
+**変更内容**
+- Stage A（命名整理）
+  - Tutorial テストを `test_tutorial_01_*`〜`test_tutorial_06_*` へリネーム。
+  - `test_notebook_phase26_3_uc_structure.py` を `test_quickref_structure.py` へリネームし、`test_notebook_phase26_2_uc_structure.py` の独自検証（reference_index / legacy notebook 削除）を統合した上で削除。
+  - `test_notebook_phase26_2_paths.py` を `test_quickref_paths.py` へリネーム。
+  - `test_notebook_phase26_3_execution_evidence.py` を削除し、`test_notebook_execution_evidence.py` を単一の証跡テストとして維持。
+  - `test_notebook_phase26_3_outputs.py` を `test_notebook_execution_outputs.py` へリネーム。
+  - `test_notebook_phase26_5_ab_contract.py` を `test_notebook_reference_ab_contract.py` へリネーム。
+- Stage B（カバレッジ強化）
+  - 新規: `tests/test_artifact_store.py`
+  - 新規: `tests/test_config_io.py`
+  - 新規: `tests/test_causal_diagnostics_unit.py`
+  - 拡張: `tests/test_numerical_stability.py`（NaN 伝播契約と clipping 境界）
+  - 新規: `tests/test_binary_edge_cases.py`, `tests/test_regression_edge_cases.py`, `tests/test_frontier_edge_cases.py`, `tests/test_multiclass_edge_cases.py`, `tests/test_tune_edge_cases.py`
+  - リネーム + 強化: `tests/test_data_loader_edge.py`（旧 `test_data_loader_robust.py`）, `tests/test_split_time_series.py`（旧 `test_time_series_splitter_additional.py`）
+- ドキュメント
+  - `DESIGN_BLUEPRINT.md` 13.6 にベースライン（18ファイル）と実装完了状況を追記し、Decision を confirmed 化した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase26.6 は 3PR 粒度（命名整理 → Critical+数値安定 → edge/data/split）で段階実施する。
+  - 理由: テスト資産の大規模リネームとカバレッジ追加を分離し、レビュー/回帰リスクを制御するため。
+  - 影響範囲: tests / DESIGN_BLUEPRINT
+- Decision: confirmed（確定）
+  - 内容: notebook テスト命名は phase 番号依存を廃止し、対象種別ベース（tutorial / quickref / notebook_execution / notebook_reference）へ統一する。
+  - 理由: notebook 再編時でも命名規約を安定化し、テスト責務を明確化するため。
+  - 影響範囲: `tests/test_tutorial_*.py`, `tests/test_quickref_*.py`, `tests/test_notebook_execution_*.py`, `tests/test_notebook_reference_ab_contract.py`
+- Decision: confirmed（確定）
+  - 内容: Phase26.6 の完了条件は Stage A/B 実装 + `-m \"not gui_e2e and not notebook_e2e\"` 回帰グリーンで固定する。
+  - 理由: GUI E2E / notebook E2E の実行コストを分離しつつ、日常回帰の品質ゲートを維持するため。
+  - 影響範囲: tests / CI 運用
+
+**検証結果**
+- `uv run ruff check tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_*.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` を通過。
+- `uv run pytest -q tests/test_tutorial_*.py tests/test_quickref_*.py tests/test_notebook_execution_evidence.py tests/test_notebook_execution_outputs.py tests/test_notebook_reference_ab_contract.py tests/test_notebook_tutorial_catalog.py` を実施（`34 passed`）。
+- `uv run ruff check tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` を通過。
+- `uv run pytest -q tests/test_artifact_store.py tests/test_config_io.py tests/test_causal_diagnostics_unit.py tests/test_numerical_stability.py` を実施（`20 passed`）。
+- `uv run ruff check tests/test_*edge*.py tests/test_split_time_series.py tests/test_data_loader_edge.py tests/test_tune_edge_cases.py` を通過。
+- `uv run pytest -q tests/test_binary_edge_cases.py tests/test_regression_edge_cases.py tests/test_frontier_edge_cases.py tests/test_multiclass_edge_cases.py tests/test_tune_edge_cases.py tests/test_data_loader_edge.py tests/test_split_time_series.py` を実施（`31 passed, 1 warning`）。
+- `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`658 passed, 11 deselected, 1 warning`）。

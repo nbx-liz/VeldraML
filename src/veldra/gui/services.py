@@ -7,9 +7,10 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import yaml
@@ -35,6 +36,7 @@ LOGGER = logging.getLogger("veldra.gui.services")
 _RUNTIME_LOCK = threading.Lock()
 _JOB_STORE: GuiJobStore | None = None
 _JOB_WORKER: Any | None = None
+_JST = timezone(timedelta(hours=9))
 
 # Lazy runtime symbols for heavyweight deps.
 _ARTIFACT_CLS: Any | None = None
@@ -119,6 +121,37 @@ def inspect_data(path: str) -> dict[str, Any]:
         # Calculate column stats
         numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
         cat_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
+        datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
+
+        column_profiles: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for col in df.columns:
+            series = df[col]
+            missing_rate = float(series.isna().mean())
+            unique_count = int(series.nunique(dropna=True))
+            dtype_name = str(series.dtype)
+            inferred_kind = (
+                "datetime"
+                if col in datetime_cols
+                else ("numeric" if col in numeric_cols else "categorical")
+            )
+            col_info = {
+                "name": str(col),
+                "dtype": dtype_name,
+                "kind": inferred_kind,
+                "missing_rate": missing_rate,
+                "unique_count": unique_count,
+                "constant": unique_count <= 1,
+                "high_missing": missing_rate > 0.5,
+                "high_cardinality": inferred_kind == "categorical" and unique_count > 100,
+            }
+            column_profiles.append(col_info)
+            if col_info["high_missing"]:
+                warnings.append(f"High missing rate: {col} ({missing_rate:.1%})")
+            if col_info["constant"]:
+                warnings.append(f"Constant column: {col}")
+            if col_info["high_cardinality"]:
+                warnings.append(f"High cardinality: {col} ({unique_count})")
 
         stats = {
             "n_rows": len(df),
@@ -126,8 +159,11 @@ def inspect_data(path: str) -> dict[str, Any]:
             "columns": list(df.columns),
             "numeric_cols": numeric_cols,
             "categorical_cols": cat_cols,
+            "datetime_cols": datetime_cols,
             "missing_count": int(df.isnull().sum().sum()),
             "memory_usage_mb": float(df.memory_usage(deep=True).sum() / 1024 / 1024),
+            "column_profiles": column_profiles,
+            "warnings": warnings,
         }
 
         # Preview data (handle non-serializable types if any)
@@ -232,7 +268,7 @@ def migrate_config_from_yaml(
         payload = yaml.safe_load(yaml_text or "")
         if not isinstance(payload, dict):
             raise VeldraValidationError("Config YAML must deserialize to an object.")
-        normalized, result = migrate_run_config_payload(payload, target_version=target_version)
+        normalized, _migration = migrate_run_config_payload(payload, target_version=target_version)
         normalized_yaml = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True)
 
         # Calculate diff
@@ -334,10 +370,323 @@ def _load_scenarios(path: str) -> Any:
     return yaml.safe_load(text)
 
 
+def infer_task_type(data: pd.DataFrame, target_col: str) -> str:
+    """Infer recommended task type from target column characteristics."""
+    if target_col not in data.columns:
+        return "regression"
+    series = data[target_col].dropna()
+    if series.empty:
+        return "regression"
+    n_unique = int(series.nunique())
+    if n_unique == 2:
+        return "binary"
+    is_int_like = pd.api.types.is_integer_dtype(series)
+    if 3 <= n_unique <= 20 and is_int_like:
+        return "multiclass"
+    return "regression"
+
+
+@dataclass(slots=True)
+class GuardRailResult:
+    level: Literal["error", "warning", "info", "ok"]
+    message: str
+    suggestion: str | None = None
+
+
+class GuardRailChecker:
+    """Best-effort pre-run diagnostics for GUI pages."""
+
+    def check_target(
+        self,
+        data: pd.DataFrame,
+        target_col: str | None,
+        task_type: str | None,
+        *,
+        exclude_cols: list[str] | None = None,
+    ) -> list[GuardRailResult]:
+        results: list[GuardRailResult] = []
+        if not target_col:
+            return [GuardRailResult("error", "Target column is required.")]
+        if target_col not in data.columns:
+            return [GuardRailResult("error", f"Target column not found: {target_col}")]
+
+        exclude_cols = exclude_cols or []
+        if target_col in exclude_cols:
+            results.append(
+                GuardRailResult(
+                    "error",
+                    "Target column is included in exclude columns.",
+                    "Remove target from exclude list.",
+                )
+            )
+
+        tgt = data[target_col]
+        null_rate = float(tgt.isna().mean())
+        if null_rate > 0.05:
+            results.append(
+                GuardRailResult(
+                    "warning",
+                    f"Target has missing values: {null_rate:.1%}.",
+                    "Clean missing labels before training.",
+                )
+            )
+
+        unique_count = int(tgt.dropna().nunique())
+        if task_type == "binary" and unique_count != 2:
+            results.append(
+                GuardRailResult(
+                    "error",
+                    f"Binary task selected but unique target values = {unique_count}.",
+                    "Use multiclass or adjust target encoding.",
+                )
+            )
+        if task_type == "multiclass" and unique_count > 50:
+            results.append(
+                GuardRailResult(
+                    "warning",
+                    f"Multiclass with many classes ({unique_count}).",
+                    "Consider class grouping or feature improvements.",
+                )
+            )
+
+        if task_type in {"binary", "multiclass"}:
+            freq = tgt.value_counts(normalize=True, dropna=True)
+            if not freq.empty and float(freq.min()) < 0.05:
+                results.append(
+                    GuardRailResult(
+                        "warning",
+                        "Class imbalance detected (<5% minority class).",
+                        "Enable auto class weight.",
+                    )
+                )
+
+        if not results:
+            results.append(GuardRailResult("ok", "Target checks passed."))
+        return results
+
+    def check_validation(
+        self,
+        data: pd.DataFrame,
+        split_config: dict[str, Any],
+        *,
+        task_type: str | None = None,
+        exclude_cols: list[str] | None = None,
+    ) -> list[GuardRailResult]:
+        results: list[GuardRailResult] = []
+        split_type = str(split_config.get("type", "kfold"))
+        n_splits = int(split_config.get("n_splits", 5))
+        exclude_cols = exclude_cols or []
+
+        if split_type == "timeseries" and not split_config.get("time_col"):
+            results.append(
+                GuardRailResult(
+                    "error",
+                    "Time Series split requires a time column.",
+                    "Select a time column in Validation.",
+                )
+            )
+
+        if split_type == "group" and not split_config.get("group_col"):
+            results.append(
+                GuardRailResult(
+                    "error",
+                    "Group split requires a group column.",
+                    "Select a group column in Validation.",
+                )
+            )
+
+        if n_splits > max(2, len(data) // 10):
+            results.append(
+                GuardRailResult(
+                    "warning",
+                    f"n_splits={n_splits} may be too high for {len(data)} rows.",
+                    "Lower fold count or provide more data.",
+                )
+            )
+
+        if split_type != "timeseries":
+            for col in data.columns:
+                if col in exclude_cols:
+                    continue
+                if pd.api.types.is_datetime64_any_dtype(data[col]):
+                    results.append(
+                        GuardRailResult(
+                            "warning",
+                            f"Datetime feature '{col}' may leak future information.",
+                            "Use timeseries split or exclude datetime features.",
+                        )
+                    )
+                    break
+
+        if task_type in {"binary", "multiclass"} and split_type == "kfold":
+            results.append(
+                GuardRailResult(
+                    "info",
+                    "Stratified split is usually better for classification.",
+                    "Switch split type to stratified when possible.",
+                )
+            )
+
+        if not results:
+            results.append(GuardRailResult("ok", "Validation checks passed."))
+        return results
+
+    def check_train(self, config: dict[str, Any]) -> list[GuardRailResult]:
+        results: list[GuardRailResult] = []
+        lr = float(config.get("learning_rate", 0.05))
+        rounds = int(config.get("num_boost_round", 300))
+        if lr > 0.3:
+            results.append(
+                GuardRailResult(
+                    "warning",
+                    f"Learning rate is high ({lr}).",
+                    "Consider <= 0.1 for stable training.",
+                )
+            )
+        if rounds > 5000:
+            results.append(
+                GuardRailResult(
+                    "warning",
+                    f"num_boost_round is large ({rounds}).",
+                    "Verify early stopping settings.",
+                )
+            )
+        if not results:
+            results.append(GuardRailResult("ok", "Train checks passed."))
+        return results
+
+    def check_pre_run(self, config_yaml: str, data_path: str | None) -> list[GuardRailResult]:
+        results: list[GuardRailResult] = []
+        if not data_path or not Path(data_path).exists():
+            results.append(
+                GuardRailResult(
+                    "error",
+                    f"Data file not found: {data_path or 'None'}",
+                    "Select a valid dataset path.",
+                )
+            )
+        try:
+            validate_config(config_yaml)
+        except Exception as exc:
+            results.append(GuardRailResult("error", f"Config validation error: {exc}"))
+        if not results:
+            results.append(GuardRailResult("ok", "Pre-run checks passed."))
+        return results
+
+
+def _flatten_numeric_metrics(metrics: Any) -> dict[str, float]:
+    if not isinstance(metrics, dict):
+        return {}
+    top = {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
+    if top:
+        return top
+    mean_obj = metrics.get("mean")
+    if isinstance(mean_obj, dict):
+        return {k: float(v) for k, v in mean_obj.items() if isinstance(v, (int, float))}
+    return {}
+
+
+def _export_output_path(artifact_path: str, suffix: str) -> Path:
+    parent = Path(artifact_path).resolve()
+    out_dir = parent / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(UTC).astimezone(_JST).strftime("%Y%m%d_%H%M%S")
+    return out_dir / f"{suffix}_{ts}"
+
+
+def export_excel_report(artifact_path: str) -> str:
+    artifact = Artifact.load(_require(artifact_path, "artifact_path"))
+    output_path = _export_output_path(artifact_path, "report").with_suffix(".xlsx")
+
+    try:
+        from openpyxl import Workbook
+    except Exception as exc:
+        raise VeldraValidationError(f"Excel export requires openpyxl: {exc}")
+
+    workbook = Workbook()
+    sheet_metrics = workbook.active
+    sheet_metrics.title = "metrics"
+    sheet_metrics.append(["metric", "value"])
+    metrics = _flatten_numeric_metrics(getattr(artifact, "metrics", None) or {})
+    for key, value in sorted(metrics.items()):
+        sheet_metrics.append([key, value])
+
+    sheet_cfg = workbook.create_sheet("config")
+    cfg_text = yaml.safe_dump(_to_safe_dict(getattr(artifact, "config", {})), sort_keys=False)
+    for idx, line in enumerate(cfg_text.splitlines(), start=1):
+        sheet_cfg.cell(row=idx, column=1, value=line)
+
+    sheet_shap = workbook.create_sheet("shap")
+    try:
+        import shap  # noqa: F401
+
+        sheet_shap.append(["status", "SHAP generation deferred (not computed in GUI MVP)."])
+    except Exception:
+        sheet_shap.append(["status", "SHAP dependency not installed; sheet skipped."])
+
+    workbook.save(output_path)
+    return str(output_path)
+
+
+def export_html_report(artifact_path: str) -> str:
+    artifact = Artifact.load(_require(artifact_path, "artifact_path"))
+    output_path = _export_output_path(artifact_path, "report").with_suffix(".html")
+    metrics = _flatten_numeric_metrics(getattr(artifact, "metrics", None) or {})
+    cfg_text = yaml.safe_dump(_to_safe_dict(getattr(artifact, "config", {})), sort_keys=False)
+    task_type = getattr(artifact, "task_type", "unknown")
+    run_id = getattr(artifact, "run_id", "unknown")
+
+    rows = "".join(f"<tr><td>{k}</td><td>{v:.6g}</td></tr>" for k, v in sorted(metrics.items()))
+    html_text = (
+        "<html><head><meta charset='utf-8'><title>Veldra Report</title></head><body>"
+        f"<h1>Veldra Report</h1><p>Run ID: {run_id} | Task: {task_type}</p>"
+        "<h2>Metrics</h2><table border='1' cellpadding='4'>"
+        "<tr><th>Metric</th><th>Value</th></tr>"
+        f"{rows}</table>"
+        "<h2>Config</h2><pre>"
+        f"{cfg_text}"
+        "</pre>"
+        "</body></html>"
+    )
+    try:
+        from jinja2 import Template
+
+        tmpl = Template(html_text)
+        html_text = tmpl.render()
+    except Exception:
+        pass
+    output_path.write_text(html_text, encoding="utf-8")
+    return str(output_path)
+
+
+def _to_safe_dict(value: Any) -> dict[str, Any]:
+    if is_dataclass(value):
+        return asdict(value)
+    if hasattr(value, "model_dump"):
+        try:
+            dumped = value.model_dump(mode="json")
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return value
+    return {"value": repr(value)}
+
+
 def run_action(invocation: RunInvocation) -> GuiRunResult:
     try:
         action = invocation.action.strip().lower()
-        if action not in {"fit", "evaluate", "tune", "simulate", "export", "estimate_dr"}:
+        if action not in {
+            "fit",
+            "evaluate",
+            "tune",
+            "simulate",
+            "export",
+            "estimate_dr",
+            "export_excel",
+            "export_html_report",
+        }:
             raise VeldraValidationError(f"Unsupported action '{invocation.action}'.")
 
         if action == "fit":
@@ -366,6 +715,14 @@ def run_action(invocation: RunInvocation) -> GuiRunResult:
             frame = _get_load_tabular_data()(data_path)
             scenarios = _load_scenarios(scenarios_path)
             result = _get_runner_func("simulate")(artifact, frame, scenarios)
+        elif action == "export_excel":
+            artifact_path = _require(invocation.artifact_path, "artifact_path")
+            output_path = export_excel_report(artifact_path)
+            result = {"artifact_path": artifact_path, "output_path": output_path}
+        elif action == "export_html_report":
+            artifact_path = _require(invocation.artifact_path, "artifact_path")
+            output_path = export_html_report(artifact_path)
+            result = {"artifact_path": artifact_path, "output_path": output_path}
         else:
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             artifact = Artifact.load(artifact_path)
@@ -474,3 +831,111 @@ def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
 
     summaries.sort(key=lambda item: item.created_at_utc or "", reverse=True)
     return summaries
+
+
+def list_run_jobs_filtered(
+    *,
+    limit: int = 200,
+    status: str | None = None,
+    action: str | None = None,
+    query: str | None = None,
+) -> list[GuiJobRecord]:
+    jobs = list_run_jobs(limit=limit, status=(status or None))
+    filtered = jobs
+    if action:
+        action_norm = action.strip().lower()
+        filtered = [job for job in filtered if job.action == action_norm]
+    if query:
+        q = query.strip().lower()
+        filtered = [
+            job
+            for job in filtered
+            if q in job.job_id.lower()
+            or q in (job.invocation.artifact_path or "").lower()
+            or q in (job.invocation.config_path or "").lower()
+        ]
+    return filtered
+
+
+def delete_run_jobs(job_ids: list[str]) -> int:
+    return get_gui_job_store().delete_jobs(job_ids)
+
+
+def load_job_config_yaml(job: GuiJobRecord) -> str:
+    if job.invocation.config_yaml and job.invocation.config_yaml.strip():
+        return job.invocation.config_yaml
+    if job.invocation.config_path and job.invocation.config_path.strip():
+        return load_config_yaml(job.invocation.config_path)
+    raise VeldraValidationError(f"No config source available for job: {job.job_id}")
+
+
+def compare_artifacts(artifact_a: str, artifact_b: str) -> dict[str, Any]:
+    art_a = Artifact.load(_require(artifact_a, "artifact_a"))
+    art_b = Artifact.load(_require(artifact_b, "artifact_b"))
+
+    task_a = str(getattr(art_a, "task_type", "unknown"))
+    task_b = str(getattr(art_b, "task_type", "unknown"))
+    checks: list[dict[str, str]] = []
+    if task_a == task_b:
+        checks.append({"level": "ok", "message": f"Same task type: {task_a}"})
+    else:
+        checks.append(
+            {
+                "level": "warning",
+                "message": f"Different task types: {task_a} vs {task_b}",
+            }
+        )
+
+    cfg_a = _to_safe_dict(getattr(art_a, "config", {}))
+    cfg_b = _to_safe_dict(getattr(art_b, "config", {}))
+    data_a = ((cfg_a.get("data") or {}) if isinstance(cfg_a, dict) else {}).get("path")
+    data_b = ((cfg_b.get("data") or {}) if isinstance(cfg_b, dict) else {}).get("path")
+    if data_a and data_b and data_a != data_b:
+        checks.append(
+            {
+                "level": "warning",
+                "message": "Different data sources. Row-level prediction diff is disabled.",
+            }
+        )
+    else:
+        checks.append({"level": "ok", "message": "Data source appears consistent."})
+
+    split_a = ((cfg_a.get("split") or {}) if isinstance(cfg_a, dict) else {}).get("type")
+    split_b = ((cfg_b.get("split") or {}) if isinstance(cfg_b, dict) else {}).get("type")
+    if split_a and split_b and split_a != split_b:
+        checks.append(
+            {
+                "level": "info",
+                "message": f"Split differs: {split_a} vs {split_b}",
+            }
+        )
+
+    metrics_a = _flatten_numeric_metrics(getattr(art_a, "metrics", {}) or {})
+    metrics_b = _flatten_numeric_metrics(getattr(art_b, "metrics", {}) or {})
+    keys = sorted(set(metrics_a) | set(metrics_b))
+    metric_rows = []
+    for key in keys:
+        va = metrics_a.get(key)
+        vb = metrics_b.get(key)
+        delta = None
+        if va is not None and vb is not None:
+            delta = va - vb
+        metric_rows.append(
+            {
+                "metric": key,
+                "run_a": va,
+                "run_b": vb,
+                "delta": delta,
+            }
+        )
+
+    yaml_a = yaml.safe_dump(cfg_a, sort_keys=False)
+    yaml_b = yaml.safe_dump(cfg_b, sort_keys=False)
+    return {
+        "checks": checks,
+        "metrics_a": metrics_a,
+        "metrics_b": metrics_b,
+        "metric_rows": metric_rows,
+        "config_yaml_a": yaml_a,
+        "config_yaml_b": yaml_b,
+    }

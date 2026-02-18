@@ -17,6 +17,51 @@ def overlap_metric(propensity: np.ndarray, treatment: np.ndarray) -> float:
     return min(treated_overlap, control_overlap)
 
 
+def compute_ess(weights: np.ndarray) -> float:
+    """Compute effective sample size from non-negative weights."""
+    w = np.asarray(weights, dtype=float)
+    w = w[np.isfinite(w) & (w >= 0.0)]
+    if w.size == 0:
+        return 0.0
+    numerator = float(np.sum(w) ** 2)
+    denominator = float(np.sum(w**2))
+    if denominator <= 0.0:
+        return 0.0
+    return numerator / denominator
+
+
+def extreme_weight_ratio(weights: np.ndarray, quantile: float = 0.99) -> float:
+    """Return ratio of samples exceeding specified weight quantile."""
+    w = np.asarray(weights, dtype=float)
+    w = w[np.isfinite(w)]
+    if w.size == 0:
+        return 0.0
+    threshold = float(np.quantile(w, quantile))
+    return float(np.mean(w >= threshold))
+
+
+def overlap_summary(
+    propensity: np.ndarray,
+    treatment: np.ndarray,
+    weights: np.ndarray | None = None,
+) -> dict[str, float]:
+    """Return scalar overlap diagnostics used in reports and tuning."""
+    e = np.asarray(propensity, dtype=float)
+    t = np.asarray(treatment, dtype=int)
+    summary = {
+        "overlap_metric": overlap_metric(e, t),
+        "propensity_min": float(np.min(e)) if e.size else 0.0,
+        "propensity_max": float(np.max(e)) if e.size else 0.0,
+        "propensity_p01": float(np.quantile(e, 0.01)) if e.size else 0.0,
+        "propensity_p99": float(np.quantile(e, 0.99)) if e.size else 0.0,
+        "extreme_propensity_ratio": float(np.mean((e < 0.01) | (e > 0.99))) if e.size else 0.0,
+    }
+    if weights is not None:
+        summary["ess"] = compute_ess(np.asarray(weights, dtype=float))
+        summary["extreme_weight_ratio"] = extreme_weight_ratio(np.asarray(weights, dtype=float))
+    return summary
+
+
 def _weighted_mean_var(values: np.ndarray, weights: np.ndarray | None) -> tuple[float, float]:
     if weights is None:
         mean = float(np.mean(values))

@@ -8,7 +8,12 @@ from typing import Any
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_error,
+    r2_score,
+)
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.config.models import RunConfig
@@ -28,6 +33,7 @@ class RegressionTrainingOutput:
     cv_results: pd.DataFrame
     feature_schema: dict[str, Any]
     training_history: dict[str, Any]
+    observation_table: pd.DataFrame
 
 
 def _booster_iteration_stats(booster: Any, fallback_rounds: int) -> tuple[int, int]:
@@ -68,9 +74,10 @@ def _train_single_booster(
     config: RunConfig,
     evaluation_history: dict[str, Any] | None = None,
 ) -> lgb.Booster:
+    metric_value: str | list[str] = config.train.metrics or "rmse"
     params = {
         "objective": "regression",
-        "metric": "rmse",
+        "metric": metric_value,
         "verbosity": -1,
         "seed": config.train.seed,
         **config.train.lgb_params,
@@ -138,6 +145,7 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
     splits = iter_cv_splits(config, data, x)
 
     oof_pred = np.full(len(x), np.nan, dtype=float)
+    fold_ids = np.full(len(x), -1, dtype=int)
     fold_records: list[dict[str, float | int]] = []
     history_folds: list[dict[str, Any]] = []
 
@@ -160,6 +168,7 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
         )
         pred = booster.predict(x.iloc[valid_idx], num_iteration=booster.best_iteration)
         oof_pred[valid_idx] = pred
+        fold_ids[valid_idx] = fold_idx
         best_iteration, num_iterations = _booster_iteration_stats(
             booster, config.train.num_boost_round
         )
@@ -174,12 +183,14 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
 
         fold_rmse = float(np.sqrt(mean_squared_error(y.iloc[valid_idx], pred)))
         fold_mae = float(mean_absolute_error(y.iloc[valid_idx], pred))
+        fold_mape = float(mean_absolute_percentage_error(y.iloc[valid_idx], pred))
         fold_r2 = float(r2_score(y.iloc[valid_idx], pred))
         fold_records.append(
             {
                 "fold": fold_idx,
                 "rmse": fold_rmse,
                 "mae": fold_mae,
+                "mape": fold_mape,
                 "r2": fold_r2,
                 "n_train": int(len(train_idx)),
                 "n_valid": int(len(valid_idx)),
@@ -193,6 +204,7 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
 
     mean_rmse = float(np.sqrt(mean_squared_error(y, oof_pred)))
     mean_mae = float(mean_absolute_error(y, oof_pred))
+    mean_mape = float(mean_absolute_percentage_error(y, oof_pred))
     mean_r2 = float(r2_score(y, oof_pred))
     cv_results = pd.DataFrame.from_records(fold_records)
 
@@ -224,8 +236,17 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
 
     metrics = {
         "folds": fold_records,
-        "mean": {"rmse": mean_rmse, "mae": mean_mae, "r2": mean_r2},
+        "mean": {"rmse": mean_rmse, "mae": mean_mae, "mape": mean_mape, "r2": mean_r2},
     }
+    observation_table = pd.DataFrame(
+        {
+            "fold_id": fold_ids,
+            "in_out_label": np.where(fold_ids > 0, "out_of_fold", "in_fold"),
+            "y_true": y.to_numpy(dtype=float),
+            "prediction": oof_pred,
+            "residual": y.to_numpy(dtype=float) - oof_pred,
+        }
+    )
     feature_schema = {
         "feature_names": x.columns.tolist(),
         "target": config.data.target,
@@ -237,4 +258,5 @@ def train_regression_with_cv(config: RunConfig, data: pd.DataFrame) -> Regressio
         cv_results=cv_results,
         feature_schema=feature_schema,
         training_history=training_history,
+        observation_table=observation_table,
     )

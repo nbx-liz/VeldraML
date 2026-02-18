@@ -76,7 +76,7 @@ def test_system_temp_dir_and_cleanup(monkeypatch, tmp_path: Path) -> None:
 def test_stepper_bar_and_timestamp_helpers() -> None:
     bar = app_module._stepper_bar("/config")
     assert bar.className == "stepper-container"
-    assert len(bar.children) == 7
+    assert len(bar.children) == 11
 
     root = app_module._stepper_bar("/")
     assert "active" in str(root)
@@ -91,10 +91,12 @@ def test_stepper_connector_colors_follow_progress() -> None:
     connector_lines = [
         child for child in run_bar.children if getattr(child, "style", {}).get("flexGrow") == "1"
     ]
-    assert len(connector_lines) == 3
+    assert len(connector_lines) == 5
     assert connector_lines[0].style["backgroundColor"] == "var(--success)"
     assert connector_lines[1].style["backgroundColor"] == "var(--success)"
-    assert connector_lines[2].style["backgroundColor"] == "rgba(148, 163, 184, 0.1)"
+    assert connector_lines[2].style["backgroundColor"] == "var(--success)"
+    assert connector_lines[3].style["backgroundColor"] == "var(--success)"
+    assert connector_lines[4].style["backgroundColor"] == "rgba(148, 163, 184, 0.1)"
 
 
 def test_cb_inspect_data_branches(monkeypatch) -> None:
