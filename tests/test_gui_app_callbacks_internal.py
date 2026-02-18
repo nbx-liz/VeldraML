@@ -27,6 +27,9 @@ def test_callback_wiring_exists_for_core_outputs() -> None:
     required_outputs = [
         "page-content.children",
         "stepper-content.children",
+        "store-studio-mode.data",
+        "studio-pane-scope.children",
+        "studio-run-status.children",
         "run-jobs-interval.interval",
         "run-jobs-table-container.children",
         "run-job-detail.children",

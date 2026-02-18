@@ -24,6 +24,7 @@ from veldra.gui._lazy_runtime import (
     resolve_data_loader,
     resolve_runner_function,
 )
+from veldra.gui.components import studio_parts
 from veldra.gui.components.charts import (
     plot_causal_smd,
     plot_comparison_bar,
@@ -49,6 +50,7 @@ from veldra.gui.pages import (
     results_page,
     run_page,
     runs_page,
+    studio_page,
     target_page,
     train_page,
     validation_page,
@@ -438,6 +440,15 @@ def _sidebar() -> html.Div:
             ),
             dbc.Nav(
                 [
+                    html.Div("Studio Mode", className="sidebar-section-label"),
+                    dbc.NavLink(
+                        [html.I(className="bi bi-lightning-charge me-2"), "Studio"],
+                        href="/studio",
+                        active="exact",
+                        className="nav-link",
+                    ),
+                    html.Hr(className="w-100 my-2"),
+                    html.Div("Guided Mode", className="sidebar-section-label"),
                     dbc.NavLink(
                         [html.I(className="bi bi-database me-2"), "Data"],
                         href="/data",
@@ -475,6 +486,7 @@ def _sidebar() -> html.Div:
                         className="nav-link",
                     ),
                     html.Hr(className="w-100 my-2"),
+                    html.Div("Operations", className="sidebar-section-label"),
                     dbc.NavLink(
                         [html.I(className="bi bi-clock-history me-2"), "Runs"],
                         href="/runs",
@@ -597,7 +609,9 @@ def _main_layout() -> html.Div:
 
 
 def render_page(pathname: str, state: dict | None = None) -> html.Div:
-    if pathname == "/data" or pathname == "/":
+    if pathname == "/" or pathname == "/studio":
+        return studio_page.layout()
+    if pathname == "/data":
         return data_page.layout()
     if pathname == "/config":
         return config_page.layout(state)
@@ -696,13 +710,98 @@ def create_app() -> dash.Dash:
         State("workflow-state", "data"),
     )
     def _render_page(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
-        return render_page(pathname, state), _stepper_bar(pathname or "/", state)
+        normalized_path = "/studio" if pathname in {None, "/"} else pathname
+        if normalized_path == "/studio":
+            stepper = html.Div()
+        else:
+            stepper = _stepper_bar(normalized_path, state)
+        return render_page(normalized_path, state), stepper
+
+    app.callback(
+        Output("url", "pathname"),
+        Input("url", "pathname"),
+    )(_cb_redirect_root_to_studio)
 
     app.callback(
         Output("housekeeping-last", "data"),
         Input("housekeeping-interval", "n_intervals"),
         State("housekeeping-last", "data"),
     )(_cb_housekeeping)
+
+    # --- Studio callbacks ---
+    app.callback(
+        Output("store-studio-mode", "data"),
+        Output("studio-pane-scope", "children"),
+        Output("studio-pane-center", "children"),
+        Output("studio-pane-action", "children"),
+        Input("studio-mode-radio", "value"),
+        State("store-studio-mode", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_mode_switch)
+
+    app.callback(
+        Output("store-studio-train-data", "data"),
+        Output("studio-train-upload-msg", "children"),
+        Output("studio-train-target-col", "options"),
+        Output("studio-train-target-col", "value"),
+        Output("studio-train-task-type", "value"),
+        Input("studio-train-upload", "contents"),
+        State("studio-train-upload", "filename"),
+        State("store-studio-train-data", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_upload_train)
+
+    app.callback(
+        Output("store-studio-train-data", "data", allow_duplicate=True),
+        Input("studio-train-target-col", "value"),
+        Input("studio-train-task-type", "value"),
+        State("store-studio-train-data", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_target_task)
+
+    app.callback(
+        Output("studio-run-log", "children"),
+        Output("store-studio-last-job", "data"),
+        Output("studio-run-poll-interval", "disabled"),
+        Output("studio-run-poll-interval", "n_intervals"),
+        Output("studio-run-status", "children"),
+        Input("studio-run-btn", "n_clicks"),
+        State("store-studio-train-data", "data"),
+        State("studio-train-target-col", "value"),
+        State("studio-train-task-type", "value"),
+        State("studio-val-split-type", "value"),
+        State("studio-val-n-splits", "value"),
+        State("studio-val-group-col", "value"),
+        State("studio-val-time-col", "value"),
+        State("studio-val-ts-mode", "value"),
+        State("studio-val-test-size", "value"),
+        State("studio-val-gap", "value"),
+        State("studio-val-embargo", "value"),
+        State("studio-model-learning-rate", "value"),
+        State("studio-model-num-leaves", "value"),
+        State("studio-model-max-depth", "value"),
+        State("studio-model-num-boost-round", "value"),
+        State("studio-model-early-stopping", "value"),
+        State("studio-tune-enabled", "value"),
+        State("studio-tune-preset", "value"),
+        State("studio-tune-n-trials", "value"),
+        State("studio-tune-objective", "value"),
+        prevent_initial_call=True,
+    )(_cb_studio_run)
+
+    app.callback(
+        Output("studio-run-progress", "children"),
+        Output("studio-run-kpi", "children"),
+        Output("studio-run-log", "children", allow_duplicate=True),
+        Output("studio-run-status", "children", allow_duplicate=True),
+        Output("store-studio-last-job", "data", allow_duplicate=True),
+        Output("studio-run-poll-interval", "disabled", allow_duplicate=True),
+        Output("workflow-state", "data", allow_duplicate=True),
+        Input("studio-run-poll-interval", "n_intervals"),
+        State("store-studio-last-job", "data"),
+        State("workflow-state", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_poll_job)
 
     # --- Data Page Callbacks ---
     app.callback(
@@ -1232,7 +1331,7 @@ def create_app() -> dash.Dash:
         Output("toast-container", "children", allow_duplicate=True),
         Output("last-job-status", "data"),
         Output("workflow-state", "data", allow_duplicate=True),
-        Output("url", "pathname"),  # Auto-navigation
+        Output("url", "pathname", allow_duplicate=True),  # Auto-navigation
         Output("run-jobs-page", "data"),
         Output("run-jobs-total", "data"),
         Input("run-jobs-interval", "n_intervals"),
@@ -1694,6 +1793,372 @@ def _cb_housekeeping(
             }
         )
         return payload
+
+
+def _cb_redirect_root_to_studio(pathname: str | None) -> str | Any:
+    if pathname in {None, "/"}:
+        return "/studio"
+    return dash.no_update
+
+
+def _cb_studio_mode_switch(
+    mode: str | None,
+    _current_mode: str | None,
+) -> tuple[str, Any, Any, Any]:
+    normalized = str(mode or "train")
+    if normalized == "inference":
+        return (
+            "inference",
+            studio_parts.inference_scope_pane(),
+            studio_parts.inference_spec_pane(),
+            studio_parts.inference_action_pane(),
+        )
+    return (
+        "train",
+        studio_parts.train_scope_pane(),
+        studio_parts.train_strategy_pane(),
+        studio_parts.train_action_pane(),
+    )
+
+
+def _cb_studio_upload_train(
+    contents: str | None,
+    filename: str | None,
+    current_store: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str, list[dict[str, str]], str | None, str]:
+    current = dict(current_store or {})
+    if not contents:
+        return current, "データファイルを選択してください。", [], None, "regression"
+
+    import base64
+    import binascii
+
+    try:
+        _content_type, content_string = contents.split(",", 1)
+        decoded = base64.b64decode(content_string)
+    except (ValueError, binascii.Error) as exc:
+        return current, f"アップロード形式が不正です: {exc}", [], None, "regression"
+
+    safe_name = Path(filename or "studio_train.csv").name
+    if not (safe_name.endswith(".csv") or safe_name.endswith(".parquet")):
+        return current, "対応形式は .csv / .parquet のみです。", [], None, "regression"
+
+    _cleanup_gui_system_temp_files()
+    tmp_path = _get_gui_system_temp_dir() / safe_name
+    try:
+        tmp_path.write_bytes(decoded)
+    except Exception as exc:
+        return current, f"一時ファイル保存に失敗しました: {exc}", [], None, "regression"
+
+    result = inspect_data(str(tmp_path))
+    if not result.get("success"):
+        return (
+            current,
+            f"データ検査エラー: {result.get('error', 'unknown error')}",
+            [],
+            None,
+            "regression",
+        )
+
+    stats = result.get("stats") or {}
+    columns = [str(col) for col in stats.get("columns", [])]
+    options = [{"label": col, "value": col} for col in columns]
+    target_col = columns[-1] if columns else None
+
+    inferred_task = "regression"
+    if target_col:
+        try:
+            frame = _get_load_tabular_data()(str(tmp_path))
+            inferred_task = infer_task_type(frame, target_col)
+        except Exception:
+            inferred_task = "regression"
+
+    payload = {
+        "file_path": str(tmp_path),
+        "columns": columns,
+        "n_rows": int(stats.get("n_rows", 0)),
+        "task_type_inferred": inferred_task,
+        "target_col": target_col,
+        "task_type": inferred_task,
+    }
+    msg = f"✔ {safe_name} ({payload['n_rows']} rows × {len(columns)} cols)"
+    return payload, msg, options, target_col, inferred_task
+
+
+def _cb_studio_target_task(
+    target_col: str | None,
+    task_type: str | None,
+    current_store: dict[str, Any] | None,
+) -> dict[str, Any]:
+    current = dict(current_store or {})
+    if target_col:
+        current["target_col"] = target_col
+    if task_type:
+        current["task_type"] = task_type
+    return current
+
+
+def _build_studio_run_config(
+    train_data: dict[str, Any] | None,
+    target_col: str | None,
+    task_type: str | None,
+    split_type: str | None,
+    n_splits: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    ts_mode: str | None,
+    test_size: int | None,
+    gap: int | None,
+    embargo: int | None,
+    learning_rate: float | None,
+    num_leaves: int | None,
+    max_depth: int | None,
+    num_boost_round: int | None,
+    early_stopping_rounds: int | None,
+    tune_enabled: bool | None,
+    tune_preset: str | None,
+    tune_n_trials: int | None,
+    tune_objective: str | None,
+) -> str:
+    data_obj = dict(train_data or {})
+    data_path = str(data_obj.get("file_path") or "").strip()
+    target = str(target_col or data_obj.get("target_col") or "").strip()
+    if not data_path:
+        raise ValueError("学習データが未設定です。")
+    if not target:
+        raise ValueError("ターゲット列を選択してください。")
+
+    task = str(task_type or data_obj.get("task_type") or "regression").strip().lower()
+    split = str(split_type or "kfold").strip().lower()
+    payload: dict[str, Any] = {
+        "config_version": 1,
+        "task": {"type": task},
+        "data": {"path": data_path, "target": target},
+        "split": {
+            "type": split,
+            "n_splits": max(2, int(n_splits or 5)),
+            "seed": 42,
+        },
+        "train": {
+            "num_boost_round": max(10, int(num_boost_round or 300)),
+            "lgb_params": {
+                "learning_rate": float(learning_rate or 0.05),
+                "num_leaves": max(2, int(num_leaves or 31)),
+                "max_depth": int(max_depth if max_depth is not None else -1),
+                "min_child_samples": 20,
+                "subsample": 1.0,
+                "colsample_bytree": 1.0,
+                "reg_alpha": 0.0,
+                "reg_lambda": 0.0,
+            },
+            "early_stopping_rounds": max(0, int(early_stopping_rounds or 100)),
+            "seed": 42,
+        },
+        "tuning": {"enabled": bool(tune_enabled)},
+        "export": {"artifact_dir": "artifacts"},
+    }
+
+    if split == "group" and str(group_col or "").strip():
+        payload["split"]["group_col"] = str(group_col).strip()
+    if split == "timeseries":
+        if str(time_col or "").strip():
+            payload["split"]["time_col"] = str(time_col).strip()
+        payload["split"]["timeseries_mode"] = str(ts_mode or "expanding")
+        if test_size is not None and int(test_size) > 0:
+            payload["split"]["test_size"] = int(test_size)
+        if payload["split"]["timeseries_mode"] == "blocked":
+            blocked_test_size = int(payload["split"].get("test_size", 30))
+            payload["split"]["train_size"] = max(1, blocked_test_size * 3)
+        payload["split"]["gap"] = max(0, int(gap or 0))
+        payload["split"]["embargo"] = max(0, int(embargo or 0))
+
+    if payload["tuning"]["enabled"]:
+        payload["tuning"]["preset"] = str(tune_preset or "standard")
+        payload["tuning"]["n_trials"] = max(1, int(tune_n_trials or 30))
+        objective = str(tune_objective or "").strip()
+        if objective:
+            payload["tuning"]["objective"] = objective
+
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+
+def _cb_studio_run(
+    _n_clicks: int,
+    train_data: dict[str, Any] | None,
+    target_col: str | None,
+    task_type: str | None,
+    split_type: str | None,
+    n_splits: int | None,
+    group_col: str | None,
+    time_col: str | None,
+    ts_mode: str | None,
+    test_size: int | None,
+    gap: int | None,
+    embargo: int | None,
+    learning_rate: float | None,
+    num_leaves: int | None,
+    max_depth: int | None,
+    num_boost_round: int | None,
+    early_stopping_rounds: int | None,
+    tune_enabled: bool | None,
+    tune_preset: str | None,
+    tune_n_trials: int | None,
+    tune_objective: str | None,
+) -> tuple[str, dict[str, Any], bool, int, str]:
+    try:
+        config_yaml = _build_studio_run_config(
+            train_data,
+            target_col,
+            task_type,
+            split_type,
+            n_splits,
+            group_col,
+            time_col,
+            ts_mode,
+            test_size,
+            gap,
+            embargo,
+            learning_rate,
+            num_leaves,
+            max_depth,
+            num_boost_round,
+            early_stopping_rounds,
+            tune_enabled,
+            tune_preset,
+            tune_n_trials,
+            tune_objective,
+        )
+        feedback = validate_config_with_guidance(config_yaml)
+        if not feedback.get("ok"):
+            reason = _summarize_validation_feedback(feedback)
+            return (
+                f"[ERROR] Studio config validation failed\\n{reason}",
+                {"status": "failed"},
+                True,
+                0,
+                "FAILED",
+            )
+
+        action = "tune" if bool(tune_enabled) else "fit"
+        data_path = str((train_data or {}).get("file_path") or "").strip()
+        result = submit_run_job(
+            RunInvocation(
+                action=action,
+                config_yaml=config_yaml,
+                config_path="configs/gui_run.yaml",
+                data_path=data_path,
+                priority="normal",
+            )
+        )
+        job_store = {
+            "job_id": result.job_id,
+            "action": action,
+            "status": result.status,
+            "config_yaml": config_yaml,
+        }
+        return (
+            f"[QUEUED] {result.message} (Job ID: {result.job_id})",
+            job_store,
+            False,
+            0,
+            "QUEUED",
+        )
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}", {"status": "failed"}, True, 0, "FAILED"
+
+
+def _studio_extract_metrics(payload: dict[str, Any] | None) -> dict[str, float]:
+    obj = dict(payload or {})
+    metrics_obj = obj.get("metrics")
+    if isinstance(metrics_obj, dict):
+        return {str(k): float(v) for k, v in metrics_obj.items() if isinstance(v, (int, float))}
+
+    result_obj = obj.get("result")
+    if isinstance(result_obj, dict):
+        nested = result_obj.get("metrics")
+        if isinstance(nested, dict):
+            return {str(k): float(v) for k, v in nested.items() if isinstance(v, (int, float))}
+    return {}
+
+
+def _cb_studio_poll_job(
+    _n_intervals: int,
+    last_job: dict[str, Any] | None,
+    workflow_state: dict[str, Any] | None,
+) -> tuple[Any, Any, str, str, dict[str, Any], bool, dict[str, Any]]:
+    current_job = dict(last_job or {})
+    job_id = str(current_job.get("job_id") or "").strip()
+    if not job_id:
+        return (
+            html.Div("No job running.", className="small text-muted"),
+            html.Div("No KPI yet.", className="small text-muted"),
+            "",
+            "READY",
+            current_job,
+            True,
+            _ensure_workflow_state_defaults(workflow_state),
+        )
+
+    job = get_run_job(job_id)
+    if job is None:
+        current_job["status"] = "failed"
+        return (
+            html.Div("Job not found.", className="text-danger small"),
+            html.Div("No KPI yet.", className="small text-muted"),
+            "[ERROR] Job no longer exists.",
+            "FAILED",
+            current_job,
+            True,
+            _ensure_workflow_state_defaults(workflow_state),
+        )
+
+    logs = list_run_job_logs(job.job_id, limit=120)
+    progress = render_progress_viewer(
+        progress_pct=float(job.progress_pct),
+        current_step=job.current_step,
+        logs=logs,
+        log_limit=120,
+        log_total=len(logs),
+    )
+    log_text = (
+        f"[{job.status.upper()}] {job.action} / {job.current_step or '-'} "
+        f"/ {job.progress_pct:.1f}%"
+    )
+    metrics = _studio_extract_metrics(job.result.payload if job.result else {})
+    kpi_children = studio_parts.render_quick_kpis(metrics)
+
+    next_workflow = _ensure_workflow_state_defaults(workflow_state)
+    disable_poll = job.status not in {"queued", "running", "cancel_requested"}
+    current_job["status"] = job.status
+    current_job["action"] = job.action
+
+    if job.status == "succeeded":
+        next_workflow["last_job_succeeded"] = True
+        payload = job.result.payload if job.result else {}
+        artifact_path = None
+        if isinstance(payload, dict):
+            candidate = payload.get("artifact_path")
+            if isinstance(candidate, str) and candidate.strip():
+                artifact_path = candidate.strip()
+            result_obj = payload.get("result")
+            if artifact_path is None and isinstance(result_obj, dict):
+                nested = result_obj.get("artifact_path")
+                if isinstance(nested, str) and nested.strip():
+                    artifact_path = nested.strip()
+        if artifact_path:
+            next_workflow["last_run_artifact"] = artifact_path
+    elif job.status in {"failed", "canceled"}:
+        next_workflow["last_job_succeeded"] = False
+
+    return (
+        progress,
+        kpi_children,
+        log_text,
+        job.status.upper(),
+        current_job,
+        disable_poll,
+        next_workflow,
+    )
 
 
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:

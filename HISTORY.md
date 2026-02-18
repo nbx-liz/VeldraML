@@ -1822,3 +1822,42 @@
 - `.venv/bin/pytest -q tests/test_runner_fit_happy.py tests/test_runner_tune_happy.py tests/test_gui_job_store.py` を実施（`21 passed`）。
 - `.venv/bin/pytest -q tests/test_artifact_store.py tests/test_tune_artifacts.py tests/test_observation_table.py` を実施（`9 passed`）。
 - `.venv/bin/ruff check tests/conftest.py` を通過。
+
+### 2026-02-18（作業/PR: phase34-1-studio-train-mode-foundation）
+**背景**
+- Phase34.1 の目的である Studio 骨格 + 学習モードを、既存 Guided Mode と互換を維持しながら実装する必要があった。
+- `/` の既定遷移、Studio 専用 state、RunConfig 自動生成、ジョブ実行/進捗表示を adapter 層で閉じる方針を確定する必要があった。
+
+**変更内容**
+- `src/veldra/gui/pages/studio_page.py` を新規追加し、3ペイン構成・Studio専用 `dcc.Store` 群・`studio-run-poll-interval` を実装。
+- `src/veldra/gui/components/studio_parts.py` を新規追加し、学習モード pane（Scope/Strategy/Action）と推論プレースホルダ pane を実装。
+- `src/veldra/gui/app.py` を更新し、以下を追加。
+  - `/studio` ルート追加、`/` の `/studio` リダイレクト、サイドバーに Studio セクションを追加。
+  - `/studio` 時のステッパー非表示。
+  - Studio callback 群（`_cb_redirect_root_to_studio`, `_cb_studio_mode_switch`, `_cb_studio_upload_train`, `_cb_studio_target_task`, `_build_studio_run_config`, `_cb_studio_run`, `_cb_studio_poll_job`）。
+  - `submit_run_job()` による `fit/tune` キュー投入と、`get_run_job()` / `list_run_job_logs()` による進捗/KPI反映。
+- `src/veldra/gui/assets/style.css` に Studio レイアウト（3カラム + モバイル1カラム）とサイドバーセクションラベルを追加。
+- `src/veldra/gui/pages/__init__.py` に `studio_page` を追加。
+- テストを追加/更新。
+  - 新規: `tests/test_gui_studio.py`
+  - 更新: `tests/test_gui_pages_and_init.py`, `tests/test_gui_app_helpers.py`, `tests/test_gui_app_callbacks_internal.py`
+- `DESIGN_BLUEPRINT.md` の Phase34.1 節に実装確定内容を追記。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase34.1 では学習モードを優先実装し、推論モードはプレースホルダ表示に留める。
+  - 理由: Phase34.2 で Model Hub / 推論機能を集中的に実装し、段階的に回帰リスクを抑えるため。
+  - 影響範囲: `src/veldra/gui/{app.py,pages/studio_page.py,components/studio_parts.py}`
+- Decision: confirmed（確定）
+  - 内容: `/studio` を既定導線とし、`/` は `/studio` へリダイレクト、Studio 表示時はステッパーを非表示とする。
+  - 理由: 高速反復 UX を優先しつつ、既存 Guided Mode の URL と機能を維持するため。
+  - 影響範囲: `src/veldra/gui/app.py`, `src/veldra/gui/assets/style.css`
+- Decision: confirmed（確定）
+  - 内容: Model Hub はヘッダー上に表示のみ行い、Phase34.1 では無効化する。
+  - 理由: UI 骨格を固定しながら、未実装操作による誤操作を防止するため。
+  - 影響範囲: `src/veldra/gui/components/studio_parts.py`, `src/veldra/gui/pages/studio_page.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/app.py src/veldra/gui/pages/__init__.py src/veldra/gui/pages/studio_page.py src/veldra/gui/components/studio_parts.py tests/test_gui_studio.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_internal.py` を通過。
+- `uv run pytest -q tests/test_gui_studio.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_internal.py` を実施（`14 passed`）。
+- `uv run pytest -q tests/test_gui_* -m "not gui_e2e and not notebook_e2e"` を実施（`214 passed`）。

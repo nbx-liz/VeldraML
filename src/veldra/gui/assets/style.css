@@ -107,6 +107,15 @@ body {
     align-items: center;
 }
 
+.sidebar-section-label {
+    width: 100%;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0 10px 6px 10px;
+}
+
 .nav-link {
     color: var(--text-secondary) !important;
     border-radius: 12px !important;
@@ -561,4 +570,29 @@ label,
 
 .text-muted-readable {
     color: #cbd5e1 !important;
+}
+
+.studio-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.studio-grid {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.2fr) minmax(320px, 1.2fr);
+    gap: 16px;
+    align-items: stretch;
+}
+
+@media (max-width: 1200px) {
+    .studio-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .studio-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }

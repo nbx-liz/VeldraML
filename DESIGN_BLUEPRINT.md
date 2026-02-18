@@ -862,111 +862,274 @@ pytest tests/ -v --tb=short
 - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`,
   `tests/test_gui_lazy_import_contract.py`, `README.md`, `HISTORY.md`
 
-## 21. Phase34: GUI改善
-### 目的
-- GUIのユーザビリティと安定性を向上させ、ユーザーがモデリング・チューニングプロセスをより直感的に理解し操作できるようにする。
-- 画面遷移が多すぎるため、ユーザビリティが悪化している。モデルの学習・評価を1画面で完結させ、必要に応じてモーダルやドロップダウンで詳細を表示する構成に変更する。
-- 学習済みモデルの読込と予測・評価を1画面で完結させる。
+## 21. Phase34: Studio UX — 2画面高速モデリング
+
+### 1. 目的
+- 現行の9画面ステップフローは画面遷移が多く、慣れたユーザーには冗長。
+- 「学習モード」と「推論モード」の2画面（Studio）を追加し、1画面内でデータ→設定→実行→結果確認を完結させる。
+- 既存の9画面フローは「ガイドモード（Guided Mode）」として継続提供し、初心者向けガイダンスとして活用する。
+- GUI adapter の Core 非依存原則と Stable API 契約は変更しない。
+
+---
+
 ### 2. 画面草案
-A. 学習モード (Train Mode)
+
+#### A. 学習モード (Train Mode)
 目的: データの探索、パラメータ調整、モデル学習の高速な反復。
+```
 +-----------------------------------------------------------------------------------+
-| [ Veldra Studio ]    モード: [ ● 学習 | ○ 推論 ]    [ 📁 モデル管理 ]           |
+| [ Veldra Studio ]  モード: [ ● 学習 | ○ 推論 ]  [ モデル管理 ]  [ Guided Mode ] |
 +-----------------------+---------------------------+-------------------------------+
-| 1. データと目的 (SCOPE) | 2. 戦略設定 (STRATEGY)    | 3. 実行と結果 (ACTION)        |
+| 1. スコープ (SCOPE)   | 2. 戦略設定 (STRATEGY)    | 3. 実行と結果 (ACTION)        |
 +-----------------------+---------------------------+-------------------------------+
 | ■ データソース        | [ Validation ][ Model ]   | ステータス: 準備完了 (READY)  |
-| +-------------------+ | +-----------------------+ | +---------------------------+ |
-| | housing_data.csv  | | モデル選択 (Estimator)  | | [ ▶ 実験を開始 (RUN) ]      | |
-| | (1460 rows, 81col)| | [ LightGBM (GBDT) (v) ] | +---------------------------+ |
-| +-------------------+ | |                       |                               |
-|                       | | 学習率 (Learning Rate)| 実行ログ (Console):           |
-| ■ ターゲット列        | | 0.01 [======|====] 0.5| > Waiting for command...      |
-| [ price (v) ]         | | [ 0.05 ]              | >                             |
-|                       | |                       | >                             |
-| ■ タスクタイプ        | | 木の深さ (Max Depth)  | >                             |
-| [ 回帰 (Regression) ] | | [ -1 ] (自動)         | >                             |
-| (自動判定: 数値型)    | |                       | >                             |
-|                       | | 早期終了 (Early Stop) |                               |
-|                       | | [ 100 ] rounds        |                               |
-|                       | +-----------------------+ | 速報メトリクス (Quick Result):|
-|                       |                         | +---------------------------+ |
-|                       |                         | | (実行後にここに表示)      | |
-|                       |                         | +---------------------------+ |
+| +-------------------+ | [ Tuning ]                | +---------------------------+ |
+| | housing_data.csv  | | +-----------------------+ | | [ ▶ 実験を開始 (RUN) ]    | |
+| | 1460行, 81列      | | | 学習率 (Learning Rate)| | +---------------------------+ |
+| +-------------------+ | | 0.01 [=====|=====] 0.5| |                               |
+|                       | | [ 0.05 ]              | | 実行ログ (Console):           |
+| ■ ターゲット列        | |                       | | > Waiting for command...      |
+| [ price (v) ]         | | 木の深さ (Max Depth)  | | >                             |
+|                       | | [ -1 ] (自動)         | | >                             |
+| ■ タスクタイプ        | |                       | |                               |
+| [ 回帰 (Regression) ] | | 早期終了 (Early Stop) | | 速報メトリクス (Quick KPI):   |
+| (自動判定: 数値型)    | | [ 100 ] rounds        | | +---------------------------+ |
+|                       | +-----------------------+ | | RMSE: 24,500              | |
+|                       |                           | | R2:   0.91                | |
+|                       |                           | +---------------------------+ |
 +-----------------------+---------------------------+-------------------------------+
+```
 
----
-
-B. 推論モード (Inference Mode)
-目的: 過去に作成したモデルのロード、新規データに対する予測、結果の出力。
+#### B. 推論モード (Inference Mode)
+目的: 過去に作成したモデルのロード、新規データへの予測、結果の出力。
+```
 +-----------------------------------------------------------------------------------+
-| [ Veldra Studio ]    モード: [ ○ 学習 | ● 推論 ]    [ 📁 モデル管理 ]           |
+| [ Veldra Studio ]  モード: [ ○ 学習 | ● 推論 ]  [ モデル管理 ]  [ Guided Mode ] |
 +-----------------------+---------------------------+-------------------------------+
-| 1. モデルと入力 (SCOPE)| 2. モデル仕様 (SPEC)      | 3. 予測と出力 (ACTION)        |
+| 1. スコープ (SCOPE)   | 2. モデル仕様 (SPEC)      | 3. 予測と出力 (ACTION)        |
 +-----------------------+---------------------------+-------------------------------+
-| ■ ロード中モデル情報  | ■ 学習時設定 (Read-Only)  | ステータス: 準備完了 (READY)  |
+| ■ ロード中モデル      | ■ 学習時設定 (Read-Only)  | ステータス: 準備完了 (READY)  |
 | +-------------------+ | タスク: 回帰              | +---------------------------+ |
-| | ID: model_2023...A| | モデル: LightGBM          | | [ ▶ 予測を開始 (PREDICT) ]  | |
-| | Target: price     | | Best RMSE: 24500        | +---------------------------+ |
+| | ID: model_abc123  | | Target: price             | | [ ▶ 予測を開始 (PREDICT) ] | |
+| | Target: price     | | Best RMSE: 24500          | +---------------------------+ |
 | +-------------------+ |                           |                               |
-|                       | ■ 必要な入力特徴量リスト  | 予測結果プレビュー (Preview): |
-| ■ 推論用データ入力    | (この列が入力に必須です)  | +---------------------------+ |
-| +-------------------+ | +-----------------------+ | | (実行後にここに表示)      | |
-| | new_houses.csv    | | - GrLivArea (数値)      | | ID, GrLivArea, ..., **Pred**| |
-| | (50 rows)         | | - YearBuilt (数値)      | | 01, 1500, ..., **145000** | |
-| +-------------------+ | | - OverallQual (数値)    | | 02, 2100, ..., **210000** | |
-|                       | | - GarageCars (数値)     | +---------------------------+ |
-| ■ (任意) 正解ラベル列 | | - GarageCars (数値)     | +---------------------------+ |
-| [ (未選択) (v) ]      | +-----------------------+ | [ ⬇️ CSVダウンロード ]        |
-| (精度評価を行う場合)  |                           |                               |
+| [ モデルを選択... ]   | ■ 必須特徴量リスト        | 予測結果プレビュー (Preview): |
+|                       | +-----------------------+ | +---------------------------+ |
+| ■ 推論用データ        | | GrLivArea (数値)      | | ID, ..., Pred             | |
+| +-------------------+ | | YearBuilt (数値)      | | 01, ..., 145,000          | |
+| | new_data.csv      | | | OverallQual (数値)    | | 02, ..., 210,000          | |
+| | 50行              | | +-----------------------+ | +---------------------------+ |
+| +-------------------+ |                           | [ CSV ダウンロード ]           |
+|                       | ⚠ 欠損列があれば警告表示  |                               |
+| ■ (任意) 正解ラベル列 |                           |                               |
+| [ (未選択) (v) ]      |                           |                               |
 +-----------------------+---------------------------+-------------------------------+
-
-### 3. 機能要件詳細
-3.1 ヘッダー・グローバル制御
-- モード切替スイッチ: dbc.RadioItems 等で実装。「学習」と「推論」を切り替える。
-- モデル管理ボタン (Model Hub): クリックすると右側から dbc.Offcanvas (サイドバー) が出現。
-  - モデル一覧: dash-ag-grid で過去の Artifact を一覧表示。
-  - Load: 選択したモデルをロードし、強制的に「推論モード」へ遷移させる。
-  - Delete: 不要なモデルの削除。
+```
 
 ---
 
-3.2 パネル別機能仕様 (モード依存)
-パネル,コンポーネント,学習モード (Train),推論モード (Inference)
-Left,Scope,Input Data: 学習データアップロードTarget: ターゲット列選択Task: タスクタイプ推定/指定,Model Info: ロード中モデルID/ターゲット名Predict Data: 推論用データアップロードEval Target: (任意) 正解ラベル列選択
-Center,Strategy / Spec,Tabs: 設定タブ切り替え - Valid: 分割法 (KFold/Group) - Model: GBDTパラメータ - Tuning: Optuna設定,Spec View: (Read-only) - 学習時のConfig要約 - Feature Schema: 必須特徴量リスト - (欠損列の警告表示など)
-Right,Action,Run: 学習ジョブ投入Log: リアルタイムログ出力Quick KPI: 学習完了後の主要指標,Predict: 推論ジョブ投入Preview: 結果テーブル (先頭100行)Export: 全件CSVダウンロード
+### 3. アーキテクチャ方針
 
-### 4. 技術実装計画
+#### 3.1 既存画面の位置づけ
+- 既存の `/data`, `/target`, `/config`, `/validation`, `/train`, `/run`, `/results` は **URLを変更せず** そのまま維持する。
+- サイドバーに「Studio」と「Guided Mode」の切替ナビゲーションを追加し、ユーザーが任意に行き来できる。
+- デフォルトルート `/` は `/studio` にリダイレクトする。
+- 既存ページのコンテンツには「初心者ガイドとして利用できます」などのバナーを追加するにとどめ、コード変更は最小にする。
 
-#### 4.1 フロントエンド構成 (`src/veldra/gui`)
+#### 3.2 新規ルート
+- `/studio` → Studio 画面（学習/推論モード切替可能）
 
-* **`pages/studio_page.py`**: 新規作成。3ペインのグリッドレイアウトを定義。
-* **`components/studio_parts.py`**: モードごとに切り替わる部品群（学習用フォーム、推論用ビュー）をコンポーネント化して実装。
-* **State Management (`dcc.Store`)**:
-    * `store-studio-mode`: `"train"` | `"inference"`
-    * `store-loaded-artifact`: ロード中の Artifact ID / Path
-    * `store-input-meta`: アップロードデータの列情報（学習・推論共通）
+#### 3.3 State Management — Studio専用 Store
+Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分離する。
 
----
-
-#### 4.2 バックエンド API 拡張 (`src/veldra/api`)
-
-推論モードのUX向上のため、以下のAPIまたはヘルパー関数を整備する。
-
-* **`get_artifact_spec(path)`**
-    * モデルが必要とする特徴量リスト（名前、型）と、学習時のConfig要約を返す軽量API。
-    * Artifact全体をロードせずにメタデータのみを取得する。
-* **`validate_prediction_data(artifact, dataframe)`**
-    * 推論実行前に、入力データに必要な列が含まれているかチェックし、不足があればエラー/警告を返すロジック。
+| Store ID | 型 | 内容 |
+|---|---|---|
+| `store-studio-mode` | `"train" \| "inference"` | 現在のモード |
+| `store-studio-train-data` | `{file_path, columns, n_rows, task_type_inferred}` | 学習用データ情報 |
+| `store-studio-predict-data` | `{file_path, columns, n_rows}` | 推論用データ情報 |
+| `store-studio-artifact` | `{artifact_path, task_type, target_col, feature_names, train_metrics}` | ロード中モデル情報 |
+| `store-studio-last-job` | `{job_id, action, status}` | 最後に投入したジョブ |
+| `store-studio-predict-result` | `{preview_rows, total_count, tmp_csv_path}` | 予測結果（プレビュー） |
 
 ---
 
-#### 4.3 開発フェーズ
+### 4. 機能要件詳細
 
-1.  **Phase 1: レイアウト移行**
-    * 現行のページ遷移を廃止し、学習モードの3ペイン画面 (`studio_page`) を実装。
-2.  **Phase 2: モデル管理と推論**
-    * モデル管理サイドバーと推論モードの実装。モード切替ロジックの結合。
-3.  **Phase 3: マイグレーション**
-    * 古いページ (`target_page`, `train_page` 等) の完全削除。
+#### 4.1 ヘッダー（グローバル制御）
+- **モード切替**: `dbc.RadioItems` で「学習」「推論」を切替。切替時に全3ペインの内容が即時変化。
+- **モデル管理 (Model Hub)**: クリックで `dbc.Offcanvas` が右側から出現。
+  - Artifact一覧を `task_table.py` で表示（paginated）。
+  - **Load** ボタン: 選択した Artifact をロードし、推論モードに自動切替。
+  - **Delete** ボタン: Artifact ファイルを削除（確認ダイアログあり）。
+- **Guided Mode リンク**: クリックで既存の `/data` ページへ遷移（サイドバーの既存ナビゲーションを活用）。
+
+#### 4.2 パネル別機能仕様
+
+| ペイン | 学習モード | 推論モード |
+|---|---|---|
+| **左 (Scope)** | データアップロード（drag-and-drop）<br>→ 列検出・行数表示<br>ターゲット列選択（Dropdown）<br>タスクタイプ自動判定 + 手動上書き | ロード中モデル情報カード<br>推論用データアップロード<br>（任意）正解ラベル列選択 |
+| **中央 (Strategy/Spec)** | 3タブ構成：<br>**Validation**: 分割法 (KFold/Stratified/Group/TimeSeries)・n_splits・group_col・time_col<br>**Model**: LR/depth/num_leaves/early_stop スライダー<br>**Tuning**: Optuna toggle・n_trials・preset | 学習時設定の読み取り専用表示：<br>タスク・Target・Best metrics<br>必須特徴量リスト（欠損列は警告 badge） |
+| **右 (Action)** | ステータスバッジ（READY/RUNNING/DONE/FAILED）<br>**RUN ボタン** → ジョブ投入<br>`progress_viewer` 再利用（ログ + 進捗バー）<br>完了後: Quick KPI カード（`kpi_cards.py` 再利用） | ステータスバッジ<br>**PREDICT ボタン** → ジョブ投入<br>結果プレビューテーブル（先頭100行）<br>CSV ダウンロードボタン |
+
+---
+
+### 5. バックエンド追加 (`src/veldra/gui/services.py`)
+
+既存の `run_action()` ジョブキューを活用する。追加するサービス関数のみ記載。
+
+#### 5.1 `get_artifact_spec(artifact_path: str) -> ArtifactSpec`
+- **目的**: 推論モードで Artifact をフルロードせずに特徴量スキーマと要約メトリクスを返す。
+- **実装**: Artifact の `manifest.json` および `run_config.yaml` のみを読み込む（`Artifact.load()` は呼ばない）。
+- **返却型** (`ArtifactSpec` dataclass):
+  - `task_type: str`
+  - `target_col: str`
+  - `feature_names: list[str]`
+  - `feature_dtypes: dict[str, str]`
+  - `train_metrics: dict[str, float]`
+  - `artifact_path: str`
+
+#### 5.2 `validate_prediction_data(artifact_spec, data_path: str) -> list[GuardrailResult]`
+- **目的**: 推論実行前の列検証。不足列・型不整合を `GuardrailResult` リストで返す。
+- **実装**: `inspect_data()` で列情報を取得し、`artifact_spec.feature_names` と差分チェック。
+- 既存の `guardrail.py` コンポーネントで表示。
+
+#### 5.3 predict / evaluate アクション
+- 既存 `run_action()` で `action="predict"` / `action="evaluate"` を処理する経路を整備。
+- 結果 CSV は `.veldra_gui/tmp/predict_{job_id}.csv` に出力し、`store-studio-predict-result` に格納。
+
+---
+
+### 6. 実装フェーズ
+
+#### Phase34.1: Studio 骨格 + 学習モード（ PR1-2 ）
+
+**Stage A — レイアウトとルーティング**
+- `src/veldra/gui/pages/studio_page.py` 新規作成。
+  - 3ペイン CSS グリッドレイアウト定義。
+  - Studio 専用 `dcc.Store` 5本を定義。
+  - ヘッダー（モード切替 + モデル管理ボタン + Guided Mode リンク）を実装。
+- `src/veldra/gui/app.py`
+  - `/studio` ルートを `render_page()` に追加。
+  - `/` → `/studio` リダイレクトに変更（既存 `/data` は引き続きアクセス可能）。
+  - サイドバーに「Studio」リンクを追加（先頭）。
+- 検証: `pytest tests/test_gui_pages_and_init.py -v`
+
+**Stage B — 学習モード実装**
+- `src/veldra/gui/components/studio_parts.py` 新規作成。
+  - `train_scope_pane()`: アップロード + ターゲット + タスク選択コンポーネント。
+  - `train_strategy_pane()`: Validation/Model/Tuning タブ。
+  - `train_action_pane()`: Run ボタン + `progress_viewer` + `kpi_cards`。
+- `src/veldra/gui/app.py` にコールバック追加:
+  - `_cb_studio_upload_train` : ファイルアップロード → `inspect_data()` → `store-studio-train-data` 更新。
+  - `_cb_studio_target_task` : ターゲット列・タスクタイプ変更 → Store 更新。
+  - `_cb_studio_run` : Run ボタン → Studio Store から RunConfig YAML 自動生成 → `submit_run_job()` 投入。
+  - `_cb_studio_poll_job` : `dcc.Interval` ポーリング → ログ/進捗/KPI を右ペインに反映。
+- **RunConfig 自動生成ロジック** (`_build_studio_run_config(store_state) -> str`):
+  - `store-studio-train-data` + Strategy タブの各パラメータ → RunConfig YAML 文字列を返す。
+  - 既存 `validate_config()` で検証してから投入。
+- 検証: `pytest tests/test_gui_run_page.py tests/test_new_ux.py -v`
+
+**Phase34.1 実装確定（2026-02-18）**
+- `/studio` を追加し、`/` は `/studio` へリダイレクトする。
+- Studio 専用 Store (`store-studio-*`) を導入し、既存 `workflow-state` と分離する。
+- `/studio` 表示時は既存ステッパーを非表示にし、Guided Mode の `/data`~`/results` では従来表示を維持する。
+- ヘッダーの「モデル管理」ボタンは表示するが Phase34.1 では無効化し、Phase34.2 で有効化予定とする。
+- 学習モードでは `inspect_data()` 経由のアップロード検査、ターゲット/タスク選択、RunConfig 自動生成、`submit_run_job()` による `fit/tune` 投入、`get_run_job()` / `list_run_job_logs()` による進捗・KPI反映までを提供する。
+- 推論モードはプレースホルダ表示のみとし、実機能は Phase34.2 に延期する。
+
+---
+
+#### Phase34.2: 推論モード + Model Hub（ PR3-4 ）
+
+**Stage C — Model Hub**
+- `src/veldra/gui/components/studio_parts.py` に追加:
+  - `model_hub_offcanvas()`: `dbc.Offcanvas` + Artifact テーブル + Load/Delete ボタン。
+- `src/veldra/gui/app.py` にコールバック追加:
+  - `_cb_studio_open_hub` : モデル管理ボタン → Offcanvas open + Artifact リスト更新。
+  - `_cb_studio_load_artifact` : Load ボタン → `get_artifact_spec()` → `store-studio-artifact` 更新 + モード強制切替。
+  - `_cb_studio_delete_artifact` : Delete ボタン → 確認 → Artifact ディレクトリ削除 → リスト更新。
+- `src/veldra/gui/services.py` に追加: `get_artifact_spec()` 実装。
+
+**Stage D — 推論モード実装**
+- `src/veldra/gui/components/studio_parts.py` に追加:
+  - `infer_scope_pane()`: モデル情報カード + データアップロード + 正解列選択。
+  - `infer_spec_pane()`: 読み取り専用 Spec 表示 + 欠損列 guardrail。
+  - `infer_action_pane()`: Predict ボタン + 結果テーブル + CSV ダウンロード。
+- `src/veldra/gui/app.py` にコールバック追加:
+  - `_cb_studio_upload_predict`: 推論用データアップロード → `inspect_data()` + `validate_prediction_data()` → Store 更新。
+  - `_cb_studio_predict`: Predict ボタン → `run_action(action="predict")` → `store-studio-last-job` 更新。
+  - `_cb_studio_poll_predict`: ポーリング → 完了後 `store-studio-predict-result` にプレビュー格納。
+  - `_cb_studio_download_csv`: CSV ダウンロードボタン → `tmp_csv_path` をサーブ。
+- `src/veldra/gui/services.py` に追加:
+  - `validate_prediction_data()` 実装。
+  - `run_action()` の `predict` / `evaluate` 経路整備（結果 CSV 出力）。
+
+---
+
+#### Phase34.3: Guided Mode への整理（ PR5 ）
+
+**目的**: 既存9画面を「初心者向けガイドモード」として明示し、Studio との共存を安定化する。
+
+- 各既存ページ (`data_page.py`, `target_page.py` 等) にバナーコンポーネントを追加:
+  ```
+  ℹ️ このページはガイドモードです。素早く実験したい場合は Studio をお試しください。[ Studio を開く ]
+  ```
+- サイドバーに「Studio モード」セクション（`/studio` リンク）と「Guided Mode」セクション（既存ページ群）を区別して表示。
+- デフォルトルートの確認（`/` → `/studio`）と既存テストの修正。
+- 検証: `pytest -m "not gui_e2e and not notebook_e2e" -q`
+
+---
+
+### 7. テスト要件
+
+| カテゴリ | テスト対象 | 方針 |
+|---|---|---|
+| Unit | `_build_studio_run_config()` | 各タスクタイプ別・Tuning on/off の YAML 生成を契約テスト |
+| Unit | `get_artifact_spec()` | manifest のみ読込で `ArtifactSpec` を返す（`Artifact.load()` 未呼び出し） |
+| Unit | `validate_prediction_data()` | 欠損列・型不一致パターンのテーブルテスト |
+| Integration | Studio ジョブ投入フロー | `store-studio-train-data` → RunConfig 生成 → submit → succeed の e2e unit |
+| Integration | predict アクション | `run_action(action="predict")` で CSV が出力されること |
+| Regression | 全既存テスト | `-m "not gui_e2e and not notebook_e2e"` が green を維持 |
+| E2E (後回し) | Playwright | `/studio` での Train → KPI 表示を最小 E2E でカバー（Phase34後半） |
+
+---
+
+### 8. 対象ファイル
+
+**新規作成**
+- `src/veldra/gui/pages/studio_page.py` — Studio 画面レイアウト + Store 定義
+- `src/veldra/gui/components/studio_parts.py` — ペイン別コンポーネント群
+- `tests/test_gui_studio.py` — Studio 固有のユニット/統合テスト
+
+**主要変更**
+- `src/veldra/gui/app.py` — `/studio` ルート追加・デフォルトリダイレクト変更・Studio コールバック追加
+- `src/veldra/gui/services.py` — `get_artifact_spec()` / `validate_prediction_data()` / predict 経路追加
+- `src/veldra/gui/types.py` — `ArtifactSpec` dataclass 追加
+- `src/veldra/gui/pages/` 各既存ページ — Guided Mode バナー追加（最小変更）
+
+**変更なし（再利用）**
+- `job_store.py` / `worker.py` / `server.py` — 変更不要
+- `components/{progress_viewer,kpi_cards,task_table,guardrail}.py` — そのまま再利用
+
+---
+
+### 9. 成功基準
+
+- `/studio` がデフォルトエントリーポイントとして機能し、既存 `/data` 等へのアクセスが引き続き可能。
+- **学習モード**: データアップロード → ターゲット選択 → Run ボタンクリックまでが3ステップ以内で完結。
+- **推論モード**: モデルロード → データ指定 → Predict → CSV ダウンロードが1画面で完結。
+- RunConfig 自動生成が `validate_config()` を通過する（不正 YAML を投入しない）。
+- 全既存テスト（`-m "not gui_e2e and not notebook_e2e"`）が green を維持。
+- Core `veldra.api.*` の公開シグネチャ・RunConfig schema・Artifact 契約は変更なし。
+
+---
+
+### 10. 互換性方針
+- Core 非依存（adapter 層のみ変更）。
+- `config_version=1`、`manifest_version=1` を維持。
+- 既存 Guided Mode の URL・機能は維持（削除は Phase34 スコープ外）。
+
+### Decision（provisional）
+- 内容: Phase34 は `/studio` 追加 + 既存ページの Guided Mode 整理とし、既存ページの URL 変更・削除は実施しない。
+- 理由: 破壊的変更を避けつつ Studio UX を提供し、初心者ガイダンスとして既存フローを継続活用するため。
+- 影響範囲: `src/veldra/gui/{app.py,services.py,types.py,pages/studio_page.py,components/studio_parts.py}`, 既存ページファイル（バナー追加のみ）, `tests/test_gui_studio.py`
