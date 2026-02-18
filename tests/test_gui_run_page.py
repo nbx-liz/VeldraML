@@ -44,6 +44,9 @@ def test_run_page_layout_defaults() -> None:
     assert "run-set-priority-btn" in ids
     assert "run-log-load-more-btn" in ids
     assert "run-log-limit" in ids
+    assert "run-jobs-page" in ids
+    assert "run-jobs-total" in ids
+    assert "run-jobs-page-size" in ids
 
     data_input = _find_component_by_id(layout, "run-data-path")
     config_input = _find_component_by_id(layout, "run-config-path")

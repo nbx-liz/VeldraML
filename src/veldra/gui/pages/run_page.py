@@ -290,11 +290,30 @@ def layout(state: dict | None = None) -> html.Div:
                                     dcc.Interval(
                                         id="run-jobs-interval", interval=2000, n_intervals=0
                                     ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.Select(
+                                                    id="run-jobs-page-size",
+                                                    options=[
+                                                        {"label": "25", "value": 25},
+                                                        {"label": "50", "value": 50},
+                                                        {"label": "100", "value": 100},
+                                                    ],
+                                                    value=50,
+                                                ),
+                                                width=2,
+                                            ),
+                                        ],
+                                        className="mb-2 g-2",
+                                    ),
                                     html.Div(
                                         id="run-jobs-table-container",
                                         children=task_table("run-jobs", []),  # Initial empty table
                                         style={"minHeight": "200px"},
                                     ),
+                                    dcc.Store(id="run-jobs-page", data=0),
+                                    dcc.Store(id="run-jobs-total", data=0),
                                     html.Hr(className="border-secondary my-4"),
                                     html.H5("Task Details", className="mb-3"),
                                     html.Div(

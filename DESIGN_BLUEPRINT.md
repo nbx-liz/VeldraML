@@ -806,49 +806,29 @@ pytest tests/ -v --tb=short
 * `src/veldra/gui/pages/results_page.py` - ページネーション対応ArtifactリストUIへの刷新
 * `src/veldra/gui/pages/data_page.py` - 仮想スクロールを用いたデータプレビュー機能の導入
 
-## 20 Phase 33: 洗練 & プロダクション対応
+### 実施方針（2026-02-18, provisional）
+* 2段階で実施する。
+  * Phase32.1: ページネーション + DB最適化 + Dataプレビュー仮想スクロール基盤
+  * Phase32.2: アーカイブ/クリーンアップ + パフォーマンス監視/スロークエリ分析
+* Dataプレビュー方式は Dash AG Grid を採用する（GUI optional dependencyとして扱う）。
+* 内部契約として `PaginatedResult[T]`（`items`, `total_count`, `limit`, `offset`）を導入し、GUI adapter内で完結させる。
 
-**目的:** 最終的なシステムの洗練、ドキュメントの整備、およびプロダクション環境へのデプロイを容易にする機能の実装。
+### Decision（要点）
+* Decision: provisional
+  * 内容: Phase32 は 2段階実施（32.1/32.2）を採用する。
+  * 理由: UI改修とDBライフサイクル変更を分割し、回帰リスクとレビュー負荷を抑えるため。
+* Decision: provisional
+  * 内容: Dataプレビューは Dash AG Grid による遅延読込/仮想スクロールを標準方式とする。
+  * 理由: 10万行級プレビューでの描画負荷とメモリ使用量を低減するため。
 
----
+### 実装結果（2026-02-18）
+* `GuiJobStore` に `list_jobs_page`、`jobs_archive`、`archive_jobs`、`purge_archived_jobs`、slow query 計測を追加。
+* `services` に `PaginatedResult` ベースの `list_run_jobs_page` / `list_artifacts_page` / `load_data_preview_page` を追加。
+* Run / Runs / Results をサーバー側ページング化（page/page_size/total管理 + Prev/Next）。
+* Dataページを AG Grid 優先構成に拡張し、遅延読込 callback を追加。
+* housekeeping interval を追加し、archive/purge の定期実行導線を実装。
 
-### 主要成果物
-* **ドキュメント:** スクリーンショット付きのGUIユーザーガイド作成
-* **モニタリング:** 運用監視用のヘルスチェックエンドポイント実装
-* **堅牢性:** 欠落している依存関係（GPU/ONNX等）に対する優雅な退化（Graceful Degradation）の実装
-* **コンテナ化:** 本番デプロイ用の Docker テンプレート一式の提供
-* **分析機能:** 改善のための匿名利用テレメトリ（Opt-in方式）の導入
-* **操作性向上:** パワーユーザー向けのキーボードショートカット実装
-
-### 技術アプローチ
-* **マニュアル作成:** 実際のワークフローを網羅したガイドを `/docs/gui_guide.md` に作成
-* **監視API:** Workerの稼働状況とDB接続状態を返す `/health` エンドポイントを実装
-* **例外処理:** オプショナルなライブラリが不在でも、基本機能を損なわずに警告を表示する処理を追加
-* **デプロイ資産:** GUI環境を包含した `Dockerfile` および `docker-compose.yml` の作成
-* **メトリクス:** ジョブ数やタスクタイプ等の匿名データを収集するテレメトリ機能の実装
-* **UIショートカット:** `Ctrl + 1-4`（ページ移動）、`Ctrl + Enter`（ジョブ投入）などのナビゲーション実装
-
-### テスト要件
-1.  **ドキュメントレビュー:** 記述内容と最新のUI仕様に乖離がないかの完全性確認
-2.  **ヘルスチェック:** 異常（DBダウン、Worker停止）を正確に検知できるかの信頼性テスト
-3.  **スモークテスト:** Docker環境でコンテナ起動からジョブ完了まで一貫して動作するかの検証
-4.  **互換性テスト:** 最小構成の依存関係環境でシステムがクラッシュせずに動作するかの確認
-
-### 成功基準
-* 新規ユーザーが外部の助けを借りず、ガイドのみで一連の解析ワークフローを完遂できること
-* ヘルスエンドポイントがシステムの状態（正常・異常）を正確に報告すること
-* Dockerデプロイが設定変更なしで即座に動作すること
-* キーボードショートカットの導入により、パワーユーザーの操作効率が 20% 以上向上すること
-
----
-
-### 対象ファイル
-* `docs/gui_guide.md` - 新規ユーザーガイドドキュメントの作成
-* `src/veldra/gui/server.py` - ヘルスチェック用 API エンドポイントの実装
-* `Dockerfile`, `docker-compose.yml` - プロダクションデプロイ用設定ファイルの追加
-* `src/veldra/gui/app.py` - キーボードショートカットのイベント処理およびテレメトリ送信ロジック
-
-## 21 Phase 34: GUIメモリ再最適化 & テスト分離（提案）
+## 20 Phase 33: GUIメモリ再最適化 & テスト分離（提案）
 
 ### Proposal
 - GUI adapter（`veldra.gui.app` / `veldra.gui.services`）で、重量級依存
@@ -866,7 +846,7 @@ pytest tests/ -v --tb=short
 - `veldra.api.*` の公開シグネチャは変更しない。
 - GUI機能契約（callback I/O、RunConfig共通入口）は維持する。
 
-## 22. Phase35: GUI改善
+## 21. Phase34: GUI改善
 ### 目的
 - GUIのユーザビリティと安定性を向上させ、ユーザーがモデリング・チューニングプロセスをより直感的に理解し操作できるようにする。
 - 画面遷移が多すぎるため、ユーザビリティが悪化している。モデルの学習・評価を1画面で完結させ、必要に応じてモーダルやドロップダウンで詳細を表示する構成に変更する。

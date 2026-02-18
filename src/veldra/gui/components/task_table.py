@@ -7,11 +7,44 @@ from typing import Any
 from dash import dash_table, html
 
 
-def task_table(id_prefix: str, data: list[dict[str, Any]]) -> html.Div:
+def task_table(
+    id_prefix: str,
+    data: list[dict[str, Any]],
+    *,
+    page_info: str = "",
+    disable_prev: bool = False,
+    disable_next: bool = False,
+) -> html.Div:
     """Create a styled data table for tasks."""
-
     return html.Div(
         [
+            html.Div(
+                [
+                    html.Span(
+                        page_info,
+                        id=f"{id_prefix}-page-info",
+                        className="small text-muted",
+                    ),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Prev",
+                                id=f"{id_prefix}-prev-btn",
+                                className="btn btn-sm",
+                                disabled=disable_prev,
+                            ),
+                            html.Button(
+                                "Next",
+                                id=f"{id_prefix}-next-btn",
+                                className="btn btn-sm",
+                                disabled=disable_next,
+                            ),
+                        ],
+                        className="d-flex gap-2",
+                    ),
+                ],
+                className="d-flex justify-content-between align-items-center px-3 py-2",
+            ),
             dash_table.DataTable(
                 id=f"{id_prefix}-table",
                 columns=[
@@ -54,7 +87,7 @@ def task_table(id_prefix: str, data: list[dict[str, Any]]) -> html.Div:
                 ],
                 row_selectable="single",
                 selected_rows=[],
-                page_size=10,
+                page_size=50,
             )
         ],
         className="glass-card",

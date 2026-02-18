@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 GuiJobStatus = Literal[
     "queued",
@@ -14,6 +14,7 @@ GuiJobStatus = Literal[
     "cancel_requested",
 ]
 GuiJobPriority = Literal["low", "normal", "high"]
+T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -22,6 +23,14 @@ class ArtifactSummary:
     run_id: str
     task_type: str
     created_at_utc: str | None = None
+
+
+@dataclass(slots=True)
+class PaginatedResult(Generic[T]):
+    items: list[T]
+    total_count: int
+    limit: int
+    offset: int
 
 
 @dataclass(slots=True)

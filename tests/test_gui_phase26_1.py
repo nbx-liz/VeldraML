@@ -9,7 +9,7 @@ import pytest
 
 from veldra.gui import app as app_module
 from veldra.gui import services as services_module
-from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+from veldra.gui.types import GuiJobRecord, GuiRunResult, PaginatedResult, RunInvocation
 
 _DASH_AVAILABLE = (
     importlib.util.find_spec("dash") is not None
@@ -54,8 +54,14 @@ def test_runs_callbacks_render_jst_timestamps(monkeypatch) -> None:
         started_at_utc="2026-02-16T00:01:00+00:00",
         finished_at_utc="2026-02-16T00:02:00+00:00",
     )
-    monkeypatch.setattr(app_module, "list_run_jobs_filtered", lambda **_kwargs: [job])
-    rows = app_module._cb_refresh_runs_table(1, "/runs", "", "", "")
+    monkeypatch.setattr(
+        app_module,
+        "list_run_jobs_page",
+        lambda **_kwargs: PaginatedResult(items=[job], total_count=1, limit=50, offset=0),
+    )
+    rows, page, total, _info = app_module._cb_refresh_runs_table(1, "/runs", "", "", "")
+    assert page == 0
+    assert total == 1
     assert rows[0]["created_at_utc"] == "2026-02-16 09:00:00 JST"
     assert rows[0]["started_at_utc"] == "2026-02-16 09:01:00 JST"
     assert rows[0]["finished_at_utc"] == "2026-02-16 09:02:00 JST"

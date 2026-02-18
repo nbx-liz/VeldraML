@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from veldra.gui.types import (
@@ -22,6 +24,7 @@ from veldra.gui.types import (
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
 _PRIORITY_TO_INT: dict[GuiJobPriority, int] = {"low": 10, "normal": 50, "high": 90}
 _ALLOWED_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+LOGGER = logging.getLogger("veldra.gui.job_store")
 
 
 def _priority_to_int(priority: str | None) -> int:
@@ -110,6 +113,7 @@ class GuiJobStore:
     """Persist GUI run jobs in SQLite."""
 
     LOG_RETENTION_PER_JOB = 10_000
+    SLOW_QUERY_MS = 100.0
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -175,6 +179,30 @@ class GuiJobStore:
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs_archive (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 50,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    invocation_json TEXT NOT NULL,
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    progress_pct REAL NOT NULL DEFAULT 0.0,
+                    current_step TEXT NULL,
+                    started_at_utc TEXT NULL,
+                    finished_at_utc TEXT NULL,
+                    result_json TEXT NULL,
+                    error_message TEXT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    retry_parent_job_id TEXT NULL,
+                    last_error_kind TEXT NULL,
+                    archived_at_utc TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at_utc)"
             )
             conn.execute(
@@ -186,6 +214,42 @@ class GuiJobStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_seq ON job_logs(job_id, seq)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_action_created ON jobs(action, created_at_utc)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at_utc)"
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_jobs_archive_finished
+                ON jobs_archive(finished_at_utc, archived_at_utc)
+                """
+            )
+
+    def _track_query(
+        self,
+        *,
+        query_name: str,
+        started_at: float,
+        row_count: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> float:
+        elapsed_ms = (perf_counter() - started_at) * 1000.0
+        payload = {
+            "query_name": query_name,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "db_path": str(self.db_path),
+        }
+        if row_count is not None:
+            payload["row_count"] = int(row_count)
+        if extra:
+            payload.update(extra)
+        if elapsed_ms >= self.SLOW_QUERY_MS:
+            LOGGER.warning("gui_db_slow_query", extra=payload)
+        else:
+            LOGGER.debug("gui_db_query", extra=payload)
+        return elapsed_ms
 
     def enqueue_job(self, invocation: RunInvocation) -> GuiJobRecord:
         now = _utcnow_iso()
@@ -604,7 +668,17 @@ class GuiJobStore:
         limit: int = 200,
         after_seq: int | None = None,
     ) -> list[GuiJobLogRecord]:
+        return self.list_job_logs_page(job_id, limit=limit, after_seq=after_seq)
+
+    def list_job_logs_page(
+        self,
+        job_id: str,
+        *,
+        limit: int = 200,
+        after_seq: int | None = None,
+    ) -> list[GuiJobLogRecord]:
         safe_limit = max(1, min(int(limit), self.LOG_RETENTION_PER_JOB))
+        started_at = perf_counter()
         with self._connect() as conn:
             if after_seq is None:
                 rows = conn.execute(
@@ -629,6 +703,12 @@ class GuiJobStore:
                     """,
                     (job_id, int(after_seq), safe_limit),
                 ).fetchall()
+        self._track_query(
+            query_name="list_job_logs_page",
+            started_at=started_at,
+            row_count=len(rows),
+            extra={"job_id": job_id, "after_seq": after_seq, "limit": safe_limit},
+        )
         return [self._row_to_log_record(row) for row in rows]
 
     def _row_to_log_record(self, row: sqlite3.Row) -> GuiJobLogRecord:
@@ -663,19 +743,173 @@ class GuiJobStore:
         limit: int = 100,
         status: str | None = None,
     ) -> list[GuiJobRecord]:
+        rows, _total = self.list_jobs_page(limit=limit, offset=0, status=status)
+        return rows
+
+    def list_jobs_page(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        action: str | None = None,
+        query: str | None = None,
+    ) -> tuple[list[GuiJobRecord], int]:
         safe_limit = max(1, min(int(limit), 1000))
+        safe_offset = max(0, int(offset))
+        where: list[str] = []
+        params: list[Any] = []
+        if status and str(status).strip():
+            where.append("status = ?")
+            params.append(str(status).strip())
+        if action and str(action).strip():
+            where.append("action = ?")
+            params.append(str(action).strip().lower())
+        if query and str(query).strip():
+            q = f"%{str(query).strip().lower()}%"
+            where.append(
+                "("
+                "LOWER(job_id) LIKE ? OR "
+                "LOWER(invocation_json) LIKE ? OR "
+                "LOWER(COALESCE(error_message, '')) LIKE ?"
+                ")"
+            )
+            params.extend([q, q, q])
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+        base_sql = f"FROM jobs{where_sql}"
+        started_at = perf_counter()
         with self._connect() as conn:
-            if status is None:
-                rows = conn.execute(
-                    "SELECT * FROM jobs ORDER BY created_at_utc DESC LIMIT ?",
-                    (safe_limit,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM jobs WHERE status = ? ORDER BY created_at_utc DESC LIMIT ?",
-                    (status, safe_limit),
-                ).fetchall()
-        return [_row_to_record(row) for row in rows]
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS cnt {base_sql}",
+                tuple(params),
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT * {base_sql}
+                ORDER BY created_at_utc DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple([*params, safe_limit, safe_offset]),
+            ).fetchall()
+        total_count = int(total_row["cnt"]) if total_row is not None else 0
+        self._track_query(
+            query_name="list_jobs_page",
+            started_at=started_at,
+            row_count=len(rows),
+            extra={
+                "total_count": total_count,
+                "limit": safe_limit,
+                "offset": safe_offset,
+                "status": status,
+                "action": action,
+                "query": bool(query and str(query).strip()),
+            },
+        )
+        return [_row_to_record(row) for row in rows], total_count
+
+    def archive_jobs(self, *, cutoff_utc: str, batch_size: int = 200) -> int:
+        safe_batch = max(1, min(int(batch_size), 5000))
+        started_at = perf_counter()
+        moved_count = 0
+        archived_at = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidates = conn.execute(
+                """
+                SELECT * FROM jobs
+                WHERE status IN ('succeeded', 'failed', 'canceled')
+                  AND finished_at_utc IS NOT NULL
+                  AND finished_at_utc < ?
+                ORDER BY finished_at_utc ASC
+                LIMIT ?
+                """,
+                (cutoff_utc, safe_batch),
+            ).fetchall()
+            for row in candidates:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO jobs_archive(
+                        job_id, status, action, priority, created_at_utc, updated_at_utc,
+                        invocation_json, cancel_requested, progress_pct, current_step,
+                        started_at_utc, finished_at_utc, result_json, error_message,
+                        retry_count, retry_parent_job_id, last_error_kind, archived_at_utc
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(row["job_id"]),
+                        str(row["status"]),
+                        str(row["action"]),
+                        int(row["priority"]),
+                        str(row["created_at_utc"]),
+                        str(row["updated_at_utc"]),
+                        str(row["invocation_json"]),
+                        int(row["cancel_requested"]),
+                        float(row["progress_pct"]),
+                        row["current_step"],
+                        row["started_at_utc"],
+                        row["finished_at_utc"],
+                        row["result_json"],
+                        row["error_message"],
+                        int(row["retry_count"] or 0),
+                        row["retry_parent_job_id"],
+                        row["last_error_kind"],
+                        archived_at,
+                    ),
+                )
+            ids = [str(row["job_id"]) for row in candidates]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"DELETE FROM job_logs WHERE job_id IN ({placeholders})",
+                    tuple(ids),
+                )
+                cur = conn.execute(
+                    f"DELETE FROM jobs WHERE job_id IN ({placeholders})",
+                    tuple(ids),
+                )
+                moved_count = int(cur.rowcount or 0)
+            conn.execute("COMMIT")
+        self._track_query(
+            query_name="archive_jobs",
+            started_at=started_at,
+            row_count=moved_count,
+            extra={"cutoff_utc": cutoff_utc, "batch_size": safe_batch},
+        )
+        return moved_count
+
+    def purge_archived_jobs(self, *, cutoff_utc: str, batch_size: int = 200) -> int:
+        safe_batch = max(1, min(int(batch_size), 5000))
+        started_at = perf_counter()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ids = conn.execute(
+                """
+                SELECT job_id
+                FROM jobs_archive
+                WHERE archived_at_utc < ?
+                ORDER BY archived_at_utc ASC
+                LIMIT ?
+                """,
+                (cutoff_utc, safe_batch),
+            ).fetchall()
+            job_ids = [str(row["job_id"]) for row in ids]
+            deleted = 0
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                cur = conn.execute(
+                    f"DELETE FROM jobs_archive WHERE job_id IN ({placeholders})",
+                    tuple(job_ids),
+                )
+                deleted = int(cur.rowcount or 0)
+            conn.execute("COMMIT")
+        self._track_query(
+            query_name="purge_archived_jobs",
+            started_at=started_at,
+            row_count=deleted,
+            extra={"cutoff_utc": cutoff_utc, "batch_size": safe_batch},
+        )
+        return deleted
 
     def get_jobs(self, job_ids: list[str]) -> list[GuiJobRecord]:
         ids = [str(job_id) for job_id in job_ids if str(job_id).strip()]

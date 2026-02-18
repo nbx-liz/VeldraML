@@ -11,7 +11,7 @@ import pytest
 
 from veldra.api.exceptions import VeldraValidationError
 from veldra.gui import services
-from veldra.gui.types import GuiJobRecord, GuiRunResult, RunInvocation
+from veldra.gui.types import GuiJobRecord, GuiRunResult, PaginatedResult, RunInvocation
 
 
 def test_get_artifact_cls_and_runner_lazy_cache(monkeypatch) -> None:
@@ -307,7 +307,11 @@ def test_job_services_filter_delete_cancel_and_load_config_yaml(monkeypatch, tmp
             ),
         ),
     ]
-    monkeypatch.setattr(services, "list_run_jobs", lambda **_k: jobs)
+    monkeypatch.setattr(
+        services,
+        "list_run_jobs_page",
+        lambda **_k: PaginatedResult(items=jobs, total_count=len(jobs), limit=200, offset=0),
+    )
     filtered = services.list_run_jobs_filtered(action="fit", query="artifacts/a")
     assert [j.job_id for j in filtered] == ["job-1"]
 
@@ -368,3 +372,29 @@ def test_compare_artifacts_branches(monkeypatch) -> None:
     assert "Different task types" in joined
     assert "Different data sources" in joined
     assert "Split differs" in joined
+
+
+def test_list_artifacts_page_and_load_data_preview_page(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "artifacts"
+    a = root / "a1"
+    b = root / "b2"
+    a.mkdir(parents=True, exist_ok=True)
+    b.mkdir(parents=True, exist_ok=True)
+    (a / "manifest.json").write_text(
+        '{"run_id":"run_a","task_type":"regression","created_at_utc":"2026-01-02T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    (b / "manifest.json").write_text(
+        '{"run_id":"run_b","task_type":"binary","created_at_utc":"2026-01-01T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    page = services.list_artifacts_page(root_dir=str(root), limit=1, offset=0, query="run_")
+    assert page.total_count == 2
+    assert len(page.items) == 1
+    assert page.items[0].run_id == "run_a"
+
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("a,b,c\n1,2,3\n4,5,6\n7,8,9\n", encoding="utf-8")
+    result = services.load_data_preview_page(str(csv_path), offset=1, limit=1, columns=["a", "c"])
+    assert result.total_count == 3
+    assert result.items == [{"a": 4, "c": 6}]

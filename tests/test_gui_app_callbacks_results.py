@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import plotly.graph_objs as go
 
+from veldra.gui.types import PaginatedResult
+
 
 # Reuse the get_callback helper (or duplicate it for independence)
 def get_callback(app, output_substr: str):
@@ -50,16 +52,27 @@ def test_results_callbacks(monkeypatch):
     # Output: artifact-select.options
     list_cb = get_callback(app, "artifact-select.options")
 
-    monkeypatch.setattr(app_module, "list_artifacts", lambda root: [MockArtifact("p1", "r1")])
+    monkeypatch.setattr(
+        app_module,
+        "list_artifacts_page",
+        lambda **_kwargs: PaginatedResult(
+            items=[MockArtifact("p1", "r1")], total_count=1, limit=50, offset=0
+        ),
+    )
 
-    opts, opts_comp = list_cb(1, "/results", "root")
+    opts, opts_comp, page, total, info = list_cb(1, "/results", 0, 0, 50, "", "root", 0)
     assert len(opts) == 1
     assert opts[0]["value"] == "p1"
+    assert page == 0
+    assert total == 1
+    assert "1" in info
 
     monkeypatch.setattr(
-        app_module, "list_artifacts", lambda root: (_ for _ in ()).throw(ValueError("FAIL"))
+        app_module,
+        "list_artifacts_page",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("FAIL")),
     )
-    opts_err, _ = list_cb(1, "/results", "root")
+    opts_err, _, _, _, _ = list_cb(1, "/results", 0, 0, 50, "", "root", 0)
     assert opts_err == []
 
     # 2. Update Result View

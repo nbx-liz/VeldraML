@@ -58,16 +58,18 @@ from veldra.gui.services import (
     infer_task_type,
     inspect_data,
     list_artifacts,
+    list_artifacts_page,
     list_run_job_logs,
-    list_run_jobs,
-    list_run_jobs_filtered,
+    list_run_jobs_page,
     load_causal_summary,
     load_config_yaml,
+    load_data_preview_page,
     load_job_config_yaml,
     migrate_config_file_via_gui,
     migrate_config_from_yaml,
     normalize_gui_error,
     retry_run_job,
+    run_housekeeping_cycle,
     save_config_yaml,
     set_run_job_priority,
     submit_run_job,
@@ -575,6 +577,8 @@ def _main_layout() -> html.Div:
             dcc.Store(id="workflow-state", data={}),
             dcc.Store(id="last-job-status", data={}),
             dcc.Store(id="custom-config-slots-store", data=[], storage_type="local"),
+            dcc.Store(id="housekeeping-last", data={}),
+            dcc.Interval(id="housekeeping-interval", interval=300000, n_intervals=0),
             toast_container(),
             dbc.Row(
                 [
@@ -697,6 +701,12 @@ def create_app() -> dash.Dash:
     def _render_page(pathname: str | None, state: dict | None) -> tuple[Any, Any]:
         return render_page(pathname, state), _stepper_bar(pathname or "/", state)
 
+    app.callback(
+        Output("housekeeping-last", "data"),
+        Input("housekeeping-interval", "n_intervals"),
+        State("housekeeping-last", "data"),
+    )(_cb_housekeeping)
+
     # --- Data Page Callbacks ---
     app.callback(
         Output("data-inspection-result", "children"),
@@ -715,6 +725,21 @@ def create_app() -> dash.Dash:
         Input("data-upload-drag", "filename"),
         prevent_initial_call=True,
     )(lambda filename: _cb_update_selected_file_label(filename)[0])
+
+    app.callback(
+        Output("data-preview-grid", "rowData"),
+        Output("data-preview-grid", "columnDefs"),
+        Output("data-preview-page", "data"),
+        Output("data-preview-total", "data"),
+        Output("data-preview-page-info", "children"),
+        Input("data-preview-prev-btn", "n_clicks"),
+        Input("data-preview-next-btn", "n_clicks"),
+        Input("data-preview-page-size-select", "value"),
+        Input("data-preview-columns", "value"),
+        State("workflow-state", "data"),
+        State("data-preview-page", "data"),
+        prevent_initial_call=True,
+    )(_cb_update_data_preview_page)
 
     app.callback(
         Output("workflow-state", "data", allow_duplicate=True),
@@ -1211,12 +1236,18 @@ def create_app() -> dash.Dash:
         Output("last-job-status", "data"),
         Output("workflow-state", "data", allow_duplicate=True),
         Output("url", "pathname"),  # Auto-navigation
+        Output("run-jobs-page", "data"),
+        Output("run-jobs-total", "data"),
         Input("run-jobs-interval", "n_intervals"),
         Input("run-refresh-jobs-btn", "n_clicks"),
+        Input("run-jobs-prev-btn", "n_clicks"),
+        Input("run-jobs-next-btn", "n_clicks"),
+        Input("run-jobs-page-size", "value"),
         State("last-job-status", "data"),
         State("workflow-state", "data"),
         State("url", "pathname"),
         State("run-batch-mode-toggle", "value"),
+        State("run-jobs-page", "data"),
         prevent_initial_call=True,
     )(_cb_refresh_run_jobs)
 
@@ -1262,9 +1293,17 @@ def create_app() -> dash.Dash:
     app.callback(
         Output("artifact-select", "options"),
         Output("artifact-select-compare", "options"),
+        Output("artifact-page", "data"),
+        Output("artifact-total", "data"),
+        Output("artifact-page-info", "children"),
         Input("artifact-refresh-btn", "n_clicks"),
         Input("url", "pathname"),  # Auto-refresh on page load
+        Input("artifact-page-prev-btn", "n_clicks"),
+        Input("artifact-page-next-btn", "n_clicks"),
+        Input("artifact-page-size-select", "value"),
+        Input("artifact-search", "value"),
         State("artifact-root-path", "value"),
+        State("artifact-page", "data"),
     )(_cb_list_artifacts)
 
     app.callback(
@@ -1357,12 +1396,24 @@ def create_app() -> dash.Dash:
 
     # --- Runs / Compare Callbacks ---
     app.callback(
+        Output("artifact-page-size", "data"),
+        Input("artifact-page-size-select", "value"),
+    )(lambda value: int(value or 50))
+
+    app.callback(
         Output("runs-table", "data"),
+        Output("runs-page", "data"),
+        Output("runs-total", "data"),
+        Output("runs-page-info", "children"),
         Input("runs-refresh-btn", "n_clicks"),
         Input("url", "pathname"),
         Input("runs-status-filter", "value"),
         Input("runs-action-filter", "value"),
         Input("runs-search", "value"),
+        Input("runs-page-prev-btn", "n_clicks"),
+        Input("runs-page-next-btn", "n_clicks"),
+        Input("runs-page-size", "value"),
+        State("runs-page", "data"),
     )(_cb_refresh_runs_table)
 
     app.callback(
@@ -1523,7 +1574,8 @@ def _cb_inspect_data(
         return _ret(None, f"Error: {result.get('error')}", current_state)
 
     stats_div = data_page.render_data_stats(result["stats"])
-    preview_div = data_page.render_data_preview(result["preview"])
+    preview_page = load_data_preview_page(final_path, offset=0, limit=200)
+    preview_div = data_page.render_data_preview(preview_page.items)
 
     label = (
         f"✔ {display_name}  ({result['stats']['n_rows']} rows × {result['stats']['n_cols']} cols)"
@@ -1555,6 +1607,58 @@ def _cb_inspect_data(
     )
 
 
+def _cb_update_data_preview_page(
+    _prev_clicks: int,
+    _next_clicks: int,
+    page_size: int | None,
+    columns_text: str | None,
+    state: dict[str, Any] | None,
+    current_page: int | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int, int, str]:
+    current = _ensure_workflow_state_defaults(state)
+    data_path = str(current.get("data_path") or "").strip()
+    if not data_path:
+        return [], [], 0, 0, "0-0 / 0"
+    safe_page_size = max(1, min(int(page_size or 200), 2000))
+    page = max(0, int(current_page or 0))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "data-preview-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "data-preview-next-btn":
+        page = page + 1
+    elif triggered in {"data-preview-page-size-select", "data-preview-columns"}:
+        page = 0
+    columns = [item.strip() for item in str(columns_text or "").split(",") if item.strip()]
+    offset = page * safe_page_size
+    paged = load_data_preview_page(
+        data_path,
+        offset=offset,
+        limit=safe_page_size,
+        columns=columns or None,
+    )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = load_data_preview_page(
+            data_path,
+            offset=offset,
+            limit=safe_page_size,
+            columns=columns or None,
+        )
+    rows = paged.items
+    keys = list(rows[0].keys()) if rows else []
+    coldefs = [{"field": key, "headerName": key} for key in keys]
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(rows)
+    info = f"{start}-{end} / {paged.total_count}"
+    return rows, coldefs, page, paged.total_count, info
+
+
 def _cb_save_target_col(target_col: str, state: dict) -> dict:
     current = _ensure_workflow_state_defaults(state)
     current["target_col"] = target_col
@@ -1570,6 +1674,29 @@ def _cb_update_selected_file_label(filename: str | list[str] | None) -> tuple[st
     if not selected:
         return "No file selected — upload or drop a file above", ""
     return f"Selected: {selected}", ""
+
+
+def _cb_housekeeping(
+    _n_intervals: int,
+    current: dict[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        result = run_housekeeping_cycle(
+            archive_ttl_days=int(os.getenv("VELDRA_GUI_ARCHIVE_TTL_DAYS", "30")),
+            purge_ttl_days=int(os.getenv("VELDRA_GUI_PURGE_TTL_DAYS", "90")),
+            batch_size=int(os.getenv("VELDRA_GUI_ARCHIVE_BATCH_SIZE", "200")),
+        )
+        return {"ok": True, "result": result, "at_utc": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        payload = dict(current or {})
+        payload.update(
+            {
+                "ok": False,
+                "error": str(exc),
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        return payload
 
 
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:
@@ -2978,12 +3105,43 @@ def _cb_enqueue_run_job(
 def _cb_refresh_run_jobs(
     _n_intervals: int,
     _refresh_clicks: int,
-    last_status: dict | None,
-    workflow_state: dict | None,
-    current_path: str,
-    batch_mode: list,
-) -> tuple[html.Div, Any, dict, dict, str]:
-    jobs = list_run_jobs(limit=100)
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    last_status: dict | None = None,
+    workflow_state: dict | None = None,
+    current_path: str = "/run",
+    batch_mode: list | None = None,
+    current_page: int | None = None,
+) -> tuple[html.Div, Any, dict, dict, str, int, int]:
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    page = max(0, int(current_page or 0))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "run-jobs-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "run-jobs-next-btn":
+        page = page + 1
+    elif triggered == "run-jobs-page-size":
+        page = 0
+
+    offset = page * safe_page_size
+    paged = list_run_jobs_page(
+        limit=safe_page_size,
+        offset=offset,
+    )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = list_run_jobs_page(
+            limit=safe_page_size,
+            offset=offset,
+        )
+    jobs = paged.items
     priority_rank = {"high": 0, "normal": 1, "low": 2}
     queued_jobs = [job for job in jobs if job.status == "queued"]
     queued_jobs.sort(key=lambda job: (priority_rank.get(job.priority, 1), job.created_at_utc))
@@ -3029,7 +3187,17 @@ def _cb_refresh_run_jobs(
         }
         for job in jobs
     ]
-    return task_table("run-jobs", data), toast, new_status, next_state, next_path
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(jobs)
+    page_info = f"{start}-{end} / {paged.total_count}"
+    table = task_table(
+        "run-jobs",
+        data,
+        page_info=page_info,
+        disable_prev=page <= 0,
+        disable_next=end >= paged.total_count,
+    )
+    return table, toast, new_status, next_state, next_path, page, paged.total_count
 
 
 def _cb_show_selected_job_detail(
@@ -3202,10 +3370,49 @@ def _cb_set_job_priority(_n_clicks: int, job_id: str | None, priority: str | Non
 
 
 def _cb_list_artifacts(
-    _n_clicks: int, _pathname: str, root_path: str
-) -> tuple[list[dict], list[dict]]:
+    _n_clicks: int,
+    _pathname: str,
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    search: str | None = None,
+    root_path: str = "artifacts",
+    current_page: int | None = None,
+) -> tuple[list[dict], list[dict], int, int, str]:
+    if isinstance(_prev_clicks, str) and root_path == "artifacts" and search is None:
+        root_path = _prev_clicks
+        _prev_clicks = 0
+    page = max(0, int(current_page or 0))
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    triggered = ""
     try:
-        items = list_artifacts(root_path or "artifacts")
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "artifact-page-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "artifact-page-next-btn":
+        page = page + 1
+    elif triggered in {"artifact-search", "artifact-page-size-select", "artifact-refresh-btn"}:
+        page = 0
+    offset = page * safe_page_size
+    try:
+        paged = list_artifacts_page(
+            root_dir=root_path or "artifacts",
+            limit=safe_page_size,
+            offset=offset,
+            query=search or None,
+        )
+        if paged.total_count and offset >= paged.total_count and page > 0:
+            page = max(0, (paged.total_count - 1) // safe_page_size)
+            offset = page * safe_page_size
+            paged = list_artifacts_page(
+                root_dir=root_path or "artifacts",
+                limit=safe_page_size,
+                offset=offset,
+                query=search or None,
+            )
         options = [
             {
                 "label": (
@@ -3214,11 +3421,14 @@ def _cb_list_artifacts(
                 ),
                 "value": item.path,
             }
-            for item in items
+            for item in paged.items
         ]
-        return options, options
+        start = offset + 1 if paged.total_count > 0 else 0
+        end = offset + len(paged.items)
+        info = f"{start}-{end} / {paged.total_count}"
+        return options, options, page, paged.total_count, info
     except Exception:
-        return [], []
+        return [], [], 0, 0, "0-0 / 0"
 
 
 def _cb_autoselect_artifact(
@@ -3655,17 +3865,53 @@ def _cb_refresh_runs_table(
     status_filter: str | None,
     action_filter: str | None,
     query: str | None,
-) -> list[dict[str, Any]]:
+    _prev_clicks: int = 0,
+    _next_clicks: int = 0,
+    page_size: int | None = None,
+    current_page: int | None = None,
+) -> tuple[list[dict[str, Any]], int, int, str]:
     if pathname != "/runs":
-        return []
-    jobs = list_run_jobs_filtered(
-        limit=300,
+        return [], 0, 0, "0-0 / 0"
+    page = max(0, int(current_page or 0))
+    safe_page_size = max(1, min(int(page_size or 50), 500))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "runs-page-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "runs-page-next-btn":
+        page = page + 1
+    elif triggered in {
+        "runs-page-size",
+        "runs-refresh-btn",
+        "runs-status-filter",
+        "runs-action-filter",
+        "runs-search",
+    }:
+        page = 0
+    offset = page * safe_page_size
+    paged = list_run_jobs_page(
+        limit=safe_page_size,
+        offset=offset,
         status=status_filter or None,
         action=action_filter or None,
         query=query or None,
     )
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // safe_page_size)
+        offset = page * safe_page_size
+        paged = list_run_jobs_page(
+            limit=safe_page_size,
+            offset=offset,
+            status=status_filter or None,
+            action=action_filter or None,
+            query=query or None,
+        )
     rows: list[dict[str, Any]] = []
-    for job in jobs:
+    for job in paged.items:
         artifact_path = job.invocation.artifact_path or ""
         if job.result and isinstance(job.result.payload, dict):
             artifact_path = str(job.result.payload.get("artifact_path") or artifact_path)
@@ -3682,7 +3928,10 @@ def _cb_refresh_runs_table(
                 "reeval_shortcut": "Re-evaluate",
             }
         )
-    return rows
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(rows)
+    info = f"{start}-{end} / {paged.total_count}"
+    return rows, page, paged.total_count, info
 
 
 def _cb_runs_selection_detail(

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import plotly.graph_objects as go
 
 from veldra.gui import app as app_module
-from veldra.gui.types import ArtifactSummary
+from veldra.gui.types import ArtifactSummary, PaginatedResult
 
 
 def test_list_artifacts_callback_and_autoselect(monkeypatch) -> None:
@@ -18,17 +18,34 @@ def test_list_artifacts_callback_and_autoselect(monkeypatch) -> None:
             created_at_utc="2026-01-01T00:00:00+00:00",
         )
     ]
-    monkeypatch.setattr(app_module, "list_artifacts", lambda _root: items)
-    opts1, opts2 = app_module._cb_list_artifacts(1, "/results", "artifacts")
+    monkeypatch.setattr(
+        app_module,
+        "list_artifacts_page",
+        lambda **_kwargs: PaginatedResult(items=items, total_count=1, limit=50, offset=0),
+    )
+    opts1, opts2, page, total, info = app_module._cb_list_artifacts(
+        1,
+        "/results",
+        root_path="artifacts",
+    )
     assert opts1 and opts2
     assert opts1[0]["value"] == "artifacts/a"
+    assert page == 0
+    assert total == 1
+    assert "1" in info
 
     monkeypatch.setattr(
         app_module,
-        "list_artifacts",
-        lambda _root: (_ for _ in ()).throw(ValueError("x")),
+        "list_artifacts_page",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("x")),
     )
-    assert app_module._cb_list_artifacts(1, "/results", "artifacts") == ([], [])
+    assert app_module._cb_list_artifacts(1, "/results", root_path="artifacts") == (
+        [],
+        [],
+        0,
+        0,
+        "0-0 / 0",
+    )
 
 
 def test_update_result_view_empty_and_compare_fallback(monkeypatch) -> None:

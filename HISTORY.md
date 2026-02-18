@@ -1717,3 +1717,38 @@
 - `uv run ruff check src/veldra/api/artifact.py src/veldra/artifact/store.py src/veldra/api/runner.py src/veldra/gui/components/charts.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/compare_page.py src/veldra/gui/services.py src/veldra/gui/app.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_results_enhanced.py tests/test_gui_components.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を通過。
 - `uv run pytest -q tests/test_gui_components.py tests/test_gui_compare_page.py tests/test_gui_app_callbacks_results.py tests/test_gui_app_callbacks_results_edge.py tests/test_gui_app_results_flow.py tests/test_gui_results_enhanced.py tests/test_gui_export_html.py tests/test_gui_services_edge_cases.py tests/test_gui_export_excel.py tests/test_gui_phase26_1.py tests/test_gui_app_callbacks_runs_edge.py tests/test_gui_export_pdf.py` を実施（`46 passed`）。
 - `uv run pytest -q tests/test_gui_*` を実施（`200 passed`）。
+
+### 2026-02-18（作業/PR: phase32-performance-and-scalability）
+**背景**
+- 大規模運用（jobs 10,000件、artifacts 1,000件、preview 100,000行）時に、GUI一覧取得とプレビュー描画の応答性能を維持する必要があった。
+- 既存実装は全件取得 + クライアント側ページング寄りで、運用規模拡大時の劣化リスクが高かった。
+
+**変更内容**
+- `GuiJobStore` に `list_jobs_page(limit, offset, status, action, query)` を追加し、`OFFSET/LIMIT` + total count を提供。
+- `GuiJobStore` に `jobs_archive` テーブル、`archive_jobs`、`purge_archived_jobs` を追加し、TTLベース保守の基盤を実装。
+- クエリ計測と slow query warning（100ms閾値）を `job_store`/`services` に追加。
+- `services` に `PaginatedResult` ベースの `list_run_jobs_page` / `list_artifacts_page` / `load_data_preview_page` を追加。
+- Run / Runs / Results ページをサーバー側ページング化（page/page_size/total ストア + Prev/Next UI）。
+- Data ページを AG Grid 優先構成へ拡張し、列指定付きの遅延読込 callback を追加。
+- housekeeping interval を追加し、archive/purge を定期実行する運用導線を実装。
+- `pyproject.toml` の GUI optional dependency に `dash-ag-grid` を追加。
+- テストを更新・追加（`test_gui_job_store_perf.py` を新規追加）。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase32 は 2段階（Phase32.1: ページング/DB最適化/AG Grid、Phase32.2: archive/purge/監視）で実施する。
+  - 理由: 破壊範囲を段階化し、UI回帰とデータ整合性リスクを制御するため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,app.py,pages/*,components/*}`, tests, docs
+- Decision: provisional（暫定）
+  - 内容: Data プレビューは Dash AG Grid を標準方式として採用し、遅延読込/仮想スクロールを実装する。
+  - 理由: 大規模データ表示時のDOM負荷とメモリ使用量を抑えるため。
+  - 影響範囲: `src/veldra/gui/pages/data_page.py`, `src/veldra/gui/app.py`, `src/veldra/gui/services.py`, `pyproject.toml`
+- Decision: confirmed（確定）
+  - 内容: 上記方針で Phase32.1（ページング + AG Grid）と Phase32.2（archive/purge + 監視）の最小実装を同PR内で完了した。
+  - 理由: Stable API 非破壊のまま、運用スケール要件に対応する導線を確立できたため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,app.py,pages/*,components/task_table.py,types.py}`, `pyproject.toml`, `tests/test_gui_*`, `DESIGN_BLUEPRINT.md`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/app.py src/veldra/gui/pages/run_page.py src/veldra/gui/pages/results_page.py src/veldra/gui/pages/runs_page.py src/veldra/gui/pages/data_page.py src/veldra/gui/components/task_table.py src/veldra/gui/types.py tests/test_gui_job_store.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_job_store_perf.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_job_store_perf.py tests/test_gui_services_edge_cases.py tests/test_gui_app_job_flow.py tests/test_gui_app_results_flow.py tests/test_gui_app_callbacks_results.py tests/test_gui_phase26_1.py tests/test_gui_runs_page.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py` を実施（`50 passed`）。
+- `uv run pytest -q tests/test_gui_app_callbacks_internal.py tests/test_gui_results_enhanced.py tests/test_gui_pages_logic.py tests/test_gui_data_enhanced.py tests/test_gui_services_unit.py tests/test_gui_app_helpers.py` を実施（`14 passed`）。

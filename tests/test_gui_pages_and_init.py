@@ -44,6 +44,8 @@ def test_page_layouts_have_expected_component_ids() -> None:
     assert "run-set-priority-btn" in ids
     assert "run-job-select" in ids
     assert "artifact-root-path" in ids
+    assert "artifact-page" in ids
+    assert "artifact-total" in ids
 
 
 def test_gui_init_create_app_proxy(monkeypatch) -> None:

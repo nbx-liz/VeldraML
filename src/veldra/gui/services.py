@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 import pandas as pd
@@ -32,6 +33,7 @@ from veldra.gui.types import (
     GuiJobRecord,
     GuiJobResult,
     GuiRunResult,
+    PaginatedResult,
     RetryPolicy,
     RunInvocation,
 )
@@ -170,13 +172,10 @@ def inspect_data(path: str) -> dict[str, Any]:
             "warnings": warnings,
         }
 
-        # Preview data (handle non-serializable types if any)
-        preview = df.head(10).astype(object).where(pd.notnull(df), None)
-
         return {
             "success": True,
             "stats": stats,
-            "preview": preview.to_dict(orient="records"),
+            "preview": [],
             "path": str(data_path.resolve()),
         }
     except Exception as exc:
@@ -184,6 +183,64 @@ def inspect_data(path: str) -> dict[str, Any]:
             "success": False,
             "error": str(exc),
         }
+
+
+def record_perf_metric(name: str, elapsed_ms: float, payload: dict[str, Any] | None = None) -> None:
+    data = {
+        "metric": str(name),
+        "elapsed_ms": round(float(elapsed_ms), 3),
+    }
+    if payload:
+        data.update(payload)
+    if float(elapsed_ms) >= 100.0:
+        LOGGER.warning("gui_perf_metric_slow", extra=data)
+    else:
+        LOGGER.info("gui_perf_metric", extra=data)
+
+
+def load_data_preview_page(
+    path: str,
+    *,
+    offset: int = 0,
+    limit: int = 200,
+    columns: list[str] | None = None,
+) -> PaginatedResult[dict[str, Any]]:
+    started_at = perf_counter()
+    data_path = Path(_require(path, "path"))
+    if not data_path.exists():
+        raise VeldraValidationError(f"Data file does not exist: {data_path}")
+    loader = _get_load_tabular_data()
+    df = loader(str(data_path))
+    safe_offset = max(0, int(offset))
+    safe_limit = max(1, min(int(limit), 2000))
+    selected_df = df
+    if columns:
+        keep = [str(col) for col in columns if str(col) in df.columns]
+        if keep:
+            selected_df = df.loc[:, keep]
+    sliced = selected_df.iloc[safe_offset : safe_offset + safe_limit]
+    payload = (
+        sliced.astype(object).where(pd.notnull(sliced), None).to_dict(orient="records")
+        if not sliced.empty
+        else []
+    )
+    result = PaginatedResult[dict[str, Any]](
+        items=payload,
+        total_count=int(len(selected_df)),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    record_perf_metric(
+        "load_data_preview_page",
+        (perf_counter() - started_at) * 1000.0,
+        {
+            "path": str(data_path),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "total_count": result.total_count,
+        },
+    )
+    return result
 
 
 def default_job_db_path() -> Path:
@@ -213,6 +270,21 @@ def stop_gui_runtime() -> None:
         _JOB_STORE = None
     if worker is not None and hasattr(worker, "stop"):
         worker.stop()
+
+
+def run_housekeeping_cycle(
+    *,
+    archive_ttl_days: int = 30,
+    purge_ttl_days: int = 90,
+    batch_size: int = 200,
+) -> dict[str, int]:
+    now = datetime.now(UTC)
+    archive_cutoff = (now - timedelta(days=max(1, int(archive_ttl_days)))).isoformat()
+    purge_cutoff = (now - timedelta(days=max(1, int(purge_ttl_days)))).isoformat()
+    store = get_gui_job_store()
+    moved = store.archive_jobs(cutoff_utc=archive_cutoff, batch_size=batch_size)
+    purged = store.purge_archived_jobs(cutoff_utc=purge_cutoff, batch_size=batch_size)
+    return {"archived_jobs": int(moved), "purged_archived_jobs": int(purged)}
 
 
 def _start_worker_if_needed() -> None:
@@ -1119,7 +1191,35 @@ def get_run_job(job_id: str) -> GuiJobRecord | None:
 
 
 def list_run_jobs(*, limit: int = 100, status: str | None = None) -> list[GuiJobRecord]:
-    return get_gui_job_store().list_jobs(limit=limit, status=status)
+    rows, _total = get_gui_job_store().list_jobs_page(
+        limit=limit,
+        offset=0,
+        status=status,
+    )
+    return rows
+
+
+def list_run_jobs_page(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    action: str | None = None,
+    query: str | None = None,
+) -> PaginatedResult[GuiJobRecord]:
+    rows, total_count = get_gui_job_store().list_jobs_page(
+        limit=limit,
+        offset=offset,
+        status=status,
+        action=action,
+        query=query,
+    )
+    return PaginatedResult[GuiJobRecord](
+        items=rows,
+        total_count=total_count,
+        limit=max(1, int(limit)),
+        offset=max(0, int(offset)),
+    )
 
 
 def list_run_job_logs(
@@ -1233,13 +1333,30 @@ def set_run_job_priority(job_id: str, priority: str | GuiJobPriority) -> GuiJobR
 
 
 def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
+    return list_artifacts_page(root_dir=root_dir, limit=10_000, offset=0).items
+
+
+def list_artifacts_page(
+    *,
+    root_dir: str,
+    limit: int = 50,
+    offset: int = 0,
+    query: str | None = None,
+) -> PaginatedResult[ArtifactSummary]:
+    started_at = perf_counter()
     root = Path(_require(root_dir, "root_dir"))
     if not root.exists():
-        return []
+        return PaginatedResult[ArtifactSummary](
+            items=[],
+            total_count=0,
+            limit=max(1, int(limit)),
+            offset=max(0, int(offset)),
+        )
     if not root.is_dir():
         raise VeldraValidationError(f"Artifact root is not a directory: {root}")
 
     summaries: list[ArtifactSummary] = []
+    q = str(query or "").strip().lower()
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
@@ -1248,30 +1365,53 @@ def list_artifacts(root_dir: str) -> list[ArtifactSummary]:
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            summaries.append(
-                ArtifactSummary(
-                    path=str(child),
-                    run_id=str(manifest.get("run_id", child.name)),
-                    task_type=str(manifest.get("task_type", "unknown")),
-                    created_at_utc=(
-                        str(manifest["created_at_utc"])
-                        if manifest.get("created_at_utc") is not None
-                        else None
-                    ),
-                )
+            item = ArtifactSummary(
+                path=str(child),
+                run_id=str(manifest.get("run_id", child.name)),
+                task_type=str(manifest.get("task_type", "unknown")),
+                created_at_utc=(
+                    str(manifest["created_at_utc"])
+                    if manifest.get("created_at_utc") is not None
+                    else None
+                ),
             )
         except Exception:
-            summaries.append(
-                ArtifactSummary(
-                    path=str(child),
-                    run_id=child.name,
-                    task_type="unknown",
-                    created_at_utc=None,
-                )
+            item = ArtifactSummary(
+                path=str(child),
+                run_id=child.name,
+                task_type="unknown",
+                created_at_utc=None,
             )
+        if (
+            not q
+            or q in item.run_id.lower()
+            or q in item.task_type.lower()
+            or q in item.path.lower()
+        ):
+            summaries.append(item)
 
     summaries.sort(key=lambda item: item.created_at_utc or "", reverse=True)
-    return summaries
+    safe_limit = max(1, min(int(limit), 1000))
+    safe_offset = max(0, int(offset))
+    paged = summaries[safe_offset : safe_offset + safe_limit]
+    result = PaginatedResult[ArtifactSummary](
+        items=paged,
+        total_count=len(summaries),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    record_perf_metric(
+        "list_artifacts_page",
+        (perf_counter() - started_at) * 1000.0,
+        {
+            "root_dir": str(root),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "total_count": result.total_count,
+            "query": bool(q),
+        },
+    )
+    return result
 
 
 def list_run_jobs_filtered(
@@ -1281,13 +1421,19 @@ def list_run_jobs_filtered(
     action: str | None = None,
     query: str | None = None,
 ) -> list[GuiJobRecord]:
-    jobs = list_run_jobs(limit=limit, status=(status or None))
-    filtered = jobs
+    page = list_run_jobs_page(
+        limit=limit,
+        offset=0,
+        status=status,
+        action=action,
+        query=query,
+    )
+    filtered = list(page.items)
     if action:
-        action_norm = action.strip().lower()
+        action_norm = str(action).strip().lower()
         filtered = [job for job in filtered if job.action == action_norm]
     if query:
-        q = query.strip().lower()
+        q = str(query).strip().lower()
         filtered = [
             job
             for job in filtered

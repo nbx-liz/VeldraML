@@ -241,3 +241,42 @@ def test_job_store_log_retention_keeps_recent_entries(tmp_path) -> None:
     logs = store.list_job_logs(queued.job_id, limit=store.LOG_RETENTION_PER_JOB)
     assert len(logs) == store.LOG_RETENTION_PER_JOB
     assert any(row.message == "log_retention_applied" for row in logs)
+
+
+def test_job_store_list_jobs_page_filters_and_total(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    fit_1 = store.enqueue_job(RunInvocation(action="fit"))
+    tune_1 = store.enqueue_job(RunInvocation(action="tune"))
+    fit_2 = store.enqueue_job(RunInvocation(action="fit"))
+    store.mark_failed(tune_1.job_id, message="boom", error_kind="validation")
+
+    page, total = store.list_jobs_page(limit=2, offset=0)
+    assert total == 3
+    assert len(page) == 2
+
+    filtered_action, total_action = store.list_jobs_page(limit=10, offset=0, action="fit")
+    assert total_action == 2
+    assert {row.job_id for row in filtered_action} == {fit_1.job_id, fit_2.job_id}
+
+    filtered_status, total_status = store.list_jobs_page(limit=10, offset=0, status="failed")
+    assert total_status == 1
+    assert filtered_status[0].job_id == tune_1.job_id
+
+    filtered_query, total_query = store.list_jobs_page(
+        limit=10, offset=0, query=tune_1.job_id[:8]
+    )
+    assert total_query == 1
+    assert filtered_query[0].job_id == tune_1.job_id
+
+
+def test_job_store_archive_and_purge_contract(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    queued = store.enqueue_job(RunInvocation(action="fit"))
+    done = store.mark_succeeded(queued.job_id, GuiRunResult(success=True, message="ok"))
+    assert done is not None
+    archived = store.archive_jobs(cutoff_utc="9999-01-01T00:00:00+00:00", batch_size=200)
+    assert archived == 1
+    assert store.get_job(queued.job_id) is None
+
+    purged = store.purge_archived_jobs(cutoff_utc="9999-01-01T00:00:00+00:00", batch_size=200)
+    assert purged == 1

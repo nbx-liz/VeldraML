@@ -62,6 +62,9 @@ def layout() -> html.Div:
                 n_intervals=0,
                 disabled=True,
             ),
+            dcc.Store(id="artifact-page", data=0),
+            dcc.Store(id="artifact-page-size", data=50),
+            dcc.Store(id="artifact-total", data=0),
             # Artifact Selection
             html.Div(
                 [
@@ -95,6 +98,59 @@ def layout() -> html.Div:
                                                 color="secondary",
                                             ),
                                         ]
+                                    ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.Input(
+                                                    id="artifact-search",
+                                                    placeholder="Search run_id / task_type",
+                                                ),
+                                                width=6,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Select(
+                                                    id="artifact-page-size-select",
+                                                    options=[
+                                                        {"label": "25", "value": 25},
+                                                        {"label": "50", "value": 50},
+                                                        {"label": "100", "value": 100},
+                                                    ],
+                                                    value=50,
+                                                ),
+                                                width=2,
+                                            ),
+                                            dbc.Col(
+                                                html.Div(
+                                                    id="artifact-page-info",
+                                                    className="small text-muted mt-2",
+                                                ),
+                                                width=2,
+                                            ),
+                                            dbc.Col(
+                                                html.Div(
+                                                    [
+                                                        dbc.Button(
+                                                            "Prev",
+                                                            id="artifact-page-prev-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                            className="me-1",
+                                                        ),
+                                                        dbc.Button(
+                                                            "Next",
+                                                            id="artifact-page-next-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                        ),
+                                                    ]
+                                                ),
+                                                width=2,
+                                            ),
+                                        ],
+                                        className="g-2 mt-2",
                                     ),
                                 ],
                                 width=4,
