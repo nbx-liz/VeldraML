@@ -10,10 +10,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from veldra.gui.types import GuiJobPriority, GuiJobRecord, GuiRunResult, RunInvocation
+from veldra.gui.types import (
+    GuiJobLogRecord,
+    GuiJobPriority,
+    GuiJobRecord,
+    GuiRunResult,
+    RunInvocation,
+)
 
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
 _PRIORITY_TO_INT: dict[GuiJobPriority, int] = {"low": 10, "normal": 50, "high": 90}
+_ALLOWED_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 
 
 def _priority_to_int(priority: str | None) -> int:
@@ -66,6 +73,8 @@ def _row_to_record(row: sqlite3.Row) -> GuiJobRecord:
         updated_at_utc=str(row["updated_at_utc"]),
         invocation=_decode_invocation(str(row["invocation_json"])),
         priority=_priority_from_int(row["priority"]),
+        progress_pct=float(row["progress_pct"]),
+        current_step=(str(row["current_step"]) if row["current_step"] is not None else None),
         cancel_requested=bool(int(row["cancel_requested"])),
         started_at_utc=(str(row["started_at_utc"]) if row["started_at_utc"] is not None else None),
         finished_at_utc=(
@@ -78,6 +87,8 @@ def _row_to_record(row: sqlite3.Row) -> GuiJobRecord:
 
 class GuiJobStore:
     """Persist GUI run jobs in SQLite."""
+
+    LOG_RETENTION_PER_JOB = 10_000
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -102,6 +113,8 @@ class GuiJobStore:
                     updated_at_utc TEXT NOT NULL,
                     invocation_json TEXT NOT NULL,
                     cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    progress_pct REAL NOT NULL DEFAULT 0.0,
+                    current_step TEXT NULL,
                     started_at_utc TEXT NULL,
                     finished_at_utc TEXT NULL,
                     result_json TEXT NULL,
@@ -113,6 +126,24 @@ class GuiJobStore:
             column_names = {str(row["name"]) for row in columns}
             if "priority" not in column_names:
                 conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 50")
+            if "progress_pct" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN progress_pct REAL NOT NULL DEFAULT 0.0")
+            if "current_step" not in column_names:
+                conn.execute("ALTER TABLE jobs ADD COLUMN current_step TEXT NULL")
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS job_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    payload_json TEXT NULL
+                )
+                """
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at_utc)"
             )
@@ -121,6 +152,9 @@ class GuiJobStore:
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority_created
                 ON jobs(status, priority DESC, created_at_utc ASC)
                 """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_logs_job_seq ON job_logs(job_id, seq)"
             )
 
     def enqueue_job(self, invocation: RunInvocation) -> GuiJobRecord:
@@ -131,10 +165,10 @@ class GuiJobStore:
                 """
                 INSERT INTO jobs(
                     job_id, status, action, priority, created_at_utc, updated_at_utc,
-                    invocation_json, cancel_requested, started_at_utc, finished_at_utc,
-                    result_json, error_message
+                    invocation_json, cancel_requested, progress_pct, current_step,
+                    started_at_utc, finished_at_utc, result_json, error_message
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
+                VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0.0, NULL, NULL, NULL, NULL, NULL)
                 """,
                 (
                     job_id,
@@ -174,6 +208,8 @@ class GuiJobStore:
                     UPDATE jobs
                     SET status = 'canceled',
                         cancel_requested = 1,
+                        progress_pct = 100.0,
+                        current_step = 'canceled',
                         updated_at_utc = ?,
                         finished_at_utc = ?
                     WHERE job_id = ?
@@ -186,6 +222,7 @@ class GuiJobStore:
                     UPDATE jobs
                     SET status = 'cancel_requested',
                         cancel_requested = 1,
+                        current_step = 'cancellation_requested',
                         updated_at_utc = ?
                     WHERE job_id = ?
                     """,
@@ -214,6 +251,7 @@ class GuiJobStore:
                 """
                 UPDATE jobs
                 SET status = 'running',
+                    current_step = COALESCE(current_step, 'running'),
                     started_at_utc = COALESCE(started_at_utc, ?),
                     updated_at_utc = ?
                 WHERE job_id = ?
@@ -257,6 +295,7 @@ class GuiJobStore:
                 """
                 UPDATE jobs
                 SET status = 'running',
+                    current_step = COALESCE(current_step, 'running'),
                     started_at_utc = COALESCE(started_at_utc, ?),
                     updated_at_utc = ?
                 WHERE job_id = ?
@@ -272,6 +311,8 @@ class GuiJobStore:
                 """
                 UPDATE jobs
                 SET status = 'succeeded',
+                    progress_pct = 100.0,
+                    current_step = 'completed',
                     updated_at_utc = ?,
                     finished_at_utc = ?,
                     result_json = ?,
@@ -296,6 +337,8 @@ class GuiJobStore:
                 """
                 UPDATE jobs
                 SET status = 'failed',
+                    progress_pct = 100.0,
+                    current_step = 'failed',
                     updated_at_utc = ?,
                     finished_at_utc = ?,
                     result_json = ?,
@@ -315,6 +358,8 @@ class GuiJobStore:
                 UPDATE jobs
                 SET status = 'canceled',
                     cancel_requested = 1,
+                    progress_pct = 100.0,
+                    current_step = 'canceled',
                     updated_at_utc = ?,
                     finished_at_utc = ?,
                     result_json = ?,
@@ -324,6 +369,149 @@ class GuiJobStore:
                 (now, now, json.dumps(asdict(result), ensure_ascii=False), job_id),
             )
         return self.get_job(job_id)
+
+    def update_progress(
+        self,
+        job_id: str,
+        pct: float,
+        step: str | None = None,
+    ) -> GuiJobRecord | None:
+        now = _utcnow_iso()
+        safe_pct = max(0.0, min(float(pct), 100.0))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE jobs
+                SET progress_pct = ?,
+                    current_step = COALESCE(?, current_step),
+                    updated_at_utc = ?
+                WHERE job_id = ?
+                """,
+                (safe_pct, (step or None), now, job_id),
+            )
+            conn.execute("COMMIT")
+        return self.get_job(job_id)
+
+    def append_job_log(
+        self,
+        job_id: str,
+        *,
+        level: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        now = _utcnow_iso()
+        safe_level = str(level or "INFO").strip().upper()
+        if safe_level not in _ALLOWED_LOG_LEVELS:
+            safe_level = "INFO"
+        safe_message = str(message or "").strip()
+        if not safe_message:
+            safe_message = "(empty log)"
+        payload_json = json.dumps(payload or {}, ensure_ascii=False)
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM job_logs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            current_count = int(current["cnt"]) if current is not None else 0
+            dropped = 0
+            if current_count + 1 > self.LOG_RETENTION_PER_JOB:
+                needed_entries = 2
+                dropped = (current_count + needed_entries) - self.LOG_RETENTION_PER_JOB
+                conn.execute(
+                    """
+                    DELETE FROM job_logs
+                    WHERE id IN (
+                        SELECT id
+                        FROM job_logs
+                        WHERE job_id = ?
+                        ORDER BY seq ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (job_id, dropped),
+                )
+
+            seq_row = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM job_logs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            seq = int(seq_row["max_seq"]) + 1 if seq_row is not None else 1
+            if dropped > 0:
+                meta_payload = json.dumps({"dropped_count": dropped}, ensure_ascii=False)
+                conn.execute(
+                    """
+                    INSERT INTO job_logs(job_id, seq, created_at_utc, level, message, payload_json)
+                    VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (job_id, seq, now, "WARNING", "log_retention_applied", meta_payload),
+                )
+                seq += 1
+
+            conn.execute(
+                """
+                INSERT INTO job_logs(job_id, seq, created_at_utc, level, message, payload_json)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, seq, now, safe_level, safe_message, payload_json),
+            )
+            conn.execute("COMMIT")
+
+    def list_job_logs(
+        self,
+        job_id: str,
+        *,
+        limit: int = 200,
+        after_seq: int | None = None,
+    ) -> list[GuiJobLogRecord]:
+        safe_limit = max(1, min(int(limit), self.LOG_RETENTION_PER_JOB))
+        with self._connect() as conn:
+            if after_seq is None:
+                rows = conn.execute(
+                    """
+                    SELECT job_id, seq, created_at_utc, level, message, payload_json
+                    FROM job_logs
+                    WHERE job_id = ?
+                    ORDER BY seq DESC
+                    LIMIT ?
+                    """,
+                    (job_id, safe_limit),
+                ).fetchall()
+                rows = list(reversed(rows))
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT job_id, seq, created_at_utc, level, message, payload_json
+                    FROM job_logs
+                    WHERE job_id = ? AND seq > ?
+                    ORDER BY seq ASC
+                    LIMIT ?
+                    """,
+                    (job_id, int(after_seq), safe_limit),
+                ).fetchall()
+        return [self._row_to_log_record(row) for row in rows]
+
+    def _row_to_log_record(self, row: sqlite3.Row) -> GuiJobLogRecord:
+        raw_payload = row["payload_json"]
+        payload: dict[str, Any] = {}
+        if raw_payload is not None:
+            try:
+                decoded = json.loads(str(raw_payload))
+                if isinstance(decoded, dict):
+                    payload = decoded
+            except Exception:
+                payload = {"raw": str(raw_payload)}
+        return GuiJobLogRecord(
+            job_id=str(row["job_id"]),
+            seq=int(row["seq"]),
+            created_at_utc=str(row["created_at_utc"]),
+            level=str(row["level"]),
+            message=str(row["message"]),
+            payload=payload,
+        )
 
     def get_job(self, job_id: str) -> GuiJobRecord | None:
         with self._connect() as conn:
@@ -370,6 +558,10 @@ class GuiJobStore:
             return 0
         placeholders = ",".join("?" for _ in ids)
         with self._connect() as conn:
+            conn.execute(
+                f"DELETE FROM job_logs WHERE job_id IN ({placeholders})",
+                tuple(ids),
+            )
             cur = conn.execute(
                 f"DELETE FROM jobs WHERE job_id IN ({placeholders})",
                 tuple(ids),

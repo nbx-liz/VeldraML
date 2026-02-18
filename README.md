@@ -623,6 +623,8 @@ GUI run behavior:
 - `/run` enqueues jobs asynchronously and keeps history in SQLite.
 - `/run` supports queue priority (`high`/`normal`/`low`) and queued-job reprioritization.
 - Job scheduling is strict priority (`high > normal > low`, FIFO within same priority).
+- `/run` shows real-time progress (`progress_pct`/`current_step`) and per-job streaming logs.
+- job logs are persisted in SQLite (`job_logs`) with retention cap `10,000` lines per job.
 - queued jobs can be canceled immediately.
 - running jobs support best-effort cancellation (`cancel_requested`) and may still complete.
 - Main GUI flow is `/data`, `/target`, `/validation`, `/train`, `/run`, `/results`.

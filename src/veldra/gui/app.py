@@ -29,6 +29,7 @@ from veldra.gui.components.guardrail import render_guardrails
 from veldra.gui.components.help_texts import HELP_TEXTS
 from veldra.gui.components.help_ui import context_card, guide_alert, recommendation_badge
 from veldra.gui.components.kpi_cards import kpi_card
+from veldra.gui.components.progress_viewer import render_progress_viewer
 from veldra.gui.components.task_table import task_table
 from veldra.gui.components.toast import make_toast, toast_container
 from veldra.gui.components.yaml_diff import render_yaml_diff
@@ -52,6 +53,7 @@ from veldra.gui.services import (
     infer_task_type,
     inspect_data,
     list_artifacts,
+    list_run_job_logs,
     list_run_jobs,
     list_run_jobs_filtered,
     load_config_yaml,
@@ -1143,9 +1145,13 @@ def create_app() -> dash.Dash:
         Output("run-cancel-job-btn", "disabled"),
         Output("selected-job-id-display", "children"),
         Output("run-job-select", "data"),  # Store selection
+        Output("run-log-limit", "data"),
         Input("run-jobs-table", "selected_rows"),
+        Input("run-jobs-interval", "n_intervals"),
+        Input("run-log-load-more-btn", "n_clicks"),
         State("run-jobs-table", "data"),
         State("run-job-select", "data"),
+        State("run-log-limit", "data"),
         prevent_initial_call=True,
     )(_cb_show_selected_job_detail)
 
@@ -2688,6 +2694,7 @@ def _cb_refresh_run_jobs(
             "job_id": job.job_id,
             "action": job.action,
             "priority": job.priority.upper(),
+            "progress": f"{float(job.progress_pct):.1f}% | {job.current_step or '-'}",
             "status": _status_badge(job.status),
             "created_at_utc": _format_jst_timestamp(job.created_at_utc),
             "id": job.job_id,
@@ -2699,26 +2706,41 @@ def _cb_refresh_run_jobs(
 
 def _cb_show_selected_job_detail(
     selected_rows: list[int] | None,
+    _n_intervals: int,
+    _load_more_clicks: int,
     data: list[dict] | None,
     selected_job_id: str | None,
-) -> tuple[str, bool, str, str | None]:
+    current_log_limit: int | None,
+) -> tuple[Any, bool, str, str | None, int]:
     if not data:
-        return "Select a job to view details.", True, "", selected_job_id
+        return "Select a job to view details.", True, "", selected_job_id, 200
+
+    next_log_limit = max(50, int(current_log_limit or 200))
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = str(callback_context.triggered[0]["prop_id"]).split(".")[0]
+    except Exception:
+        triggered = ""
+    if triggered == "run-log-load-more-btn":
+        next_log_limit = min(next_log_limit + 200, 10_000)
+    elif triggered == "run-jobs-table":
+        next_log_limit = 200
 
     job_id = selected_job_id
     if selected_rows:
         row_idx = selected_rows[0]
         if row_idx >= len(data):
-            return "Job not found.", True, "", selected_job_id
+            return "Job not found.", True, "", selected_job_id, next_log_limit
         job_id = data[row_idx]["job_id"]
 
     if not job_id:
-        return "Select a job to view details.", True, "", None
+        return "Select a job to view details.", True, "", None, next_log_limit
 
     job = get_run_job(job_id)
 
     if not job:
-        return "Job details unavailable.", True, "", selected_job_id
+        return "Job details unavailable.", True, "", selected_job_id, next_log_limit
 
     can_cancel = job.status in ["queued", "running"]
     status_color = "primary"
@@ -2743,6 +2765,14 @@ def _cb_show_selected_job_detail(
             [
                 html.Span("Priority: ", className="fw-bold"),
                 html.Span(job.priority.upper()),
+            ],
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Span("Progress: ", className="fw-bold"),
+                html.Span(f"{float(job.progress_pct):.1f}%"),
+                html.Span(f" | {job.current_step or 'n/a'}", className="text-muted ms-2"),
             ],
             className="mb-2",
         ),
@@ -2787,9 +2817,23 @@ def _cb_show_selected_job_detail(
             )
         )
 
+    logs = list_run_job_logs(job.job_id, limit=next_log_limit)
+    details_elems.append(
+        html.Label("Live Logs", className="fw-bold mt-3")
+    )
+    details_elems.append(
+        render_progress_viewer(
+            progress_pct=job.progress_pct,
+            current_step=job.current_step,
+            logs=logs,
+            log_limit=next_log_limit,
+            log_total=len(logs),
+        )
+    )
+
     details = html.Div(details_elems, className="p-2")
 
-    return details, not can_cancel, f"Selected: {job_id}", job_id
+    return details, not can_cancel, f"Selected: {job_id}", job_id, next_log_limit
 
 
 def _cb_cancel_job(_n_clicks: int, job_id: str | None) -> str:

@@ -68,9 +68,20 @@ class GuiWorker:
                 status="running",
                 action=claimed.action,
             )
+            self._store.update_progress(claimed.job_id, 1.0, step="started")
+            self._store.append_job_log(
+                claimed.job_id,
+                level="INFO",
+                message="worker_started",
+                payload={"worker": self._worker_name, "action": claimed.action},
+            )
 
             try:
-                result = run_action(claimed.invocation)
+                result = run_action(
+                    claimed.invocation,
+                    job_id=claimed.job_id,
+                    job_store=self._store,
+                )
             except Exception as exc:  # pragma: no cover - defensive branch.
                 updated = self._store.mark_failed(
                     claimed.job_id,
@@ -93,11 +104,23 @@ class GuiWorker:
 
             if result.success:
                 updated = self._store.mark_succeeded(claimed.job_id, result)
+                self._store.append_job_log(
+                    claimed.job_id,
+                    level="INFO",
+                    message="worker_completed",
+                    payload={"status": "succeeded"},
+                )
             else:
                 updated = self._store.mark_failed(
                     claimed.job_id,
                     message=result.message,
                     payload=result.payload,
+                )
+                self._store.append_job_log(
+                    claimed.job_id,
+                    level="ERROR",
+                    message="worker_completed",
+                    payload={"status": "failed", "error": result.message},
                 )
 
             if updated is not None:

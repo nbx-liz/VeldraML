@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -674,10 +675,92 @@ def _to_safe_dict(value: Any) -> dict[str, Any]:
         return value
     return {"value": repr(value)}
 
+@dataclass(slots=True)
+class _RunActionContext:
+    job_id: str | None = None
+    job_store: GuiJobStore | None = None
+    action: str | None = None
+    tune_total_trials: int | None = None
 
-def run_action(invocation: RunInvocation) -> GuiRunResult:
+    def update_progress(self, pct: float, step: str) -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        self.job_store.update_progress(self.job_id, pct, step=step)
+
+    def append_log(
+        self,
+        *,
+        level: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if not self.job_id or self.job_store is None:
+            return
+        self.job_store.append_job_log(
+            self.job_id,
+            level=level,
+            message=message,
+            payload=payload,
+        )
+
+    def on_runner_payload(self, level: str, message: str, payload: dict[str, Any]) -> None:
+        self.append_log(level=level, message=message, payload=payload)
+        if (
+            self.action == "tune"
+            and self.tune_total_trials is not None
+            and self.tune_total_trials > 0
+            and "n_trials_done" in payload
+        ):
+            done = int(payload.get("n_trials_done", 0))
+            total = int(self.tune_total_trials)
+            pct = 20.0 + (70.0 * max(0, min(done, total)) / float(total))
+            self.update_progress(pct, f"tuning_trials_{done}/{total}")
+
+
+class _RunnerLogCapture(logging.Handler):
+    def __init__(self, context: _RunActionContext) -> None:
+        super().__init__()
+        self._context = context
+
+    def emit(self, record: logging.LogRecord) -> None:
+        payload: dict[str, Any] = {}
+        raw = record.getMessage()
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except Exception:
+            payload = {"raw": raw}
+        message = str(getattr(record, "event_message", "runner_event"))
+        self._context.on_runner_payload(record.levelname, message, payload)
+
+
+@contextmanager
+def _capture_runner_logs(context: _RunActionContext):
+    logger = logging.getLogger("veldra")
+    handler = _RunnerLogCapture(context)
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+
+
+def run_action(
+    invocation: RunInvocation,
+    *,
+    job_id: str | None = None,
+    job_store: GuiJobStore | None = None,
+) -> GuiRunResult:
     try:
         action = invocation.action.strip().lower()
+        context = _RunActionContext(
+            job_id=job_id,
+            job_store=job_store,
+            action=action,
+        )
+        context.update_progress(5.0, "validating")
+        context.append_log(level="INFO", message="action_started", payload={"action": action})
         if action not in {
             "fit",
             "evaluate",
@@ -691,51 +774,99 @@ def run_action(invocation: RunInvocation) -> GuiRunResult:
             raise VeldraValidationError(f"Unsupported action '{invocation.action}'.")
 
         if action == "fit":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("fit")(config)
+            context.update_progress(20.0, "fit_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("fit")(config)
+            context.update_progress(95.0, "fit_finalize")
         elif action == "tune":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("tune")(config)
+            context.tune_total_trials = int(config.tuning.n_trials)
+            context.update_progress(20.0, "tune_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("tune")(config)
+            context.update_progress(95.0, "tune_finalize")
         elif action == "estimate_dr":
+            context.update_progress(12.0, "load_config")
             config = _resolve_config(invocation)
-            result = _get_runner_func("estimate_dr")(config)
+            context.update_progress(20.0, "estimate_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("estimate_dr")(config)
+            context.update_progress(95.0, "estimate_finalize")
         elif action == "evaluate":
+            context.update_progress(12.0, "load_data")
             data_path = _require(invocation.data_path, "data_path")
             frame = _get_load_tabular_data()(data_path)
             if invocation.artifact_path and invocation.artifact_path.strip():
+                context.update_progress(30.0, "load_artifact")
                 artifact = Artifact.load(invocation.artifact_path.strip())
-                result = _get_runner_func("evaluate")(artifact, frame)
+                context.update_progress(45.0, "evaluate_running")
+                with _capture_runner_logs(context):
+                    result = _get_runner_func("evaluate")(artifact, frame)
             else:
+                context.update_progress(30.0, "load_config")
                 config = _resolve_config(invocation)
-                result = _get_runner_func("evaluate")(config, frame)
+                context.update_progress(45.0, "evaluate_running")
+                with _capture_runner_logs(context):
+                    result = _get_runner_func("evaluate")(config, frame)
+            context.update_progress(95.0, "evaluate_finalize")
         elif action == "simulate":
+            context.update_progress(12.0, "load_inputs")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             data_path = _require(invocation.data_path, "data_path")
             scenarios_path = _require(invocation.scenarios_path, "scenarios_path")
             artifact = Artifact.load(artifact_path)
             frame = _get_load_tabular_data()(data_path)
             scenarios = _load_scenarios(scenarios_path)
-            result = _get_runner_func("simulate")(artifact, frame, scenarios)
+            context.update_progress(45.0, "simulate_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("simulate")(artifact, frame, scenarios)
+            context.update_progress(95.0, "simulate_finalize")
         elif action == "export_excel":
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.update_progress(55.0, "export_excel_running")
             output_path = export_excel_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.update_progress(95.0, "export_excel_finalize")
         elif action == "export_html_report":
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
+            context.update_progress(55.0, "export_html_running")
             output_path = export_html_report(artifact_path)
             result = {"artifact_path": artifact_path, "output_path": output_path}
+            context.update_progress(95.0, "export_html_finalize")
         else:
+            context.update_progress(15.0, "load_artifact")
             artifact_path = _require(invocation.artifact_path, "artifact_path")
             artifact = Artifact.load(artifact_path)
             export_format = (invocation.export_format or "python").strip().lower()
-            result = _get_runner_func("export")(artifact, format=export_format)
+            context.update_progress(55.0, "export_running")
+            with _capture_runner_logs(context):
+                result = _get_runner_func("export")(artifact, format=export_format)
+            context.update_progress(95.0, "export_finalize")
 
+        context.update_progress(100.0, "completed")
+        context.append_log(level="INFO", message="action_completed", payload={"action": action})
         return GuiRunResult(
             success=True,
             message=f"{action} completed successfully.",
             payload=_result_to_payload(result),
         )
     except Exception as exc:
+        if job_id and job_store is not None:
+            context = _RunActionContext(
+                job_id=job_id,
+                job_store=job_store,
+                action=invocation.action,
+            )
+            context.append_log(
+                level="ERROR",
+                message="action_failed",
+                payload={"error": normalize_gui_error(exc)},
+            )
         return GuiRunResult(success=False, message=normalize_gui_error(exc), payload={})
 
 
@@ -767,6 +898,30 @@ def get_run_job(job_id: str) -> GuiJobRecord | None:
 
 def list_run_jobs(*, limit: int = 100, status: str | None = None) -> list[GuiJobRecord]:
     return get_gui_job_store().list_jobs(limit=limit, status=status)
+
+
+def list_run_job_logs(
+    job_id: str,
+    *,
+    limit: int = 200,
+    after_seq: int | None = None,
+) -> list[dict[str, Any]]:
+    records = get_gui_job_store().list_job_logs(
+        _require(job_id, "job_id"),
+        limit=limit,
+        after_seq=after_seq,
+    )
+    return [
+        {
+            "job_id": row.job_id,
+            "seq": row.seq,
+            "created_at_utc": row.created_at_utc,
+            "level": row.level,
+            "message": row.message,
+            "payload": row.payload,
+        }
+        for row in records
+    ]
 
 
 def cancel_run_job(job_id: str) -> GuiJobResult:

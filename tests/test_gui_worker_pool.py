@@ -20,7 +20,7 @@ def test_worker_pool_processes_jobs_without_loss(monkeypatch, tmp_path) -> None:
     store = GuiJobStore(tmp_path / "jobs.sqlite3")
     monkeypatch.setattr(
         "veldra.gui.worker.run_action",
-        lambda _inv: GuiRunResult(success=True, message="done", payload={}),
+        lambda _inv, **_kw: GuiRunResult(success=True, message="done", payload={}),
     )
     pool = GuiWorkerPool(store, worker_count=3, poll_interval_sec=0.05)
     pool.start()
@@ -55,7 +55,7 @@ def test_worker_pool_worker_count_one_is_supported(monkeypatch, tmp_path) -> Non
     store = GuiJobStore(tmp_path / "jobs.sqlite3")
     monkeypatch.setattr(
         "veldra.gui.worker.run_action",
-        lambda _inv: GuiRunResult(success=False, message="bad", payload={}),
+        lambda _inv, **_kw: GuiRunResult(success=False, message="bad", payload={}),
     )
     pool = GuiWorkerPool(store, worker_count=1, poll_interval_sec=0.05)
     pool.start()

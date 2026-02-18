@@ -52,11 +52,23 @@ class GuiJobRecord:
     updated_at_utc: str
     invocation: RunInvocation
     priority: GuiJobPriority = "normal"
+    progress_pct: float = 0.0
+    current_step: str | None = None
     cancel_requested: bool = False
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
     result: GuiRunResult | None = None
     error_message: str | None = None
+
+
+@dataclass(slots=True)
+class GuiJobLogRecord:
+    job_id: str
+    seq: int
+    created_at_utc: str
+    level: str
+    message: str
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

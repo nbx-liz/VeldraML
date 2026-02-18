@@ -1585,3 +1585,33 @@
 - `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_server.py tests/test_gui_run_page.py tests/test_gui_pages_and_init.py tests/test_gui_app_job_flow.py tests/test_gui_services_edge_cases.py tests/test_gui_run_async.py tests/test_gui_app_callbacks_internal.py tests/test_new_ux.py` を実施（`41 passed`）。
 - `uv run pytest -q tests/e2e_playwright/test_uc01_regression_flow.py -m gui_e2e` を実施（`1 passed`）。
 - `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`182 passed`）。
+
+### 2026-02-18（作業/PR: phase28-realtime-progress-and-streaming-logs）
+**背景**
+- Phase27 時点の GUI run queue は状態遷移（queued/running/succeeded/failed）のみで、実行中ジョブの進捗とログ可視性が不足していた。
+- Core/API 契約を維持したまま、GUI adapter 層だけでリアルタイム観測性を強化する必要があった。
+
+**変更内容**
+- `GuiJobRecord` に `progress_pct` / `current_step` を追加し、`GuiJobStore` の `jobs` テーブルへ後方互換 migration を実装。
+- `job_logs` テーブル（`job_id`, `seq`, `created_at_utc`, `level`, `message`, `payload_json`）を新設し、`append_job_log` / `list_job_logs` / `update_progress` を実装。
+- ログ保持上限を 10,000 行/job とし、上限超過時は古いログを FIFO で削除して `log_retention_applied` を記録。
+- `run_action` に job 文脈（`job_id`, `job_store`）を導入し、action別ステップ進捗と失敗ログを永続化。
+- `tune` 実行では runner trial 完了ログ（`n_trials_done`）を取り込み、`n_trials` ベースで進捗率を更新。
+- `GuiWorker` で started/completed ログ記録と進捗初期化を追加。
+- Run UI を更新し、ジョブテーブルに Progress 列、Job detail に `progress_viewer`（進捗バー + レベル色分けログ + Load More）を追加。
+- `README.md` / `DESIGN_BLUEPRINT.md` を Phase28 実装状態へ同期。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase28 は polling 継続（`run-jobs-interval`）+ SQLite 永続化で実装し、WebSocket/SSE は導入しない。
+  - 理由: 既存GUI契約を壊さず最小変更で可視化を強化できるため。
+  - 影響範囲: `src/veldra/gui/{job_store.py,services.py,worker.py,app.py,pages/run_page.py,components/progress_viewer.py}`
+- Decision: confirmed（確定）
+  - 内容: 上記方式で実装を完了し、ログ保持上限は 10,000 行/job（FIFO削除）で固定する。
+  - 理由: UI応答性とDB肥大抑制を両立しつつ、運用に必要な履歴を維持できるため。
+  - 影響範囲: `src/veldra/gui/{types.py,job_store.py,services.py,worker.py,app.py,pages/run_page.py,components/task_table.py,components/progress_viewer.py}`, `tests/test_gui_*`, `README.md`, `DESIGN_BLUEPRINT.md`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/job_store.py src/veldra/gui/services.py src/veldra/gui/worker.py src/veldra/gui/components/task_table.py src/veldra/gui/components/progress_viewer.py src/veldra/gui/pages/run_page.py src/veldra/gui/app.py tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py` を通過。
+- `uv run pytest -q tests/test_gui_job_store.py tests/test_gui_worker.py tests/test_gui_worker_pool.py tests/test_gui_app_job_flow.py tests/test_gui_app_additional_branches.py tests/test_gui_phase26_1.py tests/test_gui_run_page.py tests/test_gui_services_run_dispatch.py tests/test_gui_services_core.py` を実施（`51 passed`）。
+- `uv run pytest -q tests/test_gui_* tests/test_new_ux.py` を実施（`184 passed`）。

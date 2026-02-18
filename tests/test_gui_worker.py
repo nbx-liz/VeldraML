@@ -20,7 +20,7 @@ def test_worker_processes_job_success(monkeypatch, tmp_path) -> None:
     store = GuiJobStore(tmp_path / "jobs.sqlite3")
     monkeypatch.setattr(
         "veldra.gui.worker.run_action",
-        lambda _inv: GuiRunResult(success=True, message="done", payload={"x": 1}),
+        lambda _inv, **_kw: GuiRunResult(success=True, message="done", payload={"x": 1}),
     )
     worker = GuiWorker(store, poll_interval_sec=0.05)
     worker.start()
@@ -40,7 +40,7 @@ def test_worker_processes_job_failure(monkeypatch, tmp_path) -> None:
     store = GuiJobStore(tmp_path / "jobs.sqlite3")
     monkeypatch.setattr(
         "veldra.gui.worker.run_action",
-        lambda _inv: GuiRunResult(success=False, message="bad", payload={"reason": "x"}),
+        lambda _inv, **_kw: GuiRunResult(success=False, message="bad", payload={"reason": "x"}),
     )
     worker = GuiWorker(store, poll_interval_sec=0.05)
     worker.start()

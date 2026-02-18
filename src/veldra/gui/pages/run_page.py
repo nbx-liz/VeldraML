@@ -345,19 +345,17 @@ def layout(state: dict | None = None) -> html.Div:
                                         ],
                                         className="mb-3",
                                     ),
-                                    html.Pre(
-                                        id="run-job-detail",
-                                        style={
-                                            "height": "250px",
-                                            "overflowY": "auto",
-                                            "backgroundColor": "#0d0d0d",
-                                            "padding": "12px",
-                                            "borderRadius": "8px",
-                                            "border": "1px solid rgba(148, 163, 184, 0.1)",
-                                        },
+                                    dbc.Button(
+                                        "Load More Logs",
+                                        id="run-log-load-more-btn",
+                                        color="secondary",
+                                        size="sm",
+                                        className="mb-2",
                                     ),
+                                    html.Div(id="run-job-detail", className="small"),
                                     # Hidden store for selection state
                                     dcc.Store(id="run-job-select"),
+                                    dcc.Store(id="run-log-limit", data=200),
                                 ],
                                 className="glass-card h-100",
                             )

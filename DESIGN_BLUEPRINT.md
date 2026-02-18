@@ -562,6 +562,25 @@ pytest tests/ -v --tb=short
 
 ---
 
+### 実装結果（2026-02-18）
+* `GuiJobRecord` に `progress_pct` / `current_step` を追加し、`jobs` テーブルへ後方互換 migration を実装。
+* `job_logs` テーブル（`seq`順）を追加し、`append_job_log` / `list_job_logs` / `update_progress` を `GuiJobStore` に実装。
+* `run_action()` は `job_id` + `job_store` を受ける内部経路を追加し、action別ステップ進捗と失敗ログを永続化。
+* `tune` 実行時は runner の trial 完了ログ（`n_trials_done`）を取り込み、進捗率を段階更新。
+* `GuiWorker` は started/completed のジョブログ記録と進捗初期化を実装。
+* Run 画面は Progress 列を追加し、Job detail を `progress_viewer` ベース（進捗バー + level色分けログ）へ更新。
+* ログ上限は 10,000 行/job を採用し、超過時は古いログを削除して `log_retention_applied` を記録。
+
+### Decision（要点）
+* Decision: confirmed
+  * 内容: Phase28 は polling 継続（`run-jobs-interval`）+ SQLite 永続化で進捗/ログ可視化を実装し、WebSocket/SSE は導入しない。
+  * 理由: 既存GUI契約を維持しつつ、最小変更で運用可視性を高めるため。
+* Decision: confirmed
+  * 内容: ログ保持上限は 10,000 行/job とし、超過時は FIFO で古い行を削除する。
+  * 理由: UI応答性とDB肥大抑制を両立するため。
+
+---
+
 ### 対象ファイル
 * `src/veldra/gui/job_store.py` - 進捗追跡スキーマと更新メソッド
 * `src/veldra/gui/services.py` - `run_action` 内の進捗コールバック実装

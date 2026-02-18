@@ -14,6 +14,7 @@ def test_job_store_enqueue_claim_and_complete(tmp_path) -> None:
     queued = store.enqueue_job(RunInvocation(action="fit", config_yaml="config_version: 1\n"))
     assert queued.status == "queued"
     assert queued.priority == "normal"
+    assert queued.progress_pct == 0.0
 
     claimed = store.claim_next_job()
     assert claimed is not None
@@ -28,6 +29,8 @@ def test_job_store_enqueue_claim_and_complete(tmp_path) -> None:
     assert done.status == "succeeded"
     assert done.result is not None
     assert done.result.payload["k"] == 1
+    assert done.progress_pct == 100.0
+    assert done.current_step == "completed"
     assert len(store.list_jobs()) >= 1
 
 
@@ -172,3 +175,48 @@ def test_job_store_migrates_legacy_schema_with_missing_priority(tmp_path) -> Non
     store = GuiJobStore(db_path)
     queued = store.enqueue_job(RunInvocation(action="fit"))
     assert queued.priority == "normal"
+    assert queued.progress_pct == 0.0
+
+
+def test_job_store_update_progress_and_logs(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    queued = store.enqueue_job(RunInvocation(action="fit"))
+
+    updated = store.update_progress(queued.job_id, 42.5, step="train_fold_1")
+    assert updated is not None
+    assert updated.progress_pct == 42.5
+    assert updated.current_step == "train_fold_1"
+
+    store.append_job_log(
+        queued.job_id,
+        level="info",
+        message="started",
+        payload={"x": 1},
+    )
+    store.append_job_log(
+        queued.job_id,
+        level="error",
+        message="failed",
+        payload={"reason": "boom"},
+    )
+    logs = store.list_job_logs(queued.job_id, limit=10)
+    assert len(logs) == 2
+    assert logs[0].message == "started"
+    assert logs[1].level == "ERROR"
+
+
+def test_job_store_log_retention_keeps_recent_entries(tmp_path) -> None:
+    store = GuiJobStore(tmp_path / "jobs.sqlite3")
+    queued = store.enqueue_job(RunInvocation(action="fit"))
+
+    for idx in range(store.LOG_RETENTION_PER_JOB + 5):
+        store.append_job_log(
+            queued.job_id,
+            level="INFO",
+            message=f"line_{idx}",
+            payload={"i": idx},
+        )
+
+    logs = store.list_job_logs(queued.job_id, limit=store.LOG_RETENTION_PER_JOB)
+    assert len(logs) == store.LOG_RETENTION_PER_JOB
+    assert any(row.message == "log_retention_applied" for row in logs)

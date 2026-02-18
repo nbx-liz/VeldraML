@@ -86,25 +86,32 @@ def test_refresh_run_jobs_transition_and_redirect(monkeypatch) -> None:
 
 
 def test_show_selected_job_detail_branches(monkeypatch) -> None:
-    assert app_module._cb_show_selected_job_detail(None, None, None)[0].startswith("Select")
-    assert "not found" in app_module._cb_show_selected_job_detail([9], [{"job_id": "j1"}], None)[0]
-    assert app_module._cb_show_selected_job_detail([0], [{"job_id": "j1"}], None)[1] is True
+    monkeypatch.setattr(app_module, "list_run_job_logs", lambda _job_id, limit=200: [])
+    assert app_module._cb_show_selected_job_detail(None, 0, 0, None, None, 200)[0].startswith(
+        "Select"
+    )
+    assert "not found" in app_module._cb_show_selected_job_detail(
+        [9], 0, 0, [{"job_id": "j1"}], None, 200
+    )[0]
+    assert app_module._cb_show_selected_job_detail([0], 0, 0, [{"job_id": "j1"}], None, 200)[
+        1
+    ] is True
 
     monkeypatch.setattr(app_module, "get_run_job", lambda _jid: None)
-    assert "unavailable" in app_module._cb_show_selected_job_detail([0], [{"job_id": "j1"}], None)[
-        0
-    ]
+    assert "unavailable" in app_module._cb_show_selected_job_detail(
+        [0], 0, 0, [{"job_id": "j1"}], None, 200
+    )[0]
 
     job = _job("j1", "failed", error_message="boom")
     monkeypatch.setattr(app_module, "get_run_job", lambda _jid: job)
-    detail = app_module._cb_show_selected_job_detail([0], [{"job_id": "j1"}], None)
+    detail = app_module._cb_show_selected_job_detail([0], 0, 0, [{"job_id": "j1"}], None, 200)
     assert "FAILED" in str(detail[0])
     assert "boom" in str(detail[0])
     assert detail[1] is True
 
     running_job = _job("j2", "running")
     monkeypatch.setattr(app_module, "get_run_job", lambda _jid: running_job)
-    detail2 = app_module._cb_show_selected_job_detail([0], [{"job_id": "j2"}], None)
+    detail2 = app_module._cb_show_selected_job_detail([0], 0, 0, [{"job_id": "j2"}], None, 200)
     assert detail2[1] is False
 
 

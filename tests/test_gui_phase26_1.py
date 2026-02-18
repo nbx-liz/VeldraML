@@ -67,7 +67,10 @@ def test_show_selected_job_detail_uses_n_a_for_missing_timestamps(monkeypatch) -
         "get_run_job",
         lambda _job_id: _job(job_id="run-2", status="queued"),
     )
-    detail, _, _, _ = app_module._cb_show_selected_job_detail([0], [{"job_id": "run-2"}], None)
+    monkeypatch.setattr(app_module, "list_run_job_logs", lambda _job_id, limit=200: [])
+    detail, _, _, _, _ = app_module._cb_show_selected_job_detail(
+        [0], 0, 0, [{"job_id": "run-2"}], None, 200
+    )
     text = str(detail)
     assert text.count("n/a") >= 2
 

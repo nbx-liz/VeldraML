@@ -313,12 +313,13 @@ def test_show_job_detail_payload_and_status(monkeypatch) -> None:
         result=GuiRunResult(True, "ok", {"x": 1}),
     )
     monkeypatch.setattr(app_module, "get_run_job", lambda _jid: succeeded)
+    monkeypatch.setattr(app_module, "list_run_job_logs", lambda _job_id, limit=200: [])
 
-    detail = app_module._cb_show_selected_job_detail(None, [{"job_id": "j-ok"}], "j-ok")
+    detail = app_module._cb_show_selected_job_detail(None, 0, 0, [{"job_id": "j-ok"}], "j-ok", 200)
     assert "SUCCEEDED" in str(detail[0])
     assert "Result Payload" in str(detail[0])
 
-    no_job = app_module._cb_show_selected_job_detail(None, [{"job_id": "j-ok"}], None)
+    no_job = app_module._cb_show_selected_job_detail(None, 0, 0, [{"job_id": "j-ok"}], None, 200)
     assert no_job[0].startswith("Select a job")
 
 
