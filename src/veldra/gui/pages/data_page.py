@@ -5,6 +5,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
 from veldra.gui.components.kpi_cards import kpi_card
 
 try:
@@ -17,6 +18,7 @@ def layout() -> html.Div:
     return html.Div(
         [
             html.H2("Data Selection", className="mb-4"),
+            guided_mode_banner("data"),
             # File Selection Area
             html.Div(
                 [

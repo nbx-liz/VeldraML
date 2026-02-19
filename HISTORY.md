@@ -1889,3 +1889,32 @@
 - `uv run ruff check src/veldra/gui/types.py src/veldra/gui/services.py src/veldra/gui/components/studio_parts.py src/veldra/gui/pages/studio_page.py src/veldra/gui/pages/runs_page.py src/veldra/gui/app.py tests/test_gui_studio.py tests/test_gui_services_core.py tests/test_gui_services_edge_cases.py tests/test_gui_services_run_dispatch.py DESIGN_BLUEPRINT.md HISTORY.md` を通過。
 - `uv run pytest -q tests/test_gui_studio.py tests/test_gui_services_core.py tests/test_gui_services_edge_cases.py tests/test_gui_services_run_dispatch.py` を実施（`32 passed`）。
 - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`753 passed, 15 deselected`）。
+
+### 2026-02-19（作業/PR: phase34-3-guided-mode-clarification）
+**背景**
+- `/studio` の追加と推論モード実装により高速導線は成立したが、既存ページ群を Guided Mode として明示する UI 契約が未固定だった。
+- 既存 URL 互換を維持したまま、初心者導線と高速導線を同時に提供する Phase34.3 の最終整理が必要だった。
+
+**変更内容**
+- `src/veldra/gui/components/guided_mode_banner.py` を新規追加し、Guided バナー（英語文言 + `Open Studio` ボタン + ページ別 ID）を共通化した。
+- 既存 9 ページ（`data_page.py`, `target_page.py`, `config_page.py`, `validation_page.py`, `train_page.py`, `run_page.py`, `results_page.py`, `runs_page.py`, `compare_page.py`）の見出し直下にバナーを追加した。
+- `src/veldra/gui/assets/style.css` に `.guided-mode-banner` の最小スタイル（余白/境界/ボタン強調）を追加した。
+- 新規 `tests/test_gui_guided_mode_pages.py` を追加し、9ページでのバナー存在・`/studio` 導線・`/studio` ページ非表示を契約化した。
+- `tests/test_gui_app_helpers.py` を更新し、`_sidebar()` の `Studio Mode` / `Guided Mode` / `Operations` 3区分ラベル維持を契約化した。
+- `DESIGN_BLUEPRINT.md` の Phase34.3 節へ実装方針確定/実装確定内容を追記した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Guided バナーは既存 9 ページ（`/data`, `/target`, `/config`, `/validation`, `/train`, `/run`, `/results`, `/runs`, `/compare`）へ共通適用する。
+  - 理由: Phase34 の互換性方針（URL維持）を守りつつ、Guided Mode の位置づけを UI 上で一貫して明示するため。
+  - 影響範囲: `src/veldra/gui/pages/*`, `src/veldra/gui/components/`, `tests/test_gui_*`, `DESIGN_BLUEPRINT.md`
+- Decision: confirmed（確定）
+  - 内容: 英語固定の Guided バナーを既存 9 ページに導入し、サイドバー 3 区分（`Studio Mode` / `Guided Mode` / `Operations`）を維持したまま契約テストを追加した。
+  - 理由: 既存 URL 互換を維持しつつ、初心者導線と高速導線の役割分離を UI 上で明示できたため。
+  - 影響範囲: `src/veldra/gui/components/guided_mode_banner.py`, `src/veldra/gui/pages/*`, `src/veldra/gui/assets/style.css`, `tests/test_gui_guided_mode_pages.py`, `tests/test_gui_app_helpers.py`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/pages src/veldra/gui/components/guided_mode_banner.py src/veldra/gui/assets/style.css tests/test_gui_guided_mode_pages.py tests/test_gui_app_helpers.py tests/test_gui_studio.py DESIGN_BLUEPRINT.md HISTORY.md` を実施（`style.css` は Python ではないため `ruff` では `invalid-syntax` となることを確認）。
+- `uv run ruff check src/veldra/gui/pages src/veldra/gui/components/guided_mode_banner.py tests/test_gui_guided_mode_pages.py tests/test_gui_app_helpers.py tests/test_gui_studio.py DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `uv run pytest -q tests/test_gui_guided_mode_pages.py tests/test_gui_app_helpers.py tests/test_gui_studio.py` を実施（`25 passed`）。
+- `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`764 passed, 15 deselected`）。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
 from veldra.gui.components.task_table import task_table
 
 
@@ -30,6 +31,7 @@ def layout(state: dict | None = None) -> html.Div:
     return html.Div(
         [
             html.H2("Run Tasks", className="mb-4"),
+            guided_mode_banner("run"),
             # Action Selection & Summary
             dbc.Row(
                 [

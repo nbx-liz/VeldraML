@@ -1086,6 +1086,19 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 - デフォルトルートの確認（`/` → `/studio`）と既存テストの修正。
 - 検証: `pytest -m "not gui_e2e and not notebook_e2e" -q`
 
+**Phase34.3 実装方針確定（2026-02-19）**
+- Guided バナーは既存 9 ページ（`/data`, `/target`, `/config`, `/validation`, `/train`, `/run`, `/results`, `/runs`, `/compare`）に共通実装する。
+- バナー文言は英語固定とし、`"This page is Guided Mode. For faster experimentation, open Studio."` を採用する。
+- バナー内の Studio 導線は `"/studio"` に統一し、ページごとに `guided-mode-banner-{page_key}` / `guided-mode-open-studio-{page_key}` ID を付与して契約テスト可能にする。
+- サイドバー区分は `Studio Mode` / `Guided Mode` / `Operations` の 3 区分を維持し、情報設計の破壊的変更は行わない。
+
+**Phase34.3 実装確定（2026-02-19）**
+- `src/veldra/gui/components/guided_mode_banner.py` を追加し、Guided バナーの文言・ID・`/studio` 導線を共通化した。
+- 既存 9 ページの `layout()` 冒頭に共通バナーを追加し、既存 URL とページ機能は維持した。
+- `src/veldra/gui/assets/style.css` に `.guided-mode-banner` の最小スタイルを追加し、既存テーマ変数ベースで視認性を確保した。
+- 新規 `tests/test_gui_guided_mode_pages.py` に 9 ページ全体のバナー表示/導線契約と `/studio` 非表示契約を追加した。
+- `tests/test_gui_app_helpers.py` を拡張し、`_sidebar()` の 3 区分ラベル（`Studio Mode`, `Guided Mode`, `Operations`）維持を契約化した。
+
 ---
 
 ### 7. テスト要件

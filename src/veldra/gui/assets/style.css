@@ -138,6 +138,20 @@ body {
     box-shadow: 0 4px 6px -1px rgba(124, 58, 237, 0.3);
 }
 
+.guided-mode-banner {
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    background-color: rgba(6, 182, 212, 0.12);
+    color: var(--text-primary);
+}
+
+.guided-mode-banner .btn {
+    border-color: rgba(6, 182, 212, 0.6) !important;
+}
+
+.guided-mode-banner .btn:hover {
+    background-color: rgba(6, 182, 212, 0.2) !important;
+}
+
 /* Stepper */
 .stepper-container {
     display: flex;
