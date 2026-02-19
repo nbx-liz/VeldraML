@@ -6,6 +6,7 @@ from veldra.api.types import (
     CausalResult,
     EvalResult,
     ExportResult,
+    Prediction,
     RunResult,
     SimulationResult,
     TuneResult,
@@ -59,7 +60,7 @@ export:
 def test_run_action_dispatch_for_artifact_actions(monkeypatch) -> None:
     frame = pd.DataFrame({"x": [1.0, 2.0], "y": [0.0, 1.0]})
     fake_artifact = object()
-    called: dict[str, int] = {"evaluate": 0, "simulate": 0, "export": 0}
+    called: dict[str, int] = {"evaluate": 0, "predict": 0, "simulate": 0, "export": 0}
 
     monkeypatch.setattr("veldra.gui.services.Artifact.load", lambda _path: fake_artifact)
     monkeypatch.setattr("veldra.gui.services.load_tabular_data", lambda _path: frame)
@@ -73,6 +74,12 @@ def test_run_action_dispatch_for_artifact_actions(monkeypatch) -> None:
         assert data is frame
         called["evaluate"] += 1
         return EvalResult(task_type="regression", metrics={"rmse": 1.2})
+
+    def _fake_predict(artifact, data):
+        assert artifact is fake_artifact
+        assert data is frame
+        called["predict"] += 1
+        return Prediction(task_type="regression", data=pd.DataFrame({"prediction": [0.1, 0.2]}))
 
     def _fake_sim(artifact, data, scenarios):
         assert artifact is fake_artifact
@@ -88,11 +95,15 @@ def test_run_action_dispatch_for_artifact_actions(monkeypatch) -> None:
         return ExportResult(path="artifacts/exports/r1/python", format="python")
 
     monkeypatch.setattr("veldra.gui.services.evaluate", _fake_eval)
+    monkeypatch.setattr("veldra.gui.services.predict", _fake_predict)
     monkeypatch.setattr("veldra.gui.services.simulate", _fake_sim)
     monkeypatch.setattr("veldra.gui.services.export", _fake_export)
 
     eval_result = run_action(
         RunInvocation(action="evaluate", artifact_path="artifacts/r1", data_path="eval.csv")
+    )
+    predict_result = run_action(
+        RunInvocation(action="predict", artifact_path="artifacts/r1", data_path="eval.csv")
     )
     sim_result = run_action(
         RunInvocation(
@@ -107,9 +118,11 @@ def test_run_action_dispatch_for_artifact_actions(monkeypatch) -> None:
     )
 
     assert eval_result.success is True
+    assert predict_result.success is True
+    assert "prediction_csv_path" in predict_result.payload["result"]
     assert sim_result.success is True
     assert export_result.success is True
-    assert called == {"evaluate": 1, "simulate": 1, "export": 1}
+    assert called == {"evaluate": 1, "predict": 1, "simulate": 1, "export": 1}
 
 
 def test_submit_run_job_dispatches_to_queue(tmp_path) -> None:

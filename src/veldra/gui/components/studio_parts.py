@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dash_bootstrap_components as dbc
-from dash import dcc, html
+from dash import dash_table, dcc, html
 
 from veldra.gui.components.kpi_cards import kpi_card
 
@@ -27,7 +27,7 @@ def studio_header(mode: str = "train") -> html.Div:
             html.Div(
                 [
                     html.H2("Veldra Studio", className="mb-1"),
-                    html.Div("高速モデリング (Phase34.1)", className="small text-muted"),
+                    html.Div("高速モデリング (Phase34.2)", className="small text-muted"),
                 ]
             ),
             html.Div(
@@ -46,8 +46,6 @@ def studio_header(mode: str = "train") -> html.Div:
                         "モデル管理",
                         id="studio-model-hub-btn",
                         color="secondary",
-                        disabled=True,
-                        title="Phase34.2 で有効化予定",
                         className="me-2",
                     ),
                     dbc.Button(
@@ -298,7 +296,29 @@ def inference_scope_pane() -> html.Div:
     return html.Div(
         [
             html.H5("1. Scope (Inference)", className="mb-3"),
-            dbc.Alert("推論モードは Phase34.2 で有効化されます。", color="info", className="mb-0"),
+            html.Div(
+                dbc.Alert("Model is not loaded. Open Model Hub and click Load.", color="warning"),
+                id="studio-infer-model-card",
+                className="mb-3",
+            ),
+            dcc.Upload(
+                id="studio-predict-upload",
+                children=html.Div(["Drag & Drop or ", html.A("Select Inference File")]),
+                style={
+                    "width": "100%",
+                    "height": "96px",
+                    "lineHeight": "96px",
+                    "borderWidth": "2px",
+                    "borderStyle": "dashed",
+                    "borderRadius": "10px",
+                    "textAlign": "center",
+                    "marginBottom": "10px",
+                },
+                multiple=False,
+            ),
+            html.Div(id="studio-predict-upload-msg", className="small text-muted mb-2"),
+            dbc.Label("Label Column (Optional)", className="fw-bold"),
+            dbc.Select(id="studio-predict-label-col", options=[], value=""),
         ],
         className="glass-card h-100",
     )
@@ -308,7 +328,20 @@ def inference_spec_pane() -> html.Div:
     return html.Div(
         [
             html.H5("2. Spec", className="mb-3"),
-            html.Div("Model spec panel will be available in Phase34.2", className="text-muted"),
+            html.Div(
+                "Task / target / metrics are shown after model load.",
+                id="studio-infer-spec-summary",
+                className="small text-muted mb-2",
+            ),
+            html.Div(
+                "Required feature list will be displayed here.",
+                id="studio-infer-feature-list",
+                className="small text-muted mb-3",
+            ),
+            html.Div(
+                id="studio-infer-guardrails",
+                children=dbc.Alert("No guardrail findings.", color="secondary"),
+            ),
         ],
         className="glass-card h-100",
     )
@@ -318,18 +351,121 @@ def inference_action_pane() -> html.Div:
     return html.Div(
         [
             html.H5("3. Action", className="mb-3"),
+            html.Div("READY", id="studio-predict-status", className="badge bg-secondary mb-2"),
             dbc.Button(
                 "予測を開始 (PREDICT)",
+                id="studio-predict-btn",
                 color="primary",
-                disabled=True,
                 className="w-100 mb-2",
             ),
-            html.Div(
-                "Preview and CSV download are scheduled for Phase34.2",
-                className="small text-muted",
+            html.Div(id="studio-predict-log", className="small text-muted mb-2"),
+            html.Div(id="studio-predict-progress", className="mb-3"),
+            html.Div(id="studio-predict-eval-kpi", className="mb-3"),
+            html.Div(id="studio-predict-preview-info", className="small text-muted mb-2"),
+            dash_table.DataTable(
+                id="studio-predict-preview-table",
+                columns=[],
+                data=[],
+                page_size=10,
+                style_table={"overflowX": "auto"},
+                style_cell={"textAlign": "left", "fontSize": "12px"},
+            ),
+            dbc.Button(
+                "Download CSV",
+                id="studio-predict-download-btn",
+                color="secondary",
+                className="w-100 mt-2",
             ),
         ],
         className="glass-card h-100",
+    )
+
+
+def model_hub_offcanvas() -> dbc.Offcanvas:
+    return dbc.Offcanvas(
+        [
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.Button(
+                            "Refresh",
+                            id="studio-hub-refresh-btn",
+                            size="sm",
+                            color="secondary",
+                        )
+                    ),
+                    dbc.Col(
+                        html.Div(id="studio-hub-page-info", className="small text-muted text-end"),
+                        className="d-flex align-items-center justify-content-end",
+                    ),
+                ],
+                className="mb-2",
+            ),
+            dash_table.DataTable(
+                id="studio-hub-table",
+                columns=[
+                    {"name": "Created", "id": "created_at_utc"},
+                    {"name": "Task", "id": "task_type"},
+                    {"name": "Run ID", "id": "run_id"},
+                    {"name": "Path", "id": "path"},
+                ],
+                data=[],
+                row_selectable="single",
+                selected_rows=[],
+                page_size=12,
+                style_table={"overflowX": "auto"},
+                style_cell={"textAlign": "left", "fontSize": "12px"},
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.Button(
+                            "Prev",
+                            id="studio-hub-prev-btn",
+                            size="sm",
+                            color="secondary",
+                            outline=True,
+                        )
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Next",
+                            id="studio-hub-next-btn",
+                            size="sm",
+                            color="secondary",
+                            outline=True,
+                        )
+                    ),
+                ],
+                className="my-2 g-2",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dbc.Button(
+                            "Load",
+                            id="studio-hub-load-btn",
+                            color="primary",
+                            className="w-100",
+                        )
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Delete",
+                            id="studio-hub-delete-btn",
+                            color="danger",
+                            className="w-100",
+                        )
+                    ),
+                ],
+                className="g-2",
+            ),
+            html.Div(id="studio-hub-feedback", className="small mt-2"),
+        ],
+        id="studio-model-hub-offcanvas",
+        title="Model Hub",
+        placement="end",
+        is_open=False,
     )
 
 

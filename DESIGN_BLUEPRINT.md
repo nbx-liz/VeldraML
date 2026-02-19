@@ -1064,6 +1064,14 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
   - `validate_prediction_data()` 実装。
   - `run_action()` の `predict` / `evaluate` 経路整備（結果 CSV 出力）。
 
+**Phase34.2 実装方針確定（2026-02-19）**
+- Model Hub の対象 root は `artifacts/` 固定とし、Phase34.2 では root 切替 UI を追加しない。
+- 推論モードで正解ラベル列が選択された場合、Predict 成功後に Evaluate ジョブを自動投入する。
+- Model Hub の Delete は確認ダイアログ必須の恒久削除とし、`artifacts/` 配下のみ削除可能に制限する。
+- `get_artifact_spec()` は `Artifact.load()` を呼ばず、`manifest.json` / `run_config.yaml` / `feature_schema.json` / `metrics.json` の直接読込で仕様情報を構築する。
+- `feature_schema.feature_dtypes` がない旧 Artifact では、推論前検証の型整合チェックを warning/info フォールバックで継続する。
+- 予測プレビューは先頭 100 行固定とし、予測 CSV は `.veldra_gui/tmp/` に保存して GUI の一時ファイル運用に従う。
+
 ---
 
 #### Phase34.3: Guided Mode への整理（ PR5 ）

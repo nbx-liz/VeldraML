@@ -35,6 +35,7 @@ def layout() -> html.Div:
                                 {"label": "Fit", "value": "fit"},
                                 {"label": "Tune", "value": "tune"},
                                 {"label": "Evaluate", "value": "evaluate"},
+                                {"label": "Predict", "value": "predict"},
                                 {"label": "Export", "value": "export"},
                                 {"label": "Estimate DR", "value": "estimate_dr"},
                             ],

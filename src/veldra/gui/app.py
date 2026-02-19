@@ -60,7 +60,9 @@ from veldra.gui.services import (
     GuardRailResult,
     cancel_run_job,
     compare_artifacts_multi,
+    delete_artifact_dir,
     delete_run_jobs,
+    get_artifact_spec,
     get_run_job,
     infer_task_type,
     inspect_data,
@@ -82,6 +84,7 @@ from veldra.gui.services import (
     submit_run_job,
     validate_config,
     validate_config_with_guidance,
+    validate_prediction_data,
 )
 from veldra.gui.template_service import (
     clone_custom_slot,
@@ -91,7 +94,7 @@ from veldra.gui.template_service import (
     load_custom_slot_yaml,
     save_custom_slot,
 )
-from veldra.gui.types import RunInvocation
+from veldra.gui.types import ArtifactSpec, RunInvocation
 
 # Lazy runtime symbols for heavyweight deps.
 _ARTIFACT_CLS: Any | None = None
@@ -802,6 +805,103 @@ def create_app() -> dash.Dash:
         State("workflow-state", "data"),
         prevent_initial_call=True,
     )(_cb_studio_poll_job)
+
+    app.callback(
+        Output("studio-model-hub-offcanvas", "is_open"),
+        Output("studio-hub-table", "data"),
+        Output("store-studio-hub-page", "data"),
+        Output("store-studio-hub-total", "data"),
+        Output("studio-hub-page-info", "children"),
+        Output("studio-hub-feedback", "children"),
+        Input("studio-model-hub-btn", "n_clicks"),
+        Input("studio-hub-refresh-btn", "n_clicks"),
+        Input("studio-hub-prev-btn", "n_clicks"),
+        Input("studio-hub-next-btn", "n_clicks"),
+        Input("studio-hub-delete-confirm", "submit_n_clicks"),
+        State("studio-model-hub-offcanvas", "is_open"),
+        State("store-studio-hub-page", "data"),
+        State("studio-hub-table", "selected_rows"),
+        State("studio-hub-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_model_hub_table)
+
+    app.callback(
+        Output("studio-hub-delete-confirm", "displayed"),
+        Output("studio-hub-delete-confirm", "message"),
+        Input("studio-hub-delete-btn", "n_clicks"),
+        State("studio-hub-table", "selected_rows"),
+        State("studio-hub-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_request_delete)
+
+    app.callback(
+        Output("store-studio-artifact", "data"),
+        Output("store-studio-mode", "data", allow_duplicate=True),
+        Output("studio-mode-radio", "value", allow_duplicate=True),
+        Output("studio-hub-feedback", "children", allow_duplicate=True),
+        Input("studio-hub-load-btn", "n_clicks"),
+        State("studio-hub-table", "selected_rows"),
+        State("studio-hub-table", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_load_artifact)
+
+    app.callback(
+        Output("studio-infer-model-card", "children"),
+        Output("studio-infer-spec-summary", "children"),
+        Output("studio-infer-feature-list", "children"),
+        Input("store-studio-artifact", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_render_artifact_spec)
+
+    app.callback(
+        Output("store-studio-predict-data", "data"),
+        Output("studio-predict-upload-msg", "children"),
+        Output("studio-predict-label-col", "options"),
+        Output("studio-predict-label-col", "value"),
+        Output("studio-infer-guardrails", "children"),
+        Input("studio-predict-upload", "contents"),
+        State("studio-predict-upload", "filename"),
+        State("store-studio-artifact", "data"),
+        State("store-studio-predict-data", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_upload_predict)
+
+    app.callback(
+        Output("studio-predict-log", "children"),
+        Output("store-studio-predict-job", "data"),
+        Output("studio-predict-poll-interval", "disabled"),
+        Output("studio-predict-poll-interval", "n_intervals"),
+        Output("studio-predict-status", "children"),
+        Input("studio-predict-btn", "n_clicks"),
+        State("store-studio-artifact", "data"),
+        State("store-studio-predict-data", "data"),
+        State("studio-predict-label-col", "value"),
+        prevent_initial_call=True,
+    )(_cb_studio_predict)
+
+    app.callback(
+        Output("studio-predict-progress", "children"),
+        Output("studio-predict-log", "children", allow_duplicate=True),
+        Output("studio-predict-status", "children", allow_duplicate=True),
+        Output("store-studio-predict-job", "data", allow_duplicate=True),
+        Output("studio-predict-poll-interval", "disabled", allow_duplicate=True),
+        Output("store-studio-predict-result", "data", allow_duplicate=True),
+        Output("studio-predict-preview-table", "data"),
+        Output("studio-predict-preview-table", "columns"),
+        Output("studio-predict-preview-info", "children"),
+        Output("studio-predict-eval-kpi", "children"),
+        Input("studio-predict-poll-interval", "n_intervals"),
+        State("store-studio-predict-job", "data"),
+        State("store-studio-predict-result", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_poll_predict)
+
+    app.callback(
+        Output("studio-predict-csv-download", "data"),
+        Input("studio-predict-download-btn", "n_clicks"),
+        State("store-studio-predict-result", "data"),
+        prevent_initial_call=True,
+    )(_cb_studio_download_predict_csv)
 
     # --- Data Page Callbacks ---
     app.callback(
@@ -2159,6 +2259,557 @@ def _cb_studio_poll_job(
         disable_poll,
         next_workflow,
     )
+
+
+def _studio_selected_row(
+    selected_rows: list[int] | None,
+    rows: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not selected_rows or not rows:
+        return None
+    idx = int(selected_rows[0])
+    if idx < 0 or idx >= len(rows):
+        return None
+    row = rows[idx]
+    return row if isinstance(row, dict) else None
+
+
+def _cb_studio_model_hub_table(
+    _open_clicks: int,
+    _refresh_clicks: int,
+    _prev_clicks: int,
+    _next_clicks: int,
+    _confirm_delete_clicks: int,
+    is_open: bool,
+    current_page: int | None,
+    selected_rows: list[int] | None,
+    rows: list[dict[str, Any]] | None,
+) -> tuple[bool, list[dict[str, Any]], int, int, str, str]:
+    page = max(0, int(current_page or 0))
+    opened = bool(is_open)
+    feedback = ""
+    triggered = ""
+    try:
+        if callback_context.triggered:
+            triggered = callback_context.triggered[0]["prop_id"].split(".")[0]
+    except Exception:
+        triggered = ""
+    if not triggered:
+        if int(_confirm_delete_clicks or 0) > 0:
+            triggered = "studio-hub-delete-confirm"
+        elif int(_next_clicks or 0) > 0:
+            triggered = "studio-hub-next-btn"
+        elif int(_prev_clicks or 0) > 0:
+            triggered = "studio-hub-prev-btn"
+        elif int(_refresh_clicks or 0) > 0:
+            triggered = "studio-hub-refresh-btn"
+        elif int(_open_clicks or 0) > 0:
+            triggered = "studio-model-hub-btn"
+
+    if triggered == "studio-model-hub-btn":
+        opened = not opened
+        if opened:
+            page = 0
+    elif triggered == "studio-hub-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "studio-hub-next-btn":
+        page += 1
+    elif triggered == "studio-hub-refresh-btn":
+        page = 0
+    elif triggered == "studio-hub-delete-confirm":
+        selected = _studio_selected_row(selected_rows, rows)
+        if selected is None:
+            feedback = "[ERROR] Delete target is not selected."
+        else:
+            try:
+                deleted = delete_artifact_dir(str(selected.get("path") or ""))
+                feedback = f"[INFO] Deleted artifact: {deleted}"
+                page = 0
+            except Exception as exc:
+                feedback = f"[ERROR] {normalize_gui_error(exc)}"
+
+    if not opened:
+        return False, rows or [], page, int(len(rows or [])), "", feedback
+
+    page_size = 20
+    offset = page * page_size
+    paged = list_artifacts_page(root_dir="artifacts", limit=page_size, offset=offset)
+    if paged.total_count and offset >= paged.total_count and page > 0:
+        page = max(0, (paged.total_count - 1) // page_size)
+        offset = page * page_size
+        paged = list_artifacts_page(root_dir="artifacts", limit=page_size, offset=offset)
+
+    table_rows = [
+        {
+            "created_at_utc": _format_jst_timestamp(item.created_at_utc),
+            "task_type": item.task_type,
+            "run_id": item.run_id,
+            "path": item.path,
+        }
+        for item in paged.items
+    ]
+    start = offset + 1 if paged.total_count > 0 else 0
+    end = offset + len(paged.items)
+    page_info = f"{start}-{end} / {paged.total_count}"
+    return True, table_rows, page, paged.total_count, page_info, feedback
+
+
+def _cb_studio_request_delete(
+    _n_clicks: int,
+    selected_rows: list[int] | None,
+    rows: list[dict[str, Any]] | None,
+) -> tuple[bool, str]:
+    selected = _studio_selected_row(selected_rows, rows)
+    if selected is None:
+        return False, "Delete selected artifact?"
+    run_id = str(selected.get("run_id") or "unknown")
+    path = str(selected.get("path") or "")
+    return True, f"Delete artifact '{run_id}' ({path})? This action cannot be undone."
+
+
+def _cb_studio_load_artifact(
+    _n_clicks: int,
+    selected_rows: list[int] | None,
+    rows: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any] | Any, str | Any, str | Any, str]:
+    selected = _studio_selected_row(selected_rows, rows)
+    if selected is None:
+        return dash.no_update, dash.no_update, dash.no_update, "[ERROR] Select an artifact first."
+    try:
+        spec = get_artifact_spec(str(selected.get("path") or ""))
+        payload = asdict(spec) if is_dataclass(spec) else dict(vars(spec))
+        return payload, "inference", "inference", f"[INFO] Loaded artifact: {spec.run_id}"
+    except Exception as exc:
+        return (
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            f"[ERROR] {normalize_gui_error(exc)}",
+        )
+
+
+def _coerce_studio_artifact_spec(store: dict[str, Any] | None) -> ArtifactSpec | None:
+    payload = dict(store or {})
+    artifact_path = str(payload.get("artifact_path") or "").strip()
+    if not artifact_path:
+        return None
+    return ArtifactSpec(
+        artifact_path=artifact_path,
+        run_id=str(payload.get("run_id") or Path(artifact_path).name),
+        task_type=str(payload.get("task_type") or "unknown"),
+        target_col=str(payload.get("target_col") or ""),
+        feature_names=[str(item) for item in payload.get("feature_names", [])],
+        feature_dtypes={
+            str(k): str(v) for k, v in dict(payload.get("feature_dtypes") or {}).items()
+        },
+        train_metrics={
+            str(k): float(v)
+            for k, v in dict(payload.get("train_metrics") or {}).items()
+            if isinstance(v, (int, float))
+        },
+        created_at_utc=(
+            str(payload["created_at_utc"]) if payload.get("created_at_utc") is not None else None
+        ),
+    )
+
+
+def _cb_studio_render_artifact_spec(
+    artifact_store: dict[str, Any] | None,
+) -> tuple[Any, Any, Any]:
+    spec = _coerce_studio_artifact_spec(artifact_store)
+    if spec is None:
+        return (
+            dbc.Alert("Model is not loaded. Open Model Hub and click Load.", color="warning"),
+            html.Div("Task / target / metrics are shown after model load.", className="text-muted"),
+            html.Div("Required feature list will be displayed here.", className="text-muted"),
+        )
+
+    model_card = dbc.Card(
+        dbc.CardBody(
+            [
+                html.Div(f"Run ID: {spec.run_id}", className="fw-bold"),
+                html.Div(f"Task: {spec.task_type}", className="small text-muted"),
+                html.Div(f"Target: {spec.target_col or 'n/a'}", className="small text-muted"),
+            ]
+        )
+    )
+    metric_text = ", ".join(
+        f"{name}={value:.6g}" for name, value in list(spec.train_metrics.items())[:4]
+    )
+    summary = (
+        f"Task: {spec.task_type} / Target: {spec.target_col or 'n/a'} / "
+        f"Metrics: {metric_text or 'n/a'}"
+    )
+    features = spec.feature_names[:50]
+    feature_list = html.Ul([html.Li(col) for col in features], className="small mb-0")
+    return model_card, summary, feature_list
+
+
+def _cb_studio_upload_predict(
+    contents: str | None,
+    filename: str | None,
+    artifact_store: dict[str, Any] | None,
+    current_store: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str, list[dict[str, str]], str, Any]:
+    current = dict(current_store or {})
+    if not contents:
+        return (
+            current,
+            "推論データファイルを選択してください。",
+            [],
+            "",
+            render_guardrails([{"level": "info", "message": "Upload inference data to continue."}]),
+        )
+
+    import base64
+    import binascii
+
+    try:
+        _content_type, content_string = contents.split(",", 1)
+        decoded = base64.b64decode(content_string)
+    except (ValueError, binascii.Error) as exc:
+        return current, f"アップロード形式が不正です: {exc}", [], "", html.Div()
+
+    safe_name = Path(filename or "studio_predict.csv").name
+    if not (safe_name.endswith(".csv") or safe_name.endswith(".parquet")):
+        return current, "対応形式は .csv / .parquet のみです。", [], "", html.Div()
+
+    _cleanup_gui_system_temp_files()
+    suffix = Path(safe_name).suffix or ".csv"
+    tmp_path = _get_gui_system_temp_dir() / f"studio_predict_{int(time.time() * 1000)}{suffix}"
+    try:
+        tmp_path.write_bytes(decoded)
+    except Exception as exc:
+        return current, f"一時ファイル保存に失敗しました: {exc}", [], "", html.Div()
+
+    result = inspect_data(str(tmp_path))
+    if not result.get("success"):
+        return (
+            current,
+            f"データ検査エラー: {result.get('error', 'unknown error')}",
+            [],
+            "",
+            html.Div(),
+        )
+
+    stats = result.get("stats") or {}
+    columns = [str(col) for col in stats.get("columns", [])]
+    label_options = [{"label": "(none)", "value": ""}] + [
+        {"label": col, "value": col} for col in columns
+    ]
+    spec = _coerce_studio_artifact_spec(artifact_store)
+    findings: list[GuardRailResult]
+    if spec is None:
+        findings = [GuardRailResult("warning", "Model is not loaded. Load model from Model Hub.")]
+    else:
+        findings = validate_prediction_data(spec, str(tmp_path))
+
+    label_default = spec.target_col if spec and spec.target_col in columns else ""
+    payload = {
+        "file_path": str(tmp_path),
+        "columns": columns,
+        "n_rows": int(stats.get("n_rows", 0)),
+    }
+    msg = f"✔ {safe_name} ({payload['n_rows']} rows × {len(columns)} cols)"
+    return (
+        payload,
+        msg,
+        label_options,
+        label_default,
+        render_guardrails([asdict(item) for item in findings], sort_by_severity=True),
+    )
+
+
+def _cb_studio_predict(
+    _n_clicks: int,
+    artifact_store: dict[str, Any] | None,
+    predict_data: dict[str, Any] | None,
+    label_col: str | None,
+) -> tuple[str, dict[str, Any], bool, int, str]:
+    spec = _coerce_studio_artifact_spec(artifact_store)
+    if spec is None:
+        return "[ERROR] Model is not loaded.", {}, True, 0, "FAILED"
+    data_path = str((predict_data or {}).get("file_path") or "").strip()
+    if not data_path:
+        return "[ERROR] Inference data is not set.", {}, True, 0, "FAILED"
+
+    try:
+        result = submit_run_job(
+            RunInvocation(
+                action="predict",
+                artifact_path=spec.artifact_path,
+                data_path=data_path,
+                priority="normal",
+            )
+        )
+        job_state = {
+            "predict_job_id": result.job_id,
+            "stage": "predict",
+            "status": result.status,
+            "artifact_path": spec.artifact_path,
+            "data_path": data_path,
+            "label_col": str(label_col or ""),
+            "target_col": spec.target_col,
+            "eval_requested": bool(str(label_col or "").strip()),
+            "eval_job_id": "",
+            "eval_status": "",
+        }
+        return f"[QUEUED] {result.message} (Job ID: {result.job_id})", job_state, False, 0, "QUEUED"
+    except Exception as exc:
+        return f"[ERROR] {normalize_gui_error(exc)}", {"status": "failed"}, True, 0, "FAILED"
+
+
+def _studio_extract_result_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    obj = dict(payload or {})
+    result_obj = obj.get("result")
+    if isinstance(result_obj, dict):
+        return result_obj
+    return obj
+
+
+def _studio_predict_preview_outputs(
+    result_store: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], str]:
+    payload = dict(result_store or {})
+    rows = payload.get("preview_rows")
+    preview_rows = rows if isinstance(rows, list) else []
+    columns: list[dict[str, str]] = []
+    if preview_rows:
+        first = preview_rows[0]
+        if isinstance(first, dict):
+            columns = [{"name": str(key), "id": str(key)} for key in first.keys()]
+    total_count = int(payload.get("total_count") or 0)
+    info = f"Preview {len(preview_rows)} / {total_count}"
+    return preview_rows, columns, info
+
+
+def _cb_studio_poll_predict(
+    _n_intervals: int,
+    job_state: dict[str, Any] | None,
+    result_store: dict[str, Any] | None,
+) -> tuple[
+    Any,
+    str,
+    str,
+    dict[str, Any],
+    bool,
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, str]],
+    str,
+    Any,
+]:
+    current = dict(job_state or {})
+    preview_rows, preview_columns, preview_info = _studio_predict_preview_outputs(result_store)
+    if not current:
+        return (
+            html.Div("No job running.", className="small text-muted"),
+            "",
+            "READY",
+            current,
+            True,
+            dict(result_store or {}),
+            preview_rows,
+            preview_columns,
+            preview_info,
+            html.Div("No KPI yet.", className="small text-muted"),
+        )
+
+    stage = str(current.get("stage") or "predict")
+    active_job_id = str(current.get("predict_job_id") or "")
+    if stage == "evaluate":
+        active_job_id = str(current.get("eval_job_id") or "")
+    if not active_job_id:
+        return (
+            html.Div("No job running.", className="small text-muted"),
+            "[ERROR] Missing job id.",
+            "FAILED",
+            current,
+            True,
+            dict(result_store or {}),
+            preview_rows,
+            preview_columns,
+            preview_info,
+            html.Div("No KPI yet.", className="small text-muted"),
+        )
+
+    job = get_run_job(active_job_id)
+    if job is None:
+        return (
+            html.Div("Job not found.", className="text-danger small"),
+            f"[ERROR] Job not found: {active_job_id}",
+            "FAILED",
+            current,
+            True,
+            dict(result_store or {}),
+            preview_rows,
+            preview_columns,
+            preview_info,
+            html.Div("No KPI yet.", className="small text-muted"),
+        )
+
+    logs = list_run_job_logs(job.job_id, limit=120)
+    progress = render_progress_viewer(
+        progress_pct=float(job.progress_pct),
+        current_step=job.current_step,
+        logs=logs,
+        log_limit=120,
+        log_total=len(logs),
+    )
+    log_text = (
+        f"[{job.status.upper()}] {job.action} / {job.current_step or '-'} "
+        f"/ {job.progress_pct:.1f}%"
+    )
+
+    if stage == "predict":
+        if job.status in {"queued", "running", "cancel_requested"}:
+            current["status"] = job.status
+            return (
+                progress,
+                log_text,
+                job.status.upper(),
+                current,
+                False,
+                dict(result_store or {}),
+                preview_rows,
+                preview_columns,
+                preview_info,
+                html.Div("No KPI yet.", className="small text-muted"),
+            )
+
+        if job.status != "succeeded":
+            current["status"] = job.status
+            return (
+                progress,
+                log_text,
+                job.status.upper(),
+                current,
+                True,
+                dict(result_store or {}),
+                preview_rows,
+                preview_columns,
+                preview_info,
+                html.Div("No KPI yet.", className="small text-muted"),
+            )
+
+        payload = _studio_extract_result_payload(job.result.payload if job.result else {})
+        next_result_store = {
+            "prediction_csv_path": str(payload.get("prediction_csv_path") or ""),
+            "preview_rows": payload.get("preview_rows") or [],
+            "total_count": int(payload.get("total_count") or 0),
+            "task_type": str(payload.get("task_type") or ""),
+        }
+        preview_rows, preview_columns, preview_info = _studio_predict_preview_outputs(
+            next_result_store
+        )
+        current["status"] = "succeeded"
+
+        if bool(current.get("eval_requested")):
+            try:
+                eval_data_path = str(current.get("data_path") or "")
+                label_col = str(current.get("label_col") or "").strip()
+                target_col = str(current.get("target_col") or "").strip()
+                if label_col and target_col and label_col != target_col:
+                    frame = _get_load_tabular_data()(eval_data_path)
+                    if label_col not in frame.columns:
+                        raise ValueError(f"Label column '{label_col}' is not found.")
+                    mapped = frame.copy()
+                    mapped[target_col] = mapped[label_col]
+                    eval_tmp = _get_gui_system_temp_dir() / f"studio_eval_{job.job_id}.csv"
+                    mapped.to_csv(eval_tmp, index=False)
+                    eval_data_path = str(eval_tmp)
+
+                eval_job = submit_run_job(
+                    RunInvocation(
+                        action="evaluate",
+                        artifact_path=str(current.get("artifact_path") or ""),
+                        data_path=eval_data_path,
+                        priority="normal",
+                    )
+                )
+                current["stage"] = "evaluate"
+                current["eval_job_id"] = eval_job.job_id
+                current["eval_status"] = eval_job.status
+                return (
+                    progress,
+                    f"{log_text}\n[QUEUED] evaluate (Job ID: {eval_job.job_id})",
+                    "EVAL_QUEUED",
+                    current,
+                    False,
+                    next_result_store,
+                    preview_rows,
+                    preview_columns,
+                    preview_info,
+                    html.Div("No KPI yet.", className="small text-muted"),
+                )
+            except Exception as exc:
+                return (
+                    progress,
+                    f"{log_text}\n[ERROR] {normalize_gui_error(exc)}",
+                    "EVAL_FAILED",
+                    current,
+                    True,
+                    next_result_store,
+                    preview_rows,
+                    preview_columns,
+                    preview_info,
+                    html.Div("No KPI yet.", className="small text-muted"),
+                )
+
+        return (
+            progress,
+            log_text,
+            "SUCCEEDED",
+            current,
+            True,
+            next_result_store,
+            preview_rows,
+            preview_columns,
+            preview_info,
+            html.Div("No KPI yet.", className="small text-muted"),
+        )
+
+    if job.status in {"queued", "running", "cancel_requested"}:
+        current["eval_status"] = job.status
+        return (
+            progress,
+            log_text,
+            f"EVAL_{job.status.upper()}",
+            current,
+            False,
+            dict(result_store or {}),
+            preview_rows,
+            preview_columns,
+            preview_info,
+            html.Div("No KPI yet.", className="small text-muted"),
+        )
+
+    metrics = _studio_extract_metrics(job.result.payload if job.result else {})
+    kpi_children = studio_parts.render_quick_kpis(metrics)
+    current["eval_status"] = job.status
+    return (
+        progress,
+        log_text,
+        f"EVAL_{job.status.upper()}",
+        current,
+        True,
+        dict(result_store or {}),
+        preview_rows,
+        preview_columns,
+        preview_info,
+        kpi_children,
+    )
+
+
+def _cb_studio_download_predict_csv(_n_clicks: int, result_store: dict[str, Any] | None) -> Any:
+    payload = dict(result_store or {})
+    csv_path = str(payload.get("prediction_csv_path") or "").strip()
+    if not csv_path:
+        return dash.no_update
+    path = Path(csv_path)
+    if not path.exists() or not path.is_file():
+        return dash.no_update
+    return dcc.send_file(str(path))
 
 
 def _cb_cache_config_yaml(config_yaml: str, state: dict | None) -> dict:

@@ -1861,3 +1861,31 @@
 - `uv run ruff check src/veldra/gui/app.py src/veldra/gui/pages/__init__.py src/veldra/gui/pages/studio_page.py src/veldra/gui/components/studio_parts.py tests/test_gui_studio.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_internal.py` を通過。
 - `uv run pytest -q tests/test_gui_studio.py tests/test_gui_pages_and_init.py tests/test_gui_app_helpers.py tests/test_gui_app_callbacks_internal.py` を実施（`14 passed`）。
 - `uv run pytest -q tests/test_gui_* -m "not gui_e2e and not notebook_e2e"` を実施（`214 passed`）。
+
+### 2026-02-19（作業/PR: phase34-2-studio-inference-model-hub）
+**背景**
+- Phase34.1 でプレースホルダだった推論モードと Model Hub を本実装し、Studio 内で学習と推論の往復を完結させる必要があった。
+- Core 非依存と Stable API 互換を維持したまま、`predict` 非同期ジョブと推論前ガードレールを GUI adapter 層へ追加する必要があった。
+
+**変更内容**
+- `src/veldra/gui/types.py` に `ArtifactSpec` を追加し、Model Hub/推論モードの read-only 契約型を定義。
+- `src/veldra/gui/services.py` を拡張し、`get_artifact_spec()`（Artifact.load 非依存）、`validate_prediction_data()`、`delete_artifact_dir()`、`run_action(action="predict")` を追加。
+- `src/veldra/gui/components/studio_parts.py` / `src/veldra/gui/pages/studio_page.py` を更新し、推論 UI（モデルカード、推論アップロード、Spec、guardrail、Predict、CSV download）と Model Hub Offcanvas（Load/Delete/ページング）を実装。
+- `src/veldra/gui/app.py` に Phase34.2 callback 群を追加（Model Hub 開閉/Load/Delete確認、推論アップロード、Predict投入、Predict→Evaluate 自動連携ポーリング、CSV download）。
+- `src/veldra/gui/pages/runs_page.py` の Action フィルタに `predict` を追加し、運用可視性を整合。
+- `tests/test_gui_studio.py`、`tests/test_gui_services_core.py`、`tests/test_gui_services_edge_cases.py`、`tests/test_gui_services_run_dispatch.py` を更新し、Phase34.2 契約を固定。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Model Hub の root は Phase34.2 では `artifacts/` 固定とし、root 切替 UI は導入しない。
+  - 理由: UX と破壊的変更リスクを抑えつつ、推論モード本実装に集中するため。
+  - 影響範囲: `src/veldra/gui/{app.py,components/studio_parts.py,services.py}`
+- Decision: confirmed（確定）
+  - 内容: 推論モードで正解ラベル列が指定された場合、Predict 成功後に Evaluate ジョブを自動投入し、評価失敗時も予測プレビュー/CSV は保持する。
+  - 理由: 推論結果確認と評価を1画面内で完結させつつ、評価失敗時の再実行性を確保するため。
+  - 影響範囲: `src/veldra/gui/app.py`, `src/veldra/gui/services.py`, `tests/test_gui_studio.py`
+
+**検証結果**
+- `uv run ruff check src/veldra/gui/types.py src/veldra/gui/services.py src/veldra/gui/components/studio_parts.py src/veldra/gui/pages/studio_page.py src/veldra/gui/pages/runs_page.py src/veldra/gui/app.py tests/test_gui_studio.py tests/test_gui_services_core.py tests/test_gui_services_edge_cases.py tests/test_gui_services_run_dispatch.py DESIGN_BLUEPRINT.md HISTORY.md` を通過。
+- `uv run pytest -q tests/test_gui_studio.py tests/test_gui_services_core.py tests/test_gui_services_edge_cases.py tests/test_gui_services_run_dispatch.py` を実施（`32 passed`）。
+- `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`753 passed, 15 deselected`）。
