@@ -1172,163 +1172,292 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 - Notebook での `display(Image(...))` は `display(fig)` または `fig.show()` に変更し、インタラクティブ表示を可能にする。
 - ファイルとして保存する機能（`save_path` 引数）は引き続き保持し、E2E テストで PNG の存在確認ができるようにする。
 
-#### カテゴリー列は Categorical として LightGBM に投入する
-- 学習データ読み込み後、カテゴリー型の列（`dtype == 'object'` または明示的に `category` 型と判断される列）は `pd.CategoricalDtype` に変換してから `fit()` に渡す。
-- Notebook での典型的な処理パターン:
+#### カテゴリー列は自動判定して Categorical に変換し LightGBM Embedding を使う
+- データ読み込み後、`dtype == 'object'` または `dtype.name == 'category'` の列を `select_dtypes` で自動検出し、`pd.CategoricalDtype` に変換する。手動指定は不要。
+- 変換後、列名リストを Config の `data.categorical_features` キーに渡すことで LightGBM の Categorical Embedding（内部 one-hot ではなく木ベースの離散分割）が有効になる。
+- Notebook での標準処理パターン（「カテゴリー列変換」独立セルとして配置）:
   ```python
-  cat_cols = train_df.select_dtypes(include='object').columns.tolist()
+  cat_cols = (
+      train_df.select_dtypes(include=['object', 'category']).columns
+      .difference([target_col])  # 目的変数は除外
+      .tolist()
+  )
   for col in cat_cols:
       train_df[col] = train_df[col].astype('category')
       test_df[col] = test_df[col].astype('category')
+  config["data"]["categorical_features"] = cat_cols
   ```
-- Config の `data.categorical_features` キーを利用する場合はそちらに一覧を渡してもよい（既存 API に従う）。
-- カテゴリー変換セルは「特徴量指定」セルに含める（専用の独立セルとして切り出す）。
+- カテゴリー変換セルは「特徴量指定」の後に独立セルとして配置する（他セルと混在させない）。
+- 評価データ（`latest.csv` 等）を別途読み込む場合も同じ `cat_cols` でキャストすること。
 
-### 3. 分析シナリオ
-- reference_01_quick_reference.ipynb の内容を以下のように分割する。
-  - Config設定
-  - データ指定
-  - 目的変数指定
-  - 特徴量指定
-    - 目的変数以外を特徴量とする
-    - 特徴量として使わないColumnを指定
-  - CV設定
-    - GROUP Column / Time Series Columnを指定
-    - 指定したColumnは特徴量から除外
-  - LightGBM設定
-    - パラメーター
-- パラメーター最適化（学習データCV）
-- 学習（学習データ）
-- 予測（評価データ）
-- 予測精度評価(In & Out)
-  - MAE
-  - MAPE
-  - RMSE
-  - Huber
-  - 残差分布 グラフ
-- モデル評価
-  - 学習曲線
-  - Importance グラフ (Split)
-  - Importance 表 (Split)
-  - Importance グラフ (Gain)
-  - Importance 表 (Gain)
-  - SHAP グラフ
-  - SHAP 表
+### 3. Notebook 一覧・使用データセット・シナリオ区分
 
-### 4. reference_01_quick_reference.ipynbを作りこんでから他のNotebookも同様に充実させる。そのための計画を策定する。現時点での想定シナリオ。
-#### Binary分析
-- Config設定
-  - データ指定
-  - 目的変数指定
-  - 特徴量指定
-    - 目的変数以外を特徴量とする
-    - 特徴量として使わないColumnを指定
-  - CV設定
-    - GROUP Column / Time Series Columnを指定
-    - 指定したColumnは特徴量から除外
-  - Tuning設定
-    - 目的関数
-    - Space
-    - Iteration
-  - LightGBM設定
-    - パラメーター
-- パラメーター最適化（学習データCV）
-- 学習（学習データ）
-- 予測（評価データ）
-- 予測精度評価(In & Out)
-  - AUC
-  - PR-AUC
-  - Top-k Accuracy
-  - Log Loss
-  - Brier score
-  - ROC-AUC グラフ
-  - 混合行列
-- モデル評価
-  - 学習曲線
-  - Importance グラフ (Split)
-  - Importance 表 (Split)
-  - Importance グラフ (Gain)
-  - Importance 表 (Gain)
-  - SHAP グラフ
-  - SHAP 表
+| No. | ファイル名 | シナリオ | 使用データセット | Tuning |
+|-----|-----------|---------|----------------|--------|
+| 01 | `reference_01_regression_fit_evaluate.ipynb` | 回帰 | Ames Housing Dataset | なし |
+| 02 | `reference_02_binary_fit_evaluate.ipynb` | Binary | Titanic Dataset | なし |
+| 03 | `reference_03_multiclass_fit_evaluate.ipynb` | Multiclass | Palmer Penguins Dataset | なし |
+| 04 | `reference_04_timeseries_fit_evaluate.ipynb` | 時系列回帰 | Bike Sharing Dataset | なし |
+| 05 | `reference_05_frontier_fit_evaluate.ipynb` | Frontier | 自作データ（Phase35.0 DGP） | なし |
+| 06 | `reference_06_dr_estimate.ipynb` | DR | LaLonde Dataset | なし |
+| 07 | `reference_07_drdid_estimate.ipynb` | DR-DiD | CPS Panel Dataset | なし |
+| 08 | `reference_08_artifact_evaluate.ipynb` | モデルロード・予測 | Frontier 自作データ（2025年分） | なし |
+| 09 | `reference_09_binary_tune_evaluate.ipynb` | Tuning + Binary | Titanic Dataset | あり |
+| 10 | `reference_10_timeseries_tune_evaluate.ipynb` | Tuning + 時系列回帰 | Bike Sharing Dataset | あり |
+| 11 | `reference_11_frontier_tune_evaluate.ipynb` | Tuning + Frontier | 自作データ（Phase35.0 DGP） | あり |
+| 12 | `reference_12_dr_tune_estimate.ipynb` | Tuning + DR | LaLonde Dataset | あり |
+| 13 | `reference_13_drdid_tune_estimate.ipynb` | Tuning + DR-DiD | CPS Panel Dataset | あり |
 
-#### Multiclass分析
-- Config設定
-  - データ指定
-  - 目的変数指定
-  - 特徴量指定
-    - 目的変数以外を特徴量とする
-    - 特徴量として使わないColumnを指定
-  - CV設定
-    - GROUP Column / Time Series Columnを指定
-    - 指定したColumnは特徴量から除外
-  - LightGBM設定
-    - パラメーター
-- パラメーター最適化（学習データCV）
-- 学習（学習データ）
-- 予測（評価データ）
-- 予測精度評価(In & Out)
-  - One-vs-Rest ROC-AUC (macro / weighted / micro)
-  - PR-AUC
-  - Top-k Accuracy
-  - Accuracy
-  - Balanced Accuracy
-  - Log Loss
-  - Brier score
-  - One-vs-Rest ROC-AUC グラフ
-  - 混合行列
-- モデル評価
-  - 学習曲線
-  - Importance グラフ (Split)
-  - Importance 表 (Split)
-  - Importance グラフ (Gain)
-  - Importance 表 (Gain)
-  - SHAP グラフ
-  - SHAP 表
+- **08 モデルロード・予測**: Frontier（05 / 11）で学習済みのアーティファクトをロードし、`train_eval.csv` とは独立した `latest.csv`（2025年分）に対して予測・評価を実施する。過去モデルで最新データを評価するシナリオ。
+- Tuning あり Notebook（09〜13）は対応する No Tuning 版（02/04/05/06/07）と同じデータを使用し、Tuning Config の追加のみが差分となる。
 
+### 4. シナリオ別・セル構成テンプレート
 
-#### 時系列回帰分析
-- Config設定
-  - データ指定
-  - 目的変数指定
-  - 特徴量指定
-    - 目的変数以外を特徴量とする
-    - 特徴量として使わないColumnを指定
-  - CV設定
-    - GROUP Column / Time Series Columnを指定
-    - 指定したColumnは特徴量から除外
-  - Tuning設定
-    - 目的関数
-    - Space
-    - Iteration
-  - LightGBM設定
-    - パラメーター
-- パラメーター最適化（学習データCV）
-- 学習（学習データ）
-- 予測（評価データ）
-- 予測精度評価(In & Out)
-  - MAE
-  - MAPE
-  - RMSE
-  - Huber
-  - 時系列の目的変数・予測値グラフ（In / Out の区切り付き）
-  - 時系列の残差グラフ（In / Out の区切り付き）
-- モデル評価
-  - Importance グラフ (Split)
-  - Importance 表 (Split)
-  - Importance グラフ (Gain)
-  - Importance 表 (Gain)
-  - SHAP グラフ
-  - SHAP 表
+各 Notebook は「1セル1処理」原則に従う。以下のテンプレートをシナリオ区分ごとに示す。
+
+#### 共通フロー（回帰 / Binary / Multiclass / 時系列 / Frontier）
+
+```
+Setup（インポート・OUT_DIR）
+→ データ読み込みと train/test 分割
+→ 特徴量指定（除外列の設定）
+→ カテゴリー列変換（自動検出 → CategoricalDtype → config 設定）
+→ Config 設定（CV / LightGBM params）
+[→ Tuning Config（Tuning あり Notebook のみ）]
+[→ パラメーター最適化（tune()）（Tuning あり Notebook のみ）]
+→ 学習（fit()）
+→ 予測（predict()）
+→ 予測精度評価（指標表示）
+→ [グラフ各種]
+→ モデル評価（学習曲線 / Importance / SHAP）
+→ Result Summary 保存
+```
+
+#### 回帰（01）— Ames Housing Dataset
+
+- **データ**: `data/ames_housing.csv`（数値・カテゴリー混在）
+- **目的変数**: `SalePrice`（連続値）
+- **精度指標（In & Out）**: MAE / MAPE / RMSE / Huber / 残差分布グラフ
+- **モデル評価**: 学習曲線 / Importance（Split・Gain）/ SHAP
+
+#### Binary（02 / 09-Tuning）— Titanic Dataset
+
+- **データ**: `data/titanic.csv`（カテゴリー列あり: Sex, Embarked 等）
+- **目的変数**: `Survived`（0/1）
+- **精度指標（In & Out）**: AUC / PR-AUC / Top-5% Positive Rate / Log Loss / Brier / ROC-AUC グラフ / 混合行列
+- **モデル評価**: 学習曲線 / Importance（Split・Gain）/ SHAP
+
+#### Multiclass（03）— Palmer Penguins Dataset
+
+- **データ**: `data/penguins.csv`（カテゴリー列あり: island, sex 等）
+- **目的変数**: `species`（Adelie / Chinstrap / Gentoo）
+- **精度指標（In & Out）**: One-vs-Rest ROC-AUC（macro/weighted/micro）/ PR-AUC / Accuracy / Balanced Accuracy / Log Loss / Brier / OvR ROC-AUC グラフ / 混合行列
+- **モデル評価**: 学習曲線 / Importance（Split・Gain）/ SHAP
+
+#### 時系列回帰（04 / 10-Tuning）— Bike Sharing Dataset
+
+- **データ**: `data/bike_sharing.csv`（日付列あり、カテゴリー列: season, weathersit 等）
+- **目的変数**: `cnt`（自転車利用台数）
+- **CV設定**: Time Series Column 指定（`dteday`）
+- **精度指標（In & Out）**: MAE / MAPE / RMSE / Huber / 時系列予測値グラフ / 時系列残差グラフ（In/Out 区切り付き）
+- **モデル評価**: 学習曲線 / Importance（Split・Gain）/ SHAP
+
+#### Frontier（05 / 11-Tuning）— 自作データ（Phase35.0 DGP）
+
+- **データ**: `data/demo/frontier/train_eval.csv`（sec_id / dept_id / hq_id がカテゴリー列）
+- **目的変数**: `net_sales`（ネット売上）
+- **精度指標（In & Out）**: MAE / MAPE / RMSE / Huber / 残差分布グラフ
+- **モデル評価**: 学習曲線 / Importance（Split・Gain）/ SHAP / 効率スコア分布
+
+#### DR（06 / 12-Tuning）— LaLonde Dataset
+
+- **データ**: `data/lalonde.csv`
+- **目的変数**: `re78`（収入）/ 処置変数: `treat`
+- **セルフロー**: データ読み込み → DR 推定 Config → 推定（estimate()）→ ATE / ATT / 信頼区間表示 → 共変量バランスチェック
+- [Tuning 版] 推定前に Nuisance モデルの Tuning を追加
+
+#### DR-DiD（07 / 13-Tuning）— CPS Panel Dataset
+
+- **データ**: `data/cps_panel.csv`（パネルデータ、time カラムあり）
+- **目的変数**: `re`（収入）/ 処置変数: `treat` / 時点変数: `year`
+- **セルフロー**: データ読み込み → DR-DiD 推定 Config → 推定（estimate()）→ ATT（DiD）/ 信頼区間表示 → 共変量バランスチェック
+- [Tuning 版] 推定前に Nuisance モデルの Tuning を追加
+
+#### モデルロード・予測（08）— Frontier 自作データ（2025年分）
+
+- **前提**: Frontier Notebook（05 または 11）で学習済みアーティファクトが存在すること
+- **評価データ**: `data/demo/frontier/latest.csv`（2025年分、同一スキーマ）
+- **セルフロー**:
+  - アーティファクトパス指定 → `Artifact.load(path)`
+  - カテゴリー列変換（`cat_cols` は学習時と同一）
+  - `artifact.predict(latest_df)` → 予測値生成
+  - `regression_metrics()` で精度評価（Out-of-time）
+  - 残差分布グラフ / Importance 表示
+  - Result Summary 保存
 
 ---
 
 ### 5. サブフェーズ構成
 
-#### Phase35.1: `reference_01_regression_fit_evaluate.ipynb` 充実
+#### Phase35.0: Frontier Analysis デモデータ生成スクリプト
 
 **目的**
-現行の1セル巨大ワークフローを1セル1処理に分割し、Huber・学習曲線・Importance Split を追加する。
+- `reference_05_frontier_fit_evaluate.ipynb` および `reference_11_frontier_tune_evaluate.ipynb` で使用するデモデータを、再現性ある DGP（Data Generating Process）スクリプトで生成する。
+- データ期間は **2023年〜2024年**（モデル学習・評価用）と **2025年**（過去モデルで最新データを評価する想定）。
+- 組織階層（本部→部→課）×月次を DMU とし、非効率（課固有）とノイズ（月次）を明示的に埋め込むことで、フロンティア分析の教材として適切な性質を持つデータを作る。
+
+**実装方針**
+
+- スクリプト: `scripts/generate_frontier_demo_data.py`（単体実行可能、`python scripts/generate_frontier_demo_data.py` で全ファイルを出力）
+- 出力先:
+  - `data/demo/frontier/train_eval.csv` — 2023年1月〜2024年12月（500課×24ヶ月＝12,000行、学習・評価用）
+  - `data/demo/frontier/latest.csv` — 2025年1月〜2025年12月（500課×12ヶ月＝6,000行、最新評価用）
+- 乱数シードを固定（`SEED = 42`）し、スクリプト再実行で同一データが得られる。
+- 依存ライブラリは `numpy` / `pandas` のみ（既存依存に追加なし）。
+- Phase35.0 のスコープはデータ生成スクリプト + データ品質テストに限定し、Notebook/Examples の入出力経路更新は本サブフェーズでは実施しない。
+
+**組織階層とインデックス**
+
+| 変数 | 意味 | 数 |
+|------|------|----|
+| `hq_id` | 本部 | 5 |
+| `dept_id` | 部（本部あたり10） | 50 |
+| `sec_id` | 課（部あたり10） | 500 |
+| `month` | 月（`YYYY-MM`形式） | 24（学習評価）/ 12（最新） |
+
+**出力テーブルの列定義**
+
+| 列名 | 型 | 説明 |
+|------|----|------|
+| `hq_id` | str | 本部ID（`HQ01`〜`HQ05`） |
+| `dept_id` | str | 部ID（`DEPT01`〜`DEPT50`） |
+| `sec_id` | str | 課ID（`SEC001`〜`SEC500`） |
+| `month` | str | 観測月（`YYYY-MM`） |
+| `hc_g1`〜`hc_g10` | int | グレード別人員数 |
+| `territory_potential` | float | 市場ポテンシャル（課固定） |
+| `discount_amount_total` | float | 値引き額合算（月次） |
+| `touches` | int | プロセスKPI: 接触数 |
+| `opps_created` | int | プロセスKPI: 案件化数 |
+| `meetings_held` | int | プロセスKPI: 商談実施数 |
+| `proposals_sent` | int | プロセスKPI: 提案数 |
+| `net_sales` | float | 観測ネット売上（目的変数） |
+| `u_s` | float | 課固有の非効率（高いほど不利） |
+
+**DGP 仕様**
+
+以下の順序で生成する。
+
+**ステップ1: 階層・課固有パラメータ生成**
+
+```
+σ_hq = 0.20, σ_dept = 0.15, σ_u = 0.30, span₀ = 8, b_span = 0.25, a_L = 0.15
+```
+
+- 本部効果: `α_h ~ N(0, σ_hq²)`（h=1..5）
+- 部効果: `α_d ~ N(0, σ_dept²)`（d=1..50）
+- 課非効率: `u_s ~ HalfNormal(σ_u)`（s=1..500）
+- 市場ポテンシャル: `τ_s ~ LogNormal(μ_τ, σ_τ²)`（課固定）
+
+**ステップ2: 人員データ生成**
+
+グレード g1〜g10 の人員 `hc_{s,k}` を Poisson で生成（グレードごとにλ設定）。
+
+IC（g1〜g5）と管理職（g6〜g8）を分けて実効キャパを計算:
+
+```
+C_IC_s = Σ_{k=1..5} w_k · hc_{s,k}      # w = (0.6, 0.8, 1.0, 1.2, 1.4)
+C_M_s  = Σ_{k=6..8} m_k · hc_{s,k}      # m = (1.2, 1.6, 2.0)
+L_s    = 1 + a_L · log1p(C_M_s)
+span_s = Σhc_{g1..5} / max(1, Σhc_{g6..8})
+P_span_s = exp(-b_span · (log(span_s) - log(span₀))²)
+cap_s  = C_IC_s · L_s · P_span_s · exp(α_{h(s)} + α_{d(s)})
+```
+
+**ステップ3: 月次データ生成（t=1..T）**
+
+季節性: `S(t) = a_sin · sin(2πt/12) + a_cos · cos(2πt/12)`（`a_sin=0.10, a_cos=0.05`）
+
+**(3a) 値引き額**
+
+```
+log μ_D_{s,t} = κ₀ + κ₁·log1p(cap_s) + κ₂·log(τ_s) + κ₃·S(t) + ε_D
+ε_D ~ N(0, σ_D²),  σ_D = 0.40
+D_{s,t} = exp(log μ_D_{s,t})
+scale_D = median(D_{s,t}) で正規化（受注単価・勝率計算に使用）
+```
+
+**(3b) プロセスKPI（ファネル順）**
+
+| KPI | 分布 | 非効率の入れ方 |
+|-----|------|--------------|
+| `touches` | Poisson(λ) | なし（キャパ・市場・季節性のみ） |
+| `opps_created` | Binomial(touches, p_opp) | `-φ_opp · u_s` を logit に加算 |
+| `meetings_held` | Binomial(opps, p_meet) | `-φ_meet · u_s` を logit に加算 |
+| `proposals_sent` | Binomial(meetings, p_prop) | `-φ_prop · u_s` を logit に加算 |
+
+各 φ = 0.50（logit スケール）。各ステージに独立ノイズ `v ~ N(0, σ²)` を加算（σ は上記「推奨パラメータ」参照）。
+
+**(3c) ネット売上**
+
+```
+# 受注件数（内部変数）
+p_win_{s,t} = σ(ω₀ + ω₁·log1p(cap_s) + ω₂·log(τ_s) + ω₃·log1p(D/scale_D) - φ_win·u_s + v_win)
+W_{s,t} ~ Binomial(proposals_sent, p_win_{s,t})
+
+# 受注単価
+log A_{s,t} = δ₀ + δ₁·log(τ_s) + δ₂·S(t) - δ₃·log1p(D/scale_D) + v_price
+
+# 観測ネット売上（乗法ノイズ＋非効率）
+Y*_{s,t}  = W_{s,t} · exp(log A_{s,t})          # フロンティア（潜在）売上
+Y_{s,t}   = Y*_{s,t} · exp(v_sales - u_s)        # 観測売上
+v_sales ~ N(0, σ_sales²)
+```
+
+値引きの相殺設計: `ω₃`（勝率↑）と `δ₃`（単価↓）を同程度（例: 0.15）に設定し、値引きのネット売上への単独効果を打ち消す。
+
+**推奨パラメータ初期値**
+
+```python
+PARAMS = {
+    "sigma_hq": 0.20,   "sigma_dept": 0.15,  "sigma_u": 0.30,
+    "w": [0.6, 0.8, 1.0, 1.2, 1.4],           # IC重み g1-g5
+    "m": [1.2, 1.6, 2.0],                      # 管理職重み g6-g8
+    "span0": 8,          "b_span": 0.25,       "a_L": 0.15,
+    "sigma_touch": 0.15, "sigma_opp": 0.20,
+    "sigma_meet": 0.20,  "sigma_prop": 0.20,
+    "sigma_win": 0.20,   "sigma_price": 0.25,  "sigma_sales": 0.25,
+    "sigma_D": 0.40,
+    "phi_opp": 0.50,     "phi_meet": 0.50,
+    "phi_prop": 0.50,    "phi_win": 0.50,
+    "omega3": 0.15,      "delta3": 0.15,       # 相殺係数
+}
+```
+
+**データ分割ルール**
+
+- `train_eval.csv`: `month` が `2023-01` 〜 `2024-12`（T=24）
+- `latest.csv`: `month` が `2025-01` 〜 `2025-12`（T=12）
+- 課固有パラメータ（`u_s`, `τ_s`, `α_h`, `α_d`, 人員）は両ファイルで同一シードから再現できるよう生成順を固定する。
+
+**テスト方針**
+
+- `tests/test_frontier_demo_data.py` を新規作成
+  - スクリプト実行後に `train_eval.csv` / `latest.csv` が存在すること
+  - 行数が 12,000 / 6,000 であること
+  - `net_sales > 0` の割合が 50% 超であること（完全ゼロデータにならない）
+  - `u_s`（非効率）の分散が存在し、`u_s` 下位10%課の `net_sales` 中央値が `u_s` 上位10%課より高いこと（フロンティア構造の確認）
+
+**成功基準**
+
+- `python scripts/generate_frontier_demo_data.py` が 30 秒以内に完了し、2 ファイルを出力する
+- `pytest tests/test_frontier_demo_data.py` が green
+
+---
+
+#### Phase35.1: `reference_01_regression_fit_evaluate.ipynb` 充実（Ames Housing）
+
+**目的**
+現行の1セル巨大ワークフローを1セル1処理に分割し、Huber・学習曲線・Importance Split を追加する。データセットを Ames Housing に統一し、カテゴリー列自動変換セルを追加する。
 
 **実装方針（2026-02-20 追記）**
 - Plotly 移行は Phase35.1 では UC-1 で利用する描画関数（`plot_error_histogram` / `plot_feature_importance` / `plot_shap_summary` / `plot_learning_curve`）に限定して先行適用する。
@@ -1389,10 +1518,10 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 
 ---
 
-#### Phase35.2: `reference_02_binary_tune_evaluate.ipynb` 充実
+#### Phase35.2: `reference_02_binary_fit_evaluate.ipynb` 充実（Titanic）
 
 **目的**
-Binary 分析ノートブックを1セル1処理に分割し、Top-k Accuracy・混合行列・Importance Split・学習曲線を追加する。
+Binary 分析ノートブック（Tuning なし）を新番号 `reference_02` として整備し、1セル1処理に分割する。データセットを Titanic に統一し、カテゴリー列自動変換・Top-k Accuracy・混合行列・Importance Split・学習曲線を追加する。
 
 **バックエンド変更**
 
@@ -1413,11 +1542,11 @@ Binary 分析ノートブックを1セル1処理に分割し、Top-k Accuracy・
 
 | セル | 種別 | 内容 |
 |---|---|---|
-| データ準備 | code | CSV 読み込み → stratified split → CSV 保存 |
-| Base Config | code | `base_config = {...}` （各パラメーターにコメント） |
-| Tune Config | code | `tune_config["tuning"] = {...}` （Space・試行数にコメント） |
-| パラメーター最適化 | code | `tune_result = tune(tune_config)` |
-| 学習 | code | best params 反映 → `run_result = fit(fit_config)` |
+| データ準備 | code | `titanic.csv` 読み込み → stratified split → CSV 保存 |
+| 特徴量指定 | code | 目的変数・除外列設定 |
+| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical_features"]` |
+| Config | code | `config = {...}` （各パラメーターにコメント） |
+| 学習 | code | `run_result = fit(config)` |
 | 予測 | code | `artifact.predict(x_train/x_test)` → スコア列抽出 |
 | 予測精度評価 | code | `binary_metrics(...)` × 2 → `metrics_df` 表示（AUC / PR-AUC / Top5% / Log Loss / Brier） |
 | ROC-AUC グラフ | code | `plot_roc_comparison(...)` |
@@ -1433,10 +1562,10 @@ Binary 分析ノートブックを1セル1処理に分割し、Top-k Accuracy・
 
 ---
 
-#### Phase35.3: `reference_11_multiclass_fit_evaluate.ipynb` 充実
+#### Phase35.3: `reference_03_multiclass_fit_evaluate.ipynb` 充実（Palmer Penguins）
 
 **目的**
-Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC グラフ・混合行列・Balanced Accuracy・Brier・PR-AUC・Importance Split・学習曲線を追加する。
+Multiclass ノートブックを新番号 `reference_03` として整備し、1セル1処理に分割する。データセットを Palmer Penguins に統一し、カテゴリー列自動変換・One-vs-Rest ROC-AUC グラフ・混合行列・Balanced Accuracy・Brier・PR-AUC・Importance Split・学習曲線を追加する。
 
 **バックエンド変更**
 
@@ -1476,10 +1605,10 @@ Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC
 
 ---
 
-#### Phase35.4: `reference_12_timeseries_fit_evaluate.ipynb` 充実
+#### Phase35.4: `reference_04_timeseries_fit_evaluate.ipynb` 充実（Bike Sharing）
 
 **目的**
-時系列回帰ノートブックを1セル1処理に分割し、Huber・Importance Split・学習曲線を追加する。
+時系列回帰ノートブックを新番号 `reference_04` として整備し、1セル1処理に分割する。データセットを Bike Sharing に統一し、カテゴリー列自動変換・Huber・Importance Split・学習曲線を追加する。
 （`plot_learning_curve` は Phase35.1 で追加済みのため追加変更なし）
 
 **バックエンド変更**
@@ -1489,8 +1618,9 @@ Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC
 
 | セル | 種別 | 内容 |
 |---|---|---|
-| データ準備 | code | california_housing.csv → event_time 列追加 → 時系列順 split |
-| Config | code | 時系列特有パラメーター（`drop_cols: ['event_time']` 等）にコメント |
+| データ準備 | code | `bike_sharing.csv` 読み込み → 時系列順 split |
+| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical_features"]` |
+| Config | code | 時系列特有パラメーター（CV Time Series Column 指定等）にコメント |
 | 学習 | code | `fit(config)` |
 | 予測 | code | 訓練/テストデータへの予測値生成 |
 | 予測精度評価 | code | `regression_metrics(...)` × 2（MAE / MAPE / RMSE / Huber） |
@@ -1517,23 +1647,32 @@ Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC
 | Unit | `plot_learning_curve` | 正常な training_history で PNG を保存できること／`None` 入力時にエラーなく空 PNG を保存できること |
 | Unit | `plot_confusion_matrix` | binary（2×2）・multiclass（3×3）で PNG を保存できること |
 | Unit | `plot_roc_multiclass` | クラス数 3 のデータで PNG を保存できること |
-| Notebook E2E | reference_{01,02,11,12} のノートブック実行 | `pytest -m notebook_e2e` が green を維持 |
+| Notebook E2E | reference_{01,02,03,04}（Phase35.1〜35.4対象）の実行 | `pytest -m notebook_e2e` が green を維持 |
 | Regression | 全既存テスト | `-m "not gui_e2e and not notebook_e2e"` が green を維持 |
 
 ---
 
 ### 7. 対象ファイル
 
+**データ生成スクリプト（Phase35.0）**
+- `scripts/generate_frontier_demo_data.py`（新規）— DGP スクリプト
+- `data/demo/frontier/train_eval.csv`（新規）— 2023〜2024年データ
+- `data/demo/frontier/latest.csv`（新規）— 2025年データ
+- `tests/test_frontier_demo_data.py`（新規）— データ品質テスト
+
 **バックエンド変更**
 - `src/veldra/diagnostics/metrics.py` — `regression_metrics`・`binary_metrics`・`multiclass_metrics` に新指標追加
 - `src/veldra/diagnostics/plots.py` — `plot_learning_curve`・`plot_confusion_matrix`・`plot_roc_multiclass` を追加
 - `src/veldra/diagnostics/__init__.py` — 新関数をエクスポートリストに追加
 
-**Notebook 改修**
-- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` — セル分割 + Huber + 学習曲線 + Importance Split
-- `notebooks/quick_reference/reference_02_binary_tune_evaluate.ipynb` — セル分割 + 混合行列 + 学習曲線 + Importance Split
-- `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` — セル分割 + 多クラス ROC + 混合行列 + 学習曲線 + Importance Split
-- `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` — セル分割 + Huber + 学習曲線 + Importance Split
+**Notebook 改修（Phase35.1〜35.4）**
+- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` — セル分割 + Ames Housing + カテゴリー自動変換 + Huber + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_02_binary_fit_evaluate.ipynb`（新）— Titanic + カテゴリー自動変換 + 混合行列 + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_03_multiclass_fit_evaluate.ipynb`（新）— Palmer Penguins + カテゴリー自動変換 + 多クラス ROC + 混合行列 + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_04_timeseries_fit_evaluate.ipynb`（新）— Bike Sharing + カテゴリー自動変換 + Huber + 学習曲線 + Importance Split
+
+**Notebook 新規作成（Phase35.5 以降）**
+- `reference_05_frontier_fit_evaluate.ipynb` — 自作データ / `reference_06_dr_estimate.ipynb` — LaLonde / `reference_07_drdid_estimate.ipynb` — CPS Panel / `reference_08_artifact_evaluate.ipynb` — latest.csv / `reference_09_binary_tune_evaluate.ipynb` — Titanic+Tuning / `reference_10_timeseries_tune_evaluate.ipynb` — Bike Sharing+Tuning / `reference_11_frontier_tune_evaluate.ipynb` — 自作データ+Tuning / `reference_12_dr_tune_estimate.ipynb` — LaLonde+Tuning / `reference_13_drdid_tune_estimate.ipynb` — CPS Panel+Tuning
 
 **変更なし（再利用）**
 - `src/veldra/diagnostics/importance.py` — `compute_importance(importance_type='split')` は既存機能で対応
@@ -1545,24 +1684,30 @@ Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC
 
 - 各 quick_reference notebook が「1セル1処理」構成となり、セル単独で実行可能である
 - 各 Notebook のすべての出力セルに実行済み結果（数値・グラフ）が残っており、レビュー可能である
+- カテゴリー列が自動検出されて `CategoricalDtype` に変換され、`config["data"]["categorical_features"]` に渡されている
 - `regression_metrics` が `huber` を返し、Notebook でも表示されている
-- `plot_learning_curve` が PNG を生成し、4 本すべての Notebook の学習曲線セルで表示されている
+- `plot_learning_curve` が PNG を生成し、Phase35.1〜35.4 の Notebook の学習曲線セルで表示されている
 - `plot_confusion_matrix` が binary・multiclass の両 Notebook で表示されている
 - `plot_roc_multiclass` が multiclass Notebook で表示されている
 - Importance が Split / Gain の両方で表示・CSV 保存されている
+- `scripts/generate_frontier_demo_data.py` が 30 秒以内に完了し、`train_eval.csv`（12,000行）・`latest.csv`（6,000行）を出力する
 - `pytest -m "not gui_e2e and not notebook_e2e"` が green を維持する
 
 ---
 
 ### 9. 実装順序
 
-1. **バックエンド先行**: `metrics.py` → `plots.py` → `__init__.py` の順に変更し、ユニットテストを通す
-2. **Phase35.1**: `reference_01` で新バックエンドを使い1セル1処理に分割・動作確認
-3. **Phase35.2〜35.4**: Phase35.1 の構成を参考に残り3本を同様に整備
+1. **Phase35.0**: `scripts/generate_frontier_demo_data.py` を実装し `data/demo/frontier/` に CSV 2本を生成、`tests/test_frontier_demo_data.py` を通す
+2. **バックエンド先行**: `metrics.py` → `plots.py` → `__init__.py` の順に変更し、ユニットテストを通す
+3. **Phase35.1**: `reference_01`（Ames Housing）でカテゴリー自動変換・新バックエンドを使い1セル1処理に分割・動作確認
+4. **Phase35.2**: `reference_02`（Titanic）を新規作成
+5. **Phase35.3**: `reference_03`（Palmer Penguins）を新規作成
+6. **Phase35.4**: `reference_04`（Bike Sharing）を新規作成
+7. **Phase35.5以降**: reference_05〜13 を順次作成（別サブフェーズで計画）
 
 ---
 
 ### Decision（provisional）
-- 内容: Phase35 はバックエンドの診断機能追加（Huber・学習曲線・混合行列・多クラス ROC・Top-k）と、quick_reference 4本のセル分割・充実を同一フェーズで実施する。
-- 理由: バックエンドと Notebook を別フェーズにすると動作確認が分断され、Notebook E2E テストの green 維持が難しくなるため。
-- 影響範囲: `src/veldra/diagnostics/{metrics,plots,__init__}.py`, `notebooks/quick_reference/reference_{01,02,11,12}_*.ipynb`
+- 内容: Phase35 は Notebook の番号体系を 01〜13 の 13本構成（シナリオ別・Tuning あり/なし対称）に整理し、デモデータ生成（Phase35.0）・バックエンド診断機能追加・quick_reference 4本（01〜04）のセル分割・充実を Phase35.0〜35.4 として先行実施する。残り 9本（05〜13）は Phase35.5 以降で計画する。
+- 理由: カテゴリー自動判定と LightGBM Embedding の共通方針を全 Notebook に適用するため、データセットを実務的なものに刷新する。Notebook 番号はシナリオ区分（基本→応用→Tuning）に対応した直感的な順序とする。
+- 影響範囲: `scripts/generate_frontier_demo_data.py`（新規）, `data/demo/frontier/`（新規）, `tests/test_frontier_demo_data.py`（新規）, `src/veldra/diagnostics/{metrics,plots,__init__}.py`, `notebooks/quick_reference/reference_{01,02,03,04}_*.ipynb`（reference_02〜04 は新規作成）

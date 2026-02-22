@@ -1951,3 +1951,32 @@
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_diagnostics_metrics.py tests/test_diagnostics_plots.py tests/test_quickref_structure.py` を実施（`11 passed`）。
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`764 passed, 15 deselected`）。
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_execution_outputs.py -m notebook_e2e` を実施（`1 passed`）。
+
+### 2026-02-22（作業/PR: phase35-0-frontier-demo-data-generator）
+**背景**
+- Phase35.0 の要件として、Frontier ノートブックで再利用できる再現可能な DGP データを `data/demo/frontier/` に標準生成する必要があった。
+- 仕様文言に `u_s` の扱い（公開列かどうか）と品質判定の向き（high/low どちらが優位か）の曖昧さが残っていた。
+
+**変更内容**
+- `scripts/generate_frontier_demo_data.py` を新規追加し、`train_eval.csv`（2023-01〜2024-12, 12,000行）と `latest.csv`（2025-01〜2025-12, 6,000行）を生成する CLI を実装。
+- DGP を固定パラメータ化し、組織階層（HQ 5 / DEPT 50 / SEC 500）、月次季節性、ファネルKPI、値引き相殺、`u_s` 非効率を再現できる実装を追加。
+- `tests/test_frontier_demo_data.py` を新規追加し、列順・件数・月範囲・`net_sales > 0` 比率・`u_s` 分散・`low-u_s` 優位・seed再現性を契約化。
+- `DESIGN_BLUEPRINT.md` の Phase35.0 節を更新し、スコープを「データ生成+テストのみ」に限定、`u_s` を公開列として明記、品質判定を `u_s` 下位10%優位へ修正。
+- `data/demo/frontier/train_eval.csv` と `data/demo/frontier/latest.csv` を生成し、実データを配置。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase35.0 の実装範囲は `scripts/generate_frontier_demo_data.py` と `tests/test_frontier_demo_data.py` に限定し、Notebook/Examples の読込経路変更は行わない。
+  - 理由: サブフェーズの責務をデータ契約の確立に絞り、回帰範囲を最小化するため。
+  - 影響範囲: `scripts/generate_frontier_demo_data.py`, `tests/test_frontier_demo_data.py`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+- Decision: confirmed（確定）
+  - 内容: `u_s` は「課固有の非効率（高いほど不利）」として CSV 公開列に含め、品質判定は `u_s` 下位10%課の売上中央値が `u_s` 上位10%課を上回ることを採用する。
+  - 理由: DGP の意味論と品質テストの判定向きを一致させ、後続ノートブックで解釈可能な診断列を保持するため。
+  - 影響範囲: `scripts/generate_frontier_demo_data.py`, `tests/test_frontier_demo_data.py`, `DESIGN_BLUEPRINT.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check scripts/generate_frontier_demo_data.py tests/test_frontier_demo_data.py DESIGN_BLUEPRINT.md HISTORY.md` を実施し、`.md` は ruff 対象外のため Python 対象に絞って再実行した。
+- `UV_CACHE_DIR=.uv_cache uv run ruff check scripts/generate_frontier_demo_data.py tests/test_frontier_demo_data.py` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_frontier_demo_data.py` を実施（`2 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_frontier_demo_data.py` を実施し、`data/demo/frontier/train_eval.csv`（12,000行）と `data/demo/frontier/latest.csv`（6,000行）を生成。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`766 passed, 15 deselected`）。
