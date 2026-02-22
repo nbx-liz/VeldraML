@@ -24,8 +24,42 @@ def test_multiclass_evaluate_returns_expected_metrics(tmp_path, multiclass_frame
     artifact = _train_artifact(tmp_path, multiclass_frame)
     frame = multiclass_frame(rows_per_class=12, seed=32, scale=0.5)
     result = evaluate(artifact, frame)
-    assert {"accuracy", "macro_f1", "logloss"} <= set(result.metrics.keys())
+    assert {
+        "accuracy",
+        "macro_f1",
+        "logloss",
+        "balanced_accuracy",
+        "brier_macro",
+        "ovr_roc_auc_macro",
+        "average_precision_macro",
+    } <= set(result.metrics.keys())
     assert result.task_type == "multiclass"
+
+
+def test_multiclass_evaluate_returns_phase35_metrics(tmp_path, multiclass_frame) -> None:
+    artifact = _train_artifact(tmp_path, multiclass_frame)
+    frame = multiclass_frame(rows_per_class=12, seed=32, scale=0.5)
+    result = evaluate(artifact, frame)
+    assert {
+        "balanced_accuracy",
+        "brier_macro",
+        "ovr_roc_auc_macro",
+        "average_precision_macro",
+    } <= set(result.metrics)
+
+
+def test_multiclass_evaluate_continues_when_eval_data_is_missing_a_class(
+    tmp_path, multiclass_frame
+) -> None:
+    artifact = _train_artifact(tmp_path, multiclass_frame)
+    frame = multiclass_frame(rows_per_class=12, seed=32, scale=0.5)
+    frame_missing_class = frame[frame["target"] != "gamma"].reset_index(drop=True)
+    result = evaluate(artifact, frame_missing_class)
+
+    assert {"accuracy", "macro_f1", "logloss"} <= set(result.metrics)
+    assert {"balanced_accuracy", "brier_macro"} <= set(result.metrics)
+    # Missing-class inputs may make one-vs-rest aggregates undefined; evaluate() must still succeed.
+    assert "ovr_roc_auc_macro" not in result.metrics
 
 
 def test_multiclass_evaluate_validation_errors(tmp_path, multiclass_frame) -> None:

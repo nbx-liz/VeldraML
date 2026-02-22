@@ -6,6 +6,7 @@ import difflib
 import json
 import logging
 import os
+import shutil
 import threading
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
@@ -33,6 +34,7 @@ from veldra.gui._lazy_runtime import (
 )
 from veldra.gui.job_store import GuiJobStore
 from veldra.gui.types import (
+    ArtifactSpec,
     ArtifactSummary,
     GuiJobPriority,
     GuiJobRecord,
@@ -55,6 +57,7 @@ evaluate: Any | None = None
 estimate_dr: Any | None = None
 export: Any | None = None
 fit: Any | None = None
+predict: Any | None = None
 simulate: Any | None = None
 tune: Any | None = None
 load_tabular_data: Any | None = None
@@ -79,12 +82,13 @@ Artifact: Any = _ArtifactProxy
 
 
 def _get_runner_func(name: str) -> Any:
-    global evaluate, estimate_dr, export, fit, simulate, tune
+    global evaluate, estimate_dr, export, fit, predict, simulate, tune
     current = {
         "evaluate": evaluate,
         "estimate_dr": estimate_dr,
         "export": export,
         "fit": fit,
+        "predict": predict,
         "simulate": simulate,
         "tune": tune,
     }.get(name)
@@ -99,6 +103,8 @@ def _get_runner_func(name: str) -> Any:
         export = resolved
     elif name == "fit":
         fit = resolved
+    elif name == "predict":
+        predict = resolved
     elif name == "simulate":
         simulate = resolved
     elif name == "tune":
@@ -560,6 +566,27 @@ def _load_scenarios(path: str) -> Any:
     return yaml.safe_load(text)
 
 
+def _normalize_dtype_bucket(dtype_name: str) -> str:
+    text = str(dtype_name).strip().lower()
+    if not text:
+        return "unknown"
+    if "datetime" in text or "date" in text:
+        return "datetime"
+    if "int" in text or "float" in text or "double" in text or "decimal" in text:
+        return "numeric"
+    if "bool" in text:
+        return "bool"
+    if "category" in text or "string" in text or "object" in text:
+        return "categorical"
+    return "unknown"
+
+
+def _studio_predict_tmp_dir() -> Path:
+    tmp_dir = Path(".veldra_gui") / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    return tmp_dir
+
+
 def infer_task_type(data: pd.DataFrame, target_col: str) -> str:
     """Infer recommended task type from target column characteristics."""
     if target_col not in data.columns:
@@ -574,6 +601,182 @@ def infer_task_type(data: pd.DataFrame, target_col: str) -> str:
     if 3 <= n_unique <= 20 and is_int_like:
         return "multiclass"
     return "regression"
+
+
+def get_artifact_spec(artifact_path: str) -> ArtifactSpec:
+    path = Path(_require(artifact_path, "artifact_path"))
+    if not path.exists() or not path.is_dir():
+        raise VeldraValidationError(f"Artifact directory does not exist: {path}")
+
+    manifest_path = path / "manifest.json"
+    run_config_path = path / "run_config.yaml"
+    feature_schema_path = path / "feature_schema.json"
+    metrics_path = path / "metrics.json"
+    required = [manifest_path, run_config_path, feature_schema_path]
+    missing = [item.name for item in required if not item.exists()]
+    if missing:
+        raise VeldraValidationError(
+            f"Artifact is missing required file(s): {', '.join(missing)}"
+        )
+
+    try:
+        manifest_obj = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise VeldraValidationError(f"Invalid manifest.json: {exc}") from exc
+    try:
+        config_obj = yaml.safe_load(run_config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise VeldraValidationError(f"Invalid run_config.yaml: {exc}") from exc
+    try:
+        feature_schema_obj = json.loads(feature_schema_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise VeldraValidationError(f"Invalid feature_schema.json: {exc}") from exc
+
+    if not isinstance(manifest_obj, dict):
+        raise VeldraValidationError("manifest.json must deserialize to an object.")
+    if not isinstance(config_obj, dict):
+        raise VeldraValidationError("run_config.yaml must deserialize to an object.")
+    if not isinstance(feature_schema_obj, dict):
+        raise VeldraValidationError("feature_schema.json must deserialize to an object.")
+
+    feature_names_raw = feature_schema_obj.get("feature_names")
+    feature_names = (
+        [str(item) for item in feature_names_raw]
+        if isinstance(feature_names_raw, list)
+        else []
+    )
+    feature_dtypes_raw = feature_schema_obj.get("feature_dtypes")
+    feature_dtypes = (
+        {str(k): str(v) for k, v in feature_dtypes_raw.items()}
+        if isinstance(feature_dtypes_raw, dict)
+        else {}
+    )
+    task_cfg = config_obj.get("task") if isinstance(config_obj.get("task"), dict) else {}
+    data_cfg = config_obj.get("data") if isinstance(config_obj.get("data"), dict) else {}
+    target_col = str(feature_schema_obj.get("target") or data_cfg.get("target") or "")
+    task_type = str(
+        manifest_obj.get("task_type")
+        or task_cfg.get("type")
+        or feature_schema_obj.get("task_type")
+        or "unknown"
+    )
+
+    train_metrics: dict[str, float] = {}
+    if metrics_path.exists():
+        try:
+            metrics_obj = json.loads(metrics_path.read_text(encoding="utf-8"))
+            train_metrics = _flatten_numeric_metrics(metrics_obj)
+        except Exception:
+            train_metrics = {}
+
+    return ArtifactSpec(
+        artifact_path=str(path),
+        run_id=str(manifest_obj.get("run_id", path.name)),
+        task_type=task_type,
+        target_col=target_col,
+        feature_names=feature_names,
+        feature_dtypes=feature_dtypes,
+        train_metrics=train_metrics,
+        created_at_utc=(
+            str(manifest_obj["created_at_utc"])
+            if manifest_obj.get("created_at_utc") is not None
+            else None
+        ),
+    )
+
+
+def validate_prediction_data(
+    artifact_spec: ArtifactSpec,
+    data_path: str,
+) -> list[GuardRailResult]:
+    inspected = inspect_data(data_path)
+    if not inspected.get("success"):
+        return [
+            GuardRailResult(
+                "error",
+                f"Failed to inspect inference data: {inspected.get('error', 'unknown error')}",
+            )
+        ]
+
+    stats = inspected.get("stats") or {}
+    actual_cols = [str(col) for col in stats.get("columns", [])]
+    actual_set = set(actual_cols)
+    expected = [str(col) for col in artifact_spec.feature_names]
+    expected_set = set(expected)
+
+    findings: list[GuardRailResult] = []
+    missing = sorted(expected_set - actual_set)
+    extra = sorted(actual_set - expected_set)
+    if missing:
+        findings.append(
+            GuardRailResult(
+                "error",
+                f"Missing required feature columns: {', '.join(missing[:10])}",
+                "Align input columns with artifact feature_schema before prediction.",
+            )
+        )
+    if extra:
+        findings.append(
+            GuardRailResult(
+                "info",
+                f"Extra columns detected (ignored during predict): {', '.join(extra[:10])}",
+            )
+        )
+
+    profile_map: dict[str, str] = {}
+    for profile in stats.get("column_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        name = str(profile.get("name") or "")
+        dtype_name = str(profile.get("dtype") or "")
+        if name:
+            profile_map[name] = dtype_name
+
+    if artifact_spec.feature_dtypes:
+        mismatch: list[str] = []
+        for name in expected:
+            expected_dtype = artifact_spec.feature_dtypes.get(name)
+            actual_dtype = profile_map.get(name)
+            if not expected_dtype or not actual_dtype:
+                continue
+            if _normalize_dtype_bucket(expected_dtype) != _normalize_dtype_bucket(actual_dtype):
+                mismatch.append(f"{name} (expected={expected_dtype}, actual={actual_dtype})")
+        if mismatch:
+            findings.append(
+                GuardRailResult(
+                    "warning",
+                    f"Potential dtype mismatches: {', '.join(mismatch[:8])}",
+                    "Check feature engineering and column dtype casting before prediction.",
+                )
+            )
+    else:
+        findings.append(
+            GuardRailResult(
+                "info",
+                "feature_schema.feature_dtypes is unavailable; strict dtype check is skipped.",
+            )
+        )
+
+    if not findings:
+        findings.append(GuardRailResult("ok", "Prediction data checks passed."))
+    return findings
+
+
+def delete_artifact_dir(
+    artifact_path: str,
+    *,
+    root_dir: str = "artifacts",
+) -> str:
+    target = Path(_require(artifact_path, "artifact_path")).resolve()
+    root = Path(_require(root_dir, "root_dir")).resolve()
+    if not target.exists() or not target.is_dir():
+        raise VeldraValidationError(f"Artifact directory does not exist: {target}")
+    if target == root:
+        raise VeldraValidationError("Refusing to delete artifact root directory.")
+    if not target.is_relative_to(root):
+        raise VeldraValidationError("Deletion is allowed only under artifacts root.")
+    shutil.rmtree(target)
+    return str(target)
 
 
 @dataclass(slots=True)
@@ -1010,6 +1213,7 @@ def run_action(
         if action not in {
             "fit",
             "evaluate",
+            "predict",
             "tune",
             "simulate",
             "export",
@@ -1081,6 +1285,42 @@ def run_action(
                     result = _get_runner_func("evaluate")(config, frame)
             context.check_cancellation("evaluate_after_runner")
             context.update_progress(95.0, "evaluate_finalize")
+        elif action == "predict":
+            context.update_progress(12.0, "load_data")
+            data_path = _require(invocation.data_path, "data_path")
+            frame = _get_load_tabular_data()(data_path)
+            context.check_cancellation("predict_after_data")
+            context.update_progress(30.0, "load_artifact")
+            artifact_path = _require(invocation.artifact_path, "artifact_path")
+            artifact = Artifact.load(artifact_path)
+            context.check_cancellation("predict_after_artifact")
+            context.update_progress(45.0, "predict_running")
+            with _capture_runner_logs(context):
+                prediction = _get_runner_func("predict")(artifact, frame)
+
+            pred_data = getattr(prediction, "data", None)
+            if isinstance(pred_data, pd.DataFrame):
+                pred_df = pred_data.reset_index(drop=True)
+            else:
+                pred_series = pd.Series(pred_data, name="prediction")
+                pred_df = pred_series.to_frame().reset_index(drop=True)
+
+            suffix = job_id or str(int(datetime.now(UTC).timestamp() * 1_000_000_000))
+            out_path = _studio_predict_tmp_dir() / f"predict_{suffix}.csv"
+            pred_df.to_csv(out_path, index=False)
+            result = {
+                "task_type": str(getattr(prediction, "task_type", "")),
+                "metadata": (
+                    getattr(prediction, "metadata", {})
+                    if isinstance(getattr(prediction, "metadata", {}), dict)
+                    else {}
+                ),
+                "prediction_csv_path": str(out_path),
+                "preview_rows": pred_df.head(100).to_dict(orient="records"),
+                "total_count": int(len(pred_df)),
+            }
+            context.check_cancellation("predict_after_runner")
+            context.update_progress(95.0, "predict_finalize")
         elif action == "simulate":
             context.update_progress(12.0, "load_inputs")
             artifact_path = _require(invocation.artifact_path, "artifact_path")

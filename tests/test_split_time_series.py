@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from veldra.split import TimeSeriesSplitter, iter_time_series_splits
@@ -79,6 +80,14 @@ def test_timeseries_splitter_supports_single_period_split() -> None:
     train_idx, test_idx = splits[0]
     assert len(train_idx) == 1
     assert len(test_idx) == 1
+
+
+def test_timeseries_splitter_can_leave_initial_train_only_region() -> None:
+    splitter = TimeSeriesSplitter(n_splits=3, test_size=2, mode="expanding")
+    splits = list(splitter.split(12))
+    scored = np.concatenate([test_idx for _, test_idx in splits]).astype(int)
+    assert len(scored) < 12
+    assert scored.min() > 0
 
 
 def test_timeseries_splitter_rejects_insufficient_periods() -> None:

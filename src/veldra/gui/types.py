@@ -26,6 +26,18 @@ class ArtifactSummary:
 
 
 @dataclass(slots=True)
+class ArtifactSpec:
+    artifact_path: str
+    run_id: str
+    task_type: str
+    target_col: str
+    feature_names: list[str]
+    feature_dtypes: dict[str, str] = field(default_factory=dict)
+    train_metrics: dict[str, float] = field(default_factory=dict)
+    created_at_utc: str | None = None
+
+
+@dataclass(slots=True)
 class PaginatedResult(Generic[T]):
     items: list[T]
     total_count: int

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -88,9 +89,10 @@ def gui_base_url(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 @pytest.fixture(scope="session")
 def artifact_path_uc1() -> str:
-    marker = Path("examples/out/phase26_2_uc01_regression_fit_evaluate/latest_artifact_path.txt")
-    _require_path(marker, reason="UC-1 artifact marker")
-    artifact_path = Path(marker.read_text(encoding="utf-8").strip())
+    summary = Path("examples/out/phase35_uc01_regression_fit_evaluate/summary.json")
+    _require_path(summary, reason="UC-1 summary")
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_path = Path(str(payload.get("artifact_path", "")).strip())
     return _require_path(artifact_path, reason="UC-1 artifact")
 
 
@@ -103,19 +105,19 @@ def artifact_root_uc1(artifact_path_uc1: str) -> str:
 def sample_data_paths() -> dict[str, str]:
     return {
         "uc1_train": _require_path(
-            Path("examples/out/phase26_2_uc01_regression_fit_evaluate/train.csv"),
+            Path("examples/out/phase35_uc01_regression_fit_evaluate/train.parquet"),
             reason="UC-1 train data",
         ),
         "uc1_test": _require_path(
-            Path("examples/out/phase26_2_uc01_regression_fit_evaluate/test.csv"),
+            Path("examples/out/phase35_uc01_regression_fit_evaluate/test.parquet"),
             reason="UC-1 test data",
         ),
         "uc8_ok": _require_path(
-            Path("examples/out/phase26_2_uc08_artifact_reevaluate/reeval_ok.csv"),
+            Path("examples/out/phase35_uc08_artifact_evaluate/latest.csv"),
             reason="UC-8 re-eval ok data",
         ),
         "uc8_bad": _require_path(
-            Path("examples/out/phase26_2_uc08_artifact_reevaluate/reeval_missing_col.csv"),
+            Path("examples/out/phase35_uc08_artifact_evaluate/eval_table.csv"),
             reason="UC-8 re-eval bad data",
         ),
     }

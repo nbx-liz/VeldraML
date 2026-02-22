@@ -95,6 +95,7 @@ def test_run_action_missing_required_inputs() -> None:
     )
     assert "required" in services.run_action(RunInvocation(action="simulate")).message
     assert "required" in services.run_action(RunInvocation(action="export")).message
+    assert "required" in services.run_action(RunInvocation(action="predict")).message
 
 
 def test_run_action_evaluate_artifact_and_config_paths(monkeypatch) -> None:

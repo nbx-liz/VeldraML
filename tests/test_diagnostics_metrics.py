@@ -14,13 +14,21 @@ from veldra.diagnostics.metrics import (
 
 def test_regression_metrics_contract() -> None:
     out = regression_metrics([1.0, 2.0, 3.0], [1.1, 1.8, 3.2])
-    assert {"rmse", "mae", "mape", "r2"} <= set(out)
+    assert {"rmse", "mae", "mape", "r2", "huber"} <= set(out)
+    assert float(out["huber"]) >= 0.0
 
 
 def test_binary_metrics_contract() -> None:
     out = binary_metrics([0, 1, 0, 1], [0.2, 0.8, 0.4, 0.7])
+    assert {"auc", "brier", "top5_pct_positive"} <= set(out)
     assert 0.0 <= float(out["auc"]) <= 1.0
     assert 0.0 <= float(out["brier"]) <= 1.0
+    assert 0.0 <= float(out["top5_pct_positive"]) <= 1.0
+
+
+def test_binary_metrics_top5_uses_at_least_one_row() -> None:
+    out = binary_metrics([1, 0], [0.9, 0.1])
+    assert float(out["top5_pct_positive"]) == 1.0
 
 
 def test_multiclass_metrics_contract() -> None:
@@ -34,8 +42,18 @@ def test_multiclass_metrics_contract() -> None:
         ]
     )
     out = multiclass_metrics(y, proba)
-    assert "multi_logloss" in out
-    assert "multi_error" in out
+    assert {
+        "multi_logloss",
+        "multi_error",
+        "balanced_accuracy",
+        "brier_macro",
+        "ovr_roc_auc_macro",
+        "average_precision_macro",
+    } <= set(out)
+    assert 0.0 <= float(out["balanced_accuracy"]) <= 1.0
+    assert 0.0 <= float(out["brier_macro"]) <= 1.0
+    assert 0.0 <= float(out["ovr_roc_auc_macro"]) <= 1.0
+    assert 0.0 <= float(out["average_precision_macro"]) <= 1.0
 
 
 def test_frontier_metrics_contract() -> None:
@@ -53,4 +71,4 @@ def test_split_in_out_metrics_returns_two_labels() -> None:
     )
     assert isinstance(out, pd.DataFrame)
     assert list(out["label"]) == ["in_sample", "out_of_sample"]
-    assert {"rmse", "mae", "mape", "r2"} <= set(out.columns)
+    assert {"rmse", "mae", "mape", "r2", "huber"} <= set(out.columns)

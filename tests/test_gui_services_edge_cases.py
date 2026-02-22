@@ -31,7 +31,7 @@ def test_get_artifact_cls_and_runner_lazy_cache(monkeypatch) -> None:
         services.Artifact = original
         services._ARTIFACT_CLS = original_cls
 
-    for name in ("evaluate", "estimate_dr", "export", "fit", "simulate", "tune"):
+    for name in ("evaluate", "estimate_dr", "export", "fit", "predict", "simulate", "tune"):
         setattr(services, name, None)
         fn = services._get_runner_func(name)
         assert callable(fn)
@@ -61,6 +61,55 @@ def test_inspect_data_warning_profiles_and_infer_task_type(monkeypatch, tmp_path
     assert services.infer_task_type(pd.DataFrame({"y": [0, 1]}), "y") == "binary"
     assert services.infer_task_type(pd.DataFrame({"y": [0, 1, 2, 1]}), "y") == "multiclass"
     assert services.infer_task_type(pd.DataFrame({"y": [0.1, 0.2, 0.3]}), "y") == "regression"
+
+
+def test_get_artifact_spec_validate_prediction_data_and_delete(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "artifacts"
+    artifact_dir = root / "run1"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "manifest.json").write_text(
+        '{"run_id":"run1","task_type":"binary","created_at_utc":"2026-02-19T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    (artifact_dir / "run_config.yaml").write_text(
+        "config_version: 1\n"
+        "task:\n"
+        "  type: binary\n"
+        "data:\n"
+        "  path: train.csv\n"
+        "  target: y\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "feature_schema.json").write_text(
+        '{"feature_names":["x1","x2"],"feature_dtypes":{"x1":"float64","x2":"float64"},"target":"y"}',
+        encoding="utf-8",
+    )
+    (artifact_dir / "metrics.json").write_text('{"auc":0.9,"logloss":0.2}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        services,
+        "Artifact",
+        SimpleNamespace(load=lambda _path: (_ for _ in ()).throw(RuntimeError("should not load"))),
+    )
+    spec = services.get_artifact_spec(str(artifact_dir))
+    assert spec.artifact_path == str(artifact_dir)
+    assert spec.target_col == "y"
+    assert spec.feature_names == ["x1", "x2"]
+    assert "auc" in spec.train_metrics
+
+    data_path = tmp_path / "predict.csv"
+    data_path.write_text("x1,y\n1,0\n", encoding="utf-8")
+    findings = services.validate_prediction_data(spec, str(data_path))
+    assert any(item.level == "error" for item in findings)
+
+    deleted = services.delete_artifact_dir(str(artifact_dir), root_dir=str(root))
+    assert deleted == str(artifact_dir)
+    assert artifact_dir.exists() is False
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(VeldraValidationError, match="allowed only under artifacts root"):
+        services.delete_artifact_dir(str(outside), root_dir=str(root))
 
 
 def test_guardrail_checker_edge_branches(tmp_path) -> None:

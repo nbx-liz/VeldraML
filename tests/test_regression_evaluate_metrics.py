@@ -25,9 +25,16 @@ def test_regression_evaluate_returns_rmse_mae_r2(tmp_path, regression_frame) -> 
     result = evaluate(artifact, frame)
 
     assert result.task_type == "regression"
-    assert {"rmse", "mae", "r2"} <= set(result.metrics)
+    assert {"rmse", "mae", "r2", "huber"} <= set(result.metrics)
     assert result.metadata["n_rows"] == len(frame)
     assert result.metadata["target"] == "target"
+
+
+def test_regression_evaluate_returns_phase35_metrics(tmp_path, regression_frame) -> None:
+    artifact, frame = _fit_regression_artifact(tmp_path, regression_frame)
+    result = evaluate(artifact, frame)
+    assert "huber" in result.metrics
+    assert result.metrics["huber"] >= 0.0
 
 
 def test_regression_evaluate_validation_errors(tmp_path, regression_frame) -> None:

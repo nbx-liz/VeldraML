@@ -130,9 +130,8 @@ def test_train_binary_with_cv_timeseries_path(monkeypatch, FakeBooster) -> None:
         binary,
         "iter_cv_splits",
         lambda config, data, x, y=None: [
-            (np.array([2, 3, 4, 5, 6, 7], dtype=int), np.array([0, 1], dtype=int)),
-            (np.array([0, 1, 4, 5, 6, 7], dtype=int), np.array([2, 3], dtype=int)),
-            (np.array([0, 1, 2, 3, 6, 7], dtype=int), np.array([4, 5], dtype=int)),
+            (np.array([0, 1], dtype=int), np.array([2, 3], dtype=int)),
+            (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5], dtype=int)),
             (np.array([0, 1, 2, 3, 4, 5], dtype=int), np.array([6, 7], dtype=int)),
         ],
     )
@@ -144,3 +143,5 @@ def test_train_binary_with_cv_timeseries_path(monkeypatch, FakeBooster) -> None:
 
     output = binary.train_binary_with_cv(cfg, frame)
     assert output.metrics["mean"]["auc"] >= 0.0
+    assert output.training_history["oof_coverage_ratio"] < 1.0
+    assert output.observation_table["score"].isna().sum() > 0

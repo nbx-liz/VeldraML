@@ -5,6 +5,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import html
 
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
 from veldra.gui.components.help_ui import help_icon
 
 
@@ -14,6 +15,7 @@ def layout(state: dict | None = None) -> html.Div:
     return html.Div(
         [
             html.H2("Validation", className="mb-4"),
+            guided_mode_banner("validation"),
             dbc.Card(
                 dbc.CardBody(
                     [

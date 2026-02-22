@@ -56,3 +56,28 @@ def test_training_history_is_optional_for_legacy_artifacts(tmp_path: Path) -> No
 
     loaded = Artifact.load(out_dir)
     assert loaded.training_history is None
+
+
+def test_training_history_with_oof_coverage_survives_roundtrip(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    history = {
+        "folds": [{"fold": 1, "eval_history": {"rmse": [0.8]}}],
+        "final_model": {"eval_history": {"rmse": [0.7]}},
+        "oof_total_rows": 100,
+        "oof_scored_rows": 80,
+        "oof_coverage_ratio": 0.8,
+    }
+    artifact = Artifact.from_config(
+        config,
+        run_id="run-oof",
+        feature_schema={"feature_names": ["x1"], "target": "y", "task_type": "regression"},
+        training_history=history,
+    )
+    out_dir = tmp_path / "artifact_oof"
+    artifact.save(out_dir)
+
+    loaded = Artifact.load(out_dir)
+    assert loaded.training_history is not None
+    assert loaded.training_history["oof_total_rows"] == 100
+    assert loaded.training_history["oof_scored_rows"] == 80
+    assert loaded.training_history["oof_coverage_ratio"] == 0.8

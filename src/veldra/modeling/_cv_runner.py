@@ -42,6 +42,7 @@ class TaskSpec:
 @dataclass(slots=True)
 class CVRunnerResult:
     oof: np.ndarray
+    oof_valid_mask: np.ndarray
     fold_ids: np.ndarray
     fold_records: list[FoldRecord]
     cv_results: pd.DataFrame
@@ -130,9 +131,19 @@ def run_cv_training(
             )
         )
 
-    if np.isnan(oof).any():
+    if oof.ndim == 1:
+        oof_valid_mask = ~np.isnan(oof)
+    else:
+        oof_valid_mask = ~np.isnan(oof).any(axis=1)
+
+    if config.split.type != "timeseries":
+        if not bool(np.all(oof_valid_mask)):
+            raise VeldraValidationError(
+                "OOF predictions contain missing values. Check split configuration."
+            )
+    elif not bool(np.any(oof_valid_mask)):
         raise VeldraValidationError(
-            "OOF predictions contain missing values. Check split configuration."
+            "Timeseries split produced no scored OOF rows. Check split configuration."
         )
 
     x_final_train, x_final_valid, y_final_train, y_final_valid = split_for_early_stopping_fn(
@@ -160,14 +171,21 @@ def run_cv_training(
             "num_iterations": final_num_iterations,
             "eval_history": final_eval_history.get("valid_0", final_eval_history),
         },
+        "oof_total_rows": int(len(y)),
+        "oof_scored_rows": int(np.sum(oof_valid_mask)),
+        "oof_coverage_ratio": float(np.mean(oof_valid_mask.astype(float))),
     }
+
+    y_for_metrics = y.iloc[oof_valid_mask]
+    oof_for_metrics = oof[oof_valid_mask] if oof.ndim == 1 else oof[oof_valid_mask, :]
 
     return CVRunnerResult(
         oof=oof,
+        oof_valid_mask=oof_valid_mask,
         fold_ids=fold_ids,
         fold_records=fold_records,
         cv_results=pd.DataFrame.from_records(fold_records),
-        mean_metrics=spec.mean_metrics(y, oof, ctx),
+        mean_metrics=spec.mean_metrics(y_for_metrics, oof_for_metrics, ctx),
         final_model=final_model,
         training_history=training_history,
         observation_table=spec.observation_table(fold_ids, y, oof, ctx),

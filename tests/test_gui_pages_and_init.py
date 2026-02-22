@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from veldra.gui.pages import config_page, results_page, run_page
+from veldra.gui.pages import config_page, results_page, run_page, studio_page
 
 _DASH_AVAILABLE = (
     importlib.util.find_spec("dash") is not None
@@ -19,6 +19,7 @@ def test_page_layouts_have_expected_component_ids() -> None:
     config = config_page.layout()
     run = run_page.layout()
     results = results_page.layout()
+    studio = studio_page.layout()
 
     def _collect_ids(component, out: set[str]) -> None:
         if component is None:
@@ -37,6 +38,7 @@ def test_page_layouts_have_expected_component_ids() -> None:
     _collect_ids(config, ids)
     _collect_ids(run, ids)
     _collect_ids(results, ids)
+    _collect_ids(studio, ids)
     assert "config-yaml" in ids
     assert "config-migrate-preview-btn" in ids
     assert "run-action" in ids
@@ -46,6 +48,11 @@ def test_page_layouts_have_expected_component_ids() -> None:
     assert "artifact-root-path" in ids
     assert "artifact-page" in ids
     assert "artifact-total" in ids
+    assert "store-studio-mode" in ids
+    assert "store-studio-train-data" in ids
+    assert "studio-mode-radio" in ids
+    assert "studio-run-btn" in ids
+    assert "studio-run-status" in ids
 
 
 def test_gui_init_create_app_proxy(monkeypatch) -> None:

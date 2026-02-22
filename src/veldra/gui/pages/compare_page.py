@@ -5,11 +5,14 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dash_table, dcc, html
 
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
+
 
 def layout() -> html.Div:
     return html.Div(
         [
             html.H2("Compare", className="mb-4"),
+            guided_mode_banner("compare"),
             dbc.Row(
                 [
                     dbc.Col(

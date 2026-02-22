@@ -140,8 +140,9 @@ def test_train_frontier_timeseries_sort_branch(monkeypatch) -> None:
         frontier,
         "iter_cv_splits",
         lambda c, d, x, y=None: [
-            (np.array([4, 5, 6, 7], dtype=int), np.array([0, 1, 2, 3], dtype=int)),
-            (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5, 6, 7], dtype=int)),
+            (np.array([0, 1], dtype=int), np.array([2, 3], dtype=int)),
+            (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5], dtype=int)),
+            (np.array([0, 1, 2, 3, 4, 5], dtype=int), np.array([6, 7], dtype=int)),
         ],
     )
 
@@ -153,3 +154,4 @@ def test_train_frontier_timeseries_sort_branch(monkeypatch) -> None:
     result = frontier.train_frontier_with_cv(cfg, df)
     assert np.array_equal(captured["times"], sorted_time)
     assert result.metrics["mean"]["mae"] >= 0.0
+    assert result.training_history["oof_coverage_ratio"] < 1.0

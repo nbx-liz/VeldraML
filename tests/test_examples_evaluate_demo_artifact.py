@@ -55,7 +55,7 @@ def test_evaluate_demo_artifact_writes_metrics(tmp_path) -> None:
     eval_only_path = run_dirs[0] / "eval_only_result.json"
     assert eval_only_path.exists()
     payload = json.loads(eval_only_path.read_text(encoding="utf-8"))
-    assert set(payload["metrics"]) == {"rmse", "mae", "r2"}
+    assert {"rmse", "mae", "r2"} <= set(payload["metrics"])
 
 
 def test_evaluate_demo_artifact_requires_target_column(tmp_path) -> None:

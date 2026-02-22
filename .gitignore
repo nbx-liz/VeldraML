@@ -91,6 +91,7 @@ tmp*.json
 uv-*.lock
 notebooks/.uv_cache/
 notebooks/examples/out/
+notebooks/quick_reference_preview/
 
 .ipython/
 .agent/

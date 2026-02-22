@@ -10,6 +10,7 @@ import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     brier_score_loss,
     f1_score,
     log_loss,
@@ -24,12 +25,20 @@ from sklearn.metrics import (
 def regression_metrics(y_true: Any, y_pred: Any, label: str = "overall") -> dict[str, float | str]:
     y_true_f = np.asarray(y_true, dtype=float)
     y_pred_f = np.asarray(y_pred, dtype=float)
+    err = np.abs(y_true_f - y_pred_f)
+    huber_delta = 1.0
+    huber = np.where(
+        err < huber_delta,
+        0.5 * (err**2),
+        huber_delta * (err - 0.5 * huber_delta),
+    )
     return {
         "label": label,
         "rmse": float(np.sqrt(mean_squared_error(y_true_f, y_pred_f))),
         "mae": float(mean_absolute_error(y_true_f, y_pred_f)),
         "mape": float(mean_absolute_percentage_error(y_true_f, y_pred_f)),
         "r2": float(r2_score(y_true_f, y_pred_f)),
+        "huber": float(np.mean(huber)),
     }
 
 
@@ -37,6 +46,10 @@ def binary_metrics(y_true: Any, y_score: Any, label: str = "overall") -> dict[st
     y_true_i = np.asarray(y_true, dtype=int)
     score = np.clip(np.asarray(y_score, dtype=float), 1e-7, 1.0 - 1e-7)
     label_pred = (score >= 0.5).astype(int)
+    n_samples = int(score.shape[0])
+    top_k = max(1, int(n_samples * 0.05)) if n_samples > 0 else 0
+    top_idx = np.argsort(-score)[:top_k] if top_k > 0 else np.array([], dtype=int)
+    top5_pct_positive = float(np.mean(y_true_i[top_idx])) if top_idx.size > 0 else 0.0
     return {
         "label": label,
         "auc": float(roc_auc_score(y_true_i, score)),
@@ -45,6 +58,7 @@ def binary_metrics(y_true: Any, y_score: Any, label: str = "overall") -> dict[st
         "average_precision": float(average_precision_score(y_true_i, score)),
         "accuracy": float(accuracy_score(y_true_i, label_pred)),
         "f1": float(f1_score(y_true_i, label_pred, zero_division=0)),
+        "top5_pct_positive": top5_pct_positive,
     }
 
 
@@ -56,15 +70,26 @@ def multiclass_metrics(
     y_true_i = np.asarray(y_true, dtype=int)
     proba = np.asarray(y_proba, dtype=float)
     proba = np.clip(proba, 1e-7, 1.0 - 1e-7)
-    proba = proba / proba.sum(axis=1, keepdims=True)
-    y_pred = np.argmax(proba, axis=1)
     n_classes = proba.shape[1]
+    proba_sum = proba.sum(axis=1, keepdims=True)
+    safe_default = np.full_like(proba, 1.0 / float(n_classes))
+    proba = np.divide(proba, proba_sum, out=safe_default, where=proba_sum > 0)
+    y_pred = np.argmax(proba, axis=1)
+    one_hot = np.eye(n_classes, dtype=int)[y_true_i]
+    brier_by_class = [brier_score_loss(one_hot[:, idx], proba[:, idx]) for idx in range(n_classes)]
+    accuracy = float(accuracy_score(y_true_i, y_pred))
     return {
         "label": label,
-        "accuracy": float(accuracy_score(y_true_i, y_pred)),
+        "accuracy": accuracy,
         "macro_f1": float(f1_score(y_true_i, y_pred, average="macro")),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true_i, y_pred)),
         "multi_logloss": float(log_loss(y_true_i, proba, labels=list(range(n_classes)))),
-        "multi_error": float(1.0 - accuracy_score(y_true_i, y_pred)),
+        "multi_error": float(1.0 - accuracy),
+        "brier_macro": float(np.mean(brier_by_class)),
+        "ovr_roc_auc_macro": float(
+            roc_auc_score(y_true_i, proba, multi_class="ovr", average="macro")
+        ),
+        "average_precision_macro": float(average_precision_score(one_hot, proba, average="macro")),
     }
 
 

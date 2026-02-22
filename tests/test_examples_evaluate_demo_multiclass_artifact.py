@@ -59,7 +59,7 @@ def test_evaluate_demo_multiclass_artifact_writes_metrics(tmp_path) -> None:
     eval_only_path = run_dirs[0] / "eval_only_result.json"
     assert eval_only_path.exists()
     payload = json.loads(eval_only_path.read_text(encoding="utf-8"))
-    assert set(payload["metrics"]) == {"accuracy", "macro_f1", "logloss"}
+    assert {"accuracy", "macro_f1", "logloss"} <= set(payload["metrics"])
 
 
 def test_evaluate_demo_multiclass_artifact_requires_target_column(tmp_path) -> None:

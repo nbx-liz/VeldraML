@@ -35,9 +35,17 @@ def test_binary_evaluate_returns_auc_logloss_brier(tmp_path, binary_frame) -> No
         "precision",
         "recall",
         "threshold",
+        "top5_pct_positive",
     } <= set(result.metrics)
     assert result.metadata["n_rows"] == len(frame)
     assert result.metadata["target"] == "target"
+
+
+def test_binary_evaluate_returns_phase35_metrics(tmp_path, binary_frame) -> None:
+    artifact, frame = _fit_binary_artifact(tmp_path, binary_frame)
+    result = evaluate(artifact, frame)
+    assert "top5_pct_positive" in result.metrics
+    assert 0.0 <= result.metrics["top5_pct_positive"] <= 1.0
 
 
 def test_binary_evaluate_validation_errors(tmp_path, binary_frame) -> None:

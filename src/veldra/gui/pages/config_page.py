@@ -7,6 +7,7 @@ from dash import dcc, html
 
 from veldra.gui.components.config_library import render_config_library
 from veldra.gui.components.config_wizard import render_config_wizard
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
 from veldra.gui.template_service import custom_slot_options, template_options
 
 
@@ -944,6 +945,7 @@ def layout(state: dict | None = None) -> html.Div:
     return html.Div(
         [
             html.H2("Configuration Builder", className="mb-4"),
+            guided_mode_banner("config"),
             dbc.Tabs(
                 [
                     dbc.Tab(

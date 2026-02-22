@@ -5,11 +5,14 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dash_table, dcc, html
 
+from veldra.gui.components.guided_mode_banner import guided_mode_banner
+
 
 def layout() -> html.Div:
     return html.Div(
         [
             html.H2("Runs", className="mb-4"),
+            guided_mode_banner("runs"),
             dbc.Row(
                 [
                     dbc.Col(
@@ -35,6 +38,7 @@ def layout() -> html.Div:
                                 {"label": "Fit", "value": "fit"},
                                 {"label": "Tune", "value": "tune"},
                                 {"label": "Evaluate", "value": "evaluate"},
+                                {"label": "Predict", "value": "predict"},
                                 {"label": "Export", "value": "export"},
                                 {"label": "Estimate DR", "value": "estimate_dr"},
                             ],
