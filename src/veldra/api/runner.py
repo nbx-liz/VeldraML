@@ -14,6 +14,8 @@ import pandas as pd
 from pydantic import ValidationError
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
     brier_score_loss,
     f1_score,
     log_loss,
@@ -500,7 +502,19 @@ def _evaluate_with_artifact(
         rmse = float(mean_squared_error(y_true, y_pred) ** 0.5)
         mae = float(mean_absolute_error(y_true, y_pred))
         r2 = float(r2_score(y_true, y_pred))
-        metrics = {"rmse": rmse, "mae": mae, "r2": r2}
+        err = np.abs(y_true.to_numpy(dtype=float) - np.asarray(y_pred, dtype=float))
+        huber_delta = 1.0
+        huber = np.where(
+            err < huber_delta,
+            0.5 * (err**2),
+            huber_delta * (err - 0.5 * huber_delta),
+        )
+        metrics = {
+            "rmse": rmse,
+            "mae": mae,
+            "r2": r2,
+            "huber": float(np.mean(huber)),
+        }
     elif artifact.run_config.task.type == "binary":
         pred_frame = artifact.predict(x_eval)
         if not isinstance(pred_frame, pd.DataFrame):
@@ -536,6 +550,12 @@ def _evaluate_with_artifact(
             "recall": float(recall_score(y_binary, label_pred, zero_division=0)),
             "threshold": threshold_value,
         }
+        n_samples = int(p_cal.shape[0])
+        top_count = max(1, int(n_samples * 0.05)) if n_samples > 0 else 0
+        top_idx = np.argsort(-p_cal)[:top_count] if top_count > 0 else np.array([], dtype=int)
+        metrics["top5_pct_positive"] = (
+            float(np.mean(y_binary[top_idx])) if top_idx.size > 0 else 0.0
+        )
         top_k = artifact.run_config.train.top_k
         if top_k is not None:
             n_top = min(int(top_k), len(y_binary))
@@ -583,6 +603,29 @@ def _evaluate_with_artifact(
                 log_loss(y_multiclass, proba, labels=list(range(len(target_classes))))
             ),
         }
+        metrics["balanced_accuracy"] = float(balanced_accuracy_score(y_multiclass, y_pred))
+
+        one_hot = np.eye(len(target_classes), dtype=int)[y_multiclass]
+        brier_by_class = [
+            brier_score_loss(one_hot[:, idx], proba[:, idx]) for idx in range(len(target_classes))
+        ]
+        metrics["brier_macro"] = float(np.mean(brier_by_class))
+
+        try:
+            metrics["ovr_roc_auc_macro"] = float(
+                roc_auc_score(y_multiclass, proba, multi_class="ovr", average="macro")
+            )
+        except ValueError:
+            # Keep evaluate() available for missing-class evaluation data.
+            pass
+
+        try:
+            metrics["average_precision_macro"] = float(
+                average_precision_score(one_hot, proba, average="macro")
+            )
+        except ValueError:
+            # Keep evaluate() available for missing-class evaluation data.
+            pass
     else:
         pred_frame = artifact.predict(x_eval)
         if not isinstance(pred_frame, pd.DataFrame):

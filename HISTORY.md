@@ -2163,3 +2163,45 @@
   - 内容: phase-prefix の実ファイル名を排除し、quick-reference 系の意味ベース命名へ統一した。
   - 理由: 開発者がファイル名だけで責務を理解できる状態を保証するため。
   - 影響範囲: `scripts/*quick_reference*.py`, `tests/test_*`, `tests/fixtures/*`, `notebooks/quick_reference_legacy/archive_2025/*`, `data/quick_reference_sources.json`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+### 2026-02-22（作業/PR: phase35-test-gap-closure-g1-g2-g3）
+**背景**
+- `DESIGN_BLUEPRINT.md` の「23 Phase35 テスト拡充計画」は未実施状態で、G1/G2/G3 の3ギャップが残っていた。
+- `evaluate()` は Phase35 で導入したメトリクス関数を内部で再利用しておらず、公開評価結果に新指標が反映されていなかった。
+
+**変更内容**
+- `src/veldra/api/runner.py` の `evaluate()` を拡張し、既存キーを維持したまま以下を加算した。
+  - regression: `huber`
+  - binary: `top5_pct_positive`
+  - multiclass: `balanced_accuracy`, `brier_macro`, `ovr_roc_auc_macro`, `average_precision_macro`
+- multiclass では評価データのクラス欠落時に評価を継続し、計算不能な追加指標のみ省略する挙動を導入した（基本3指標は維持）。
+- G1 テストを追加/更新:
+  - `tests/test_regression_evaluate_metrics.py`
+  - `tests/test_binary_evaluate_metrics.py`
+  - `tests/test_multiclass_evaluate_metrics.py`
+  - `tests/test_evaluate_config_path.py`
+- G2 テストを追加:
+  - `tests/test_diagnostics_plots.py` に package-level import 検証を追加。
+- G3 テストを追加:
+  - `tests/test_training_history.py` に OOF coverage キー roundtrip 検証を追加。
+- examples 評価契約を後方互換のため必須キー包含へ更新:
+  - `tests/test_examples_evaluate_demo_artifact.py`
+  - `tests/test_examples_evaluate_demo_multiclass_artifact.py`
+- `DESIGN_BLUEPRINT.md` Section 23 を実施済みへ更新し、検証結果を同期した。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: `evaluate()` の Phase35 指標は加算的に公開し、既存キーは維持する。
+  - 理由: Stable API 互換を維持しつつ、Phase35 の指標後退を統合テストで検知可能にするため。
+  - 影響範囲: `src/veldra/api/runner.py`, `tests/test_*evaluate*`, `tests/test_evaluate_config_path.py`
+- Decision: confirmed（確定）
+  - 内容: multiclass の評価データが一部クラス欠落の場合は evaluate を失敗させず、計算不能な追加指標のみ返却から省略する。
+  - 理由: 現場の評価サンプル分布差による過剰失敗を防ぎ、既存の基本指標導線を維持するため。
+  - 影響範囲: `src/veldra/api/runner.py`, `tests/test_multiclass_evaluate_metrics.py`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check src/veldra/api/runner.py tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py tests/test_diagnostics_plots.py tests/test_training_history.py tests/test_examples_evaluate_demo_artifact.py tests/test_examples_evaluate_demo_multiclass_artifact.py tests/test_evaluate_config_path.py` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_diagnostics_plots.py tests/test_training_history.py` を実施（`5 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py tests/test_evaluate_config_path.py` を実施（`16 passed, 1 warning`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_examples_evaluate_demo_artifact.py tests/test_examples_evaluate_demo_binary_artifact.py tests/test_examples_evaluate_demo_multiclass_artifact.py` を実施（`6 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`776 passed, 16 deselected, 1 warning`）。

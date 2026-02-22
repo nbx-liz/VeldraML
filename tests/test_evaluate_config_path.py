@@ -33,7 +33,7 @@ def test_evaluate_config_path_regression(tmp_path) -> None:
         }
     )
     result = evaluate(cfg, eval_frame)
-    assert {"rmse", "mae", "r2"} <= set(result.metrics)
+    assert {"rmse", "mae", "r2", "huber"} <= set(result.metrics)
     assert result.metadata["evaluation_mode"] == "config"
     assert result.metadata["ephemeral_run"] is True
     assert result.metadata["train_source_path"] == str(train_path)
@@ -59,7 +59,16 @@ def test_evaluate_config_path_binary(tmp_path) -> None:
         "export": {"artifact_dir": str(tmp_path)},
     }
     result = evaluate(payload, train.copy())
-    assert {"auc", "logloss", "brier", "accuracy", "f1", "precision", "recall"} <= set(
+    assert {
+        "auc",
+        "logloss",
+        "brier",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "top5_pct_positive",
+    } <= set(
         result.metrics
     )
     assert result.metadata["evaluation_mode"] == "config"
@@ -85,7 +94,15 @@ def test_evaluate_config_path_multiclass(tmp_path) -> None:
         "export": {"artifact_dir": str(tmp_path)},
     }
     result = evaluate(payload, train.copy())
-    assert {"accuracy", "macro_f1", "logloss"} <= set(result.metrics)
+    assert {
+        "accuracy",
+        "macro_f1",
+        "logloss",
+        "balanced_accuracy",
+        "brier_macro",
+        "ovr_roc_auc_macro",
+        "average_precision_macro",
+    } <= set(result.metrics)
     assert result.metadata["evaluation_mode"] == "config"
     assert result.metadata["ephemeral_run"] is True
     assert result.metadata["train_source_path"] == str(train_path)

@@ -121,3 +121,11 @@ def test_plot_functions_create_png_files(tmp_path) -> None:
         "shap.png",
     ]:
         _assert_file(tmp_path / name)
+
+
+def test_phase35_plot_symbols_are_importable_from_package() -> None:
+    from veldra.diagnostics import (  # noqa: F401
+        plot_confusion_matrix,
+        plot_learning_curve,
+        plot_roc_multiclass,
+    )

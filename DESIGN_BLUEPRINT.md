@@ -1,6 +1,6 @@
 ﻿# DESIGN_BLUEPRINT
 
-最終更新: 2026-02-18
+最終更新: 2026-02-22
 
 ## 1. 目的
 VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的に実行するためのライブラリです。対象領域は以下です。
@@ -39,17 +39,22 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 ### 3.2 タスク別の主要契約
 - regression:
   - predict: `np.ndarray`
-  - evaluate: `rmse`, `mae`, `r2`
+  - evaluate: `rmse`, `mae`, `r2`, `huber`
 - binary:
   - predict: `p_cal`, `p_raw`, `label_pred`
-  - evaluate: `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, `threshold`
+  - evaluate: `auc`, `logloss`, `brier`, `accuracy`, `f1`, `precision`, `recall`, `threshold`, `top5_pct_positive`
   - OOF 確率校正（既定: platt）
 - multiclass:
   - predict: `label_pred`, `proba_<class>`
-  - evaluate: `accuracy`, `macro_f1`, `logloss`
+  - evaluate: `accuracy`, `macro_f1`, `logloss`, `balanced_accuracy`, `brier_macro`, `ovr_roc_auc_macro`, `average_precision_macro`
 - frontier:
   - predict: `frontier_pred`（target があれば `u_hat`）
   - evaluate: `pinball`, `mae`, `mean_u_hat`, `coverage`
+- timeseries（`split.type="timeseries"` 時の特記事項）:
+  - CV 先頭区間は OOF 未スコアになり得る（partial OOF 許容）
+  - calibration / threshold 最適化 / mean metrics は OOF 有効行のみで計算
+  - `training_history` に `oof_total_rows`, `oof_scored_rows`, `oof_coverage_ratio` を記録
+  - 非 timeseries（kfold/stratified/group）は OOF 欠損をエラーとする従来挙動を維持
 
 ### 3.3 因果推論の実装範囲
 - DR (`causal.method="dr"`): ATT 既定、ATE 任意
@@ -75,6 +80,16 @@ VeldraML は、LightGBM ベースの分析機能を RunConfig 駆動で統一的
 - Phase 26.4: Notebook 教育化 & テスト品質強化 ← **完了**
 - Phase 26.5: 13.3 A/B Notebook適用 + gui_e2e安定化 ← **完了**
 - Phase 26.6: テスト品質向上（命名整理 + カバレッジ強化）← **完了**
+- Phase 26.7: コアロジック構造改善リファクタリング（CV共通化 + Causal learner抽象化）← **完了**
+- Phase 27: GUI ジョブキュー強化（優先度システム + マルチworker プール）← **完了**
+- Phase 28: リアルタイム進捗追跡 & ストリーミングログ（SQLite永続 + ポーリング）← **完了**
+- Phase 29: キャンセル強化 & エラーリカバリ（協調キャンセル + 自動リトライ枠）← **完了**
+- Phase 30: Config管理 & テンプレートライブラリ（プリセット + localStorage + ウィザード）← **完了**
+- Phase 31: 高度可視化 & Artifact比較（fold metrics + 因果診断 + HTML/PDF レポート）← **完了**
+- Phase 32: パフォーマンス最適化（サーバー側ページング + AG Grid + DB アーカイブ）← **完了**
+- Phase 33: GUI メモリ再最適化 & テスト分離（lazy import 契約固定 + marker 厳密化）← **完了**
+- Phase 34: Studio UX（2画面高速モデリング + Guided Mode バナー）← **完了**
+- Phase 35: Notebook 内容充実（quick_reference 01〜13 本線化 + diagnostics 拡張 + timeseries partial OOF）← **完了**
 
 ## 5. 未実装ギャップ（優先度付き）
 
@@ -1155,7 +1170,13 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 - 理由: 破壊的変更を避けつつ Studio UX を提供し、初心者ガイダンスとして既存フローを継続活用するため。
 - 影響範囲: `src/veldra/gui/{app.py,services.py,types.py,pages/studio_page.py,components/studio_parts.py}`, 既存ページファイル（バナー追加のみ）, `tests/test_gui_studio.py`
 
-## 22 Phase35: Notebook 内容充実
+## 22 Phase35: Notebook 内容充実（完了）
+
+### 完了サマリー（2026-02-22）
+- `quick_reference/reference_01`〜`reference_13` を本線化（13本構成）し、旧 quick reference を `quick_reference_legacy/` へ退避。
+- `veldra.diagnostics` 拡張（新指標・新可視化関数）、ローカル CSV データ契約、timeseries partial OOF、英語標準化を実施。
+- スクリプト・テスト・データ manifest をすべて目的ベース命名（`generate_quick_reference_*.py` / `prepare_quick_reference_data.py`）へ移行。
+
 ### 1. 目的
 - quick_referenceは1セルで複数の処理を実施しており、どの処理のためにどのコードが必要なのかがわかりづらい。
 - 1セル1処理の原則に従い、コードを分割して、各セルに説明コメントを追加する。
@@ -1896,3 +1917,168 @@ Multiclass ノートブックを新番号 `reference_03` として整備し、1�
 - 内容: phase-prefix の主要 scripts/tests/fixtures を正準名へ移行し、phase-prefix ファイル名は作業導線から排除した。
 - 理由: ファイル名だけで役割が判別できる状態を最優先し、開発者オンボーディング負荷を下げるため。
 - 影響範囲: `scripts/*quick_reference*.py`, `tests/test_*`, `tests/fixtures/*`, `notebooks/quick_reference_legacy/archive_2025/*`, `data/quick_reference_sources.json`, `README.md`, `HISTORY.md`
+
+## 23 Phase35 テスト拡充計画（実施済み: 2026-02-22）
+
+### 0. 実装ステータス（2026-02-22）
+
+- G1（`evaluate()` 統合テスト + 本体拡張）を実装し、Phase35 新指標を加算的に返す契約へ更新した。
+  - regression: `huber`
+  - binary: `top5_pct_positive`
+  - multiclass: `balanced_accuracy`, `brier_macro`, `ovr_roc_auc_macro`, `average_precision_macro`
+- G2（`veldra.diagnostics` package-level import）を `tests/test_diagnostics_plots.py` へ追加した。
+- G3（`training_history` OOF coverage roundtrip）を `tests/test_training_history.py` へ追加した。
+- examples evaluate 契約は完全一致から必須キー包含へ更新した。
+  - `tests/test_examples_evaluate_demo_artifact.py`
+  - `tests/test_examples_evaluate_demo_multiclass_artifact.py`
+- multiclass の評価データが一部クラス欠落の場合は、評価を継続し、計算不能な追加指標のみ返却から省略する方針を適用した。
+
+**検証結果（2026-02-22）:**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check src/veldra/api/runner.py tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py tests/test_diagnostics_plots.py tests/test_training_history.py tests/test_examples_evaluate_demo_artifact.py tests/test_examples_evaluate_demo_multiclass_artifact.py tests/test_evaluate_config_path.py`
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_diagnostics_plots.py tests/test_training_history.py`（`5 passed`）
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py tests/test_evaluate_config_path.py`（`16 passed`）
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_examples_evaluate_demo_artifact.py tests/test_examples_evaluate_demo_binary_artifact.py tests/test_examples_evaluate_demo_multiclass_artifact.py`（`6 passed`）
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"`（`776 passed, 16 deselected`）
+
+### 1. ギャップ分析サマリー（2026-02-22）
+
+Phase35 で追加されたバックエンドAPI・コアロジック変更に対するテストを精査した結果、以下の**3件の未カバーギャップ**を確認した。
+
+**カバー済み（主要項目）:**
+- 新規メトリクス関数（`huber`, `top5_pct_positive`, 4 multiclass キー）の unit テスト ✅
+- 新規 plot 関数（`plot_learning_curve`, `plot_confusion_matrix`, `plot_roc_multiclass`）の unit テスト ✅
+- timeseries partial OOF（全 4 task で `oof_coverage_ratio < 1.0` を確認）✅
+- quick reference notebook 構造・実行・英語標準・データ契約・出力物テスト ✅
+- `train.metrics` / `tuning.metrics_candidates` の新指標受け入れバリデーション ✅
+
+**未カバー（3件）:**
+
+| ID | 対象 | 問題 | 影響 |
+|----|------|------|------|
+| G1 | `evaluate()` 統合テスト | 新指標が `evaluate()` の結果セットに含まれることを integration テストが検証していない（`huber` / `top5_pct_positive` / multiclass 4指標） | `metrics` キーの後退が無チェックで通過する |
+| G2 | `veldra.diagnostics` パッケージ import | Phase35 新シンボル（`plot_confusion_matrix`, `plot_learning_curve`, `plot_roc_multiclass`）の package-level import が unit テストなし（submodule 直接 import のみ） | `__init__.py` のエクスポートミスを検知できない |
+| G3 | Artifact save/load roundtrip | `training_history` に OOF coverage キー（`oof_total_rows`, `oof_scored_rows`, `oof_coverage_ratio`）を含む場合の save/load が `test_training_history.py` でテストされていない | timeseries 学習済み Artifact の coverage 情報がサイレントに消失しても検知できない |
+
+---
+
+### 2. テスト追加計画
+
+#### G1: `evaluate()` 統合テスト — Phase35 新指標の結果セット確認
+
+**対象ファイル（既存拡張）:**
+- `tests/test_regression_evaluate_metrics.py`
+- `tests/test_binary_evaluate_metrics.py`
+- `tests/test_multiclass_evaluate_metrics.py`
+
+**追加内容:**
+
+```python
+# test_regression_evaluate_metrics.py
+def test_regression_evaluate_returns_phase35_metrics(tmp_path, regression_frame) -> None:
+    artifact, frame = _fit_regression_artifact(tmp_path, regression_frame)
+    result = evaluate(artifact, frame)
+    assert "huber" in result.metrics
+    assert result.metrics["huber"] >= 0.0
+
+# test_binary_evaluate_metrics.py
+def test_binary_evaluate_returns_phase35_metrics(tmp_path, binary_frame) -> None:
+    artifact, frame = _fit_binary_artifact(tmp_path, binary_frame)
+    result = evaluate(artifact, frame)
+    assert "top5_pct_positive" in result.metrics
+    assert 0.0 <= result.metrics["top5_pct_positive"] <= 1.0
+
+# test_multiclass_evaluate_metrics.py
+def test_multiclass_evaluate_returns_phase35_metrics(tmp_path, multiclass_frame) -> None:
+    artifact = _train_artifact(tmp_path, multiclass_frame)
+    frame = multiclass_frame(rows_per_class=12, seed=32, scale=0.5)
+    result = evaluate(artifact, frame)
+    assert {
+        "balanced_accuracy", "brier_macro", "ovr_roc_auc_macro", "average_precision_macro"
+    } <= set(result.metrics)
+```
+
+**検証コマンド:**
+```bash
+pytest tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py -v
+```
+
+---
+
+#### G2: `veldra.diagnostics` パッケージレベル import テスト
+
+**対象ファイル（既存拡張）:**
+- `tests/test_diagnostics_plots.py`（または `test_api_surface.py`）
+
+**追加内容:**
+
+```python
+# test_diagnostics_plots.py の末尾に追加
+def test_phase35_plot_symbols_are_importable_from_package() -> None:
+    from veldra.diagnostics import (  # noqa: F401
+        plot_confusion_matrix,
+        plot_learning_curve,
+        plot_roc_multiclass,
+    )
+```
+
+**検証コマンド:**
+```bash
+pytest tests/test_diagnostics_plots.py::test_phase35_plot_symbols_are_importable_from_package -v
+```
+
+---
+
+#### G3: Artifact save/load — OOF coverage キーの roundtrip テスト
+
+**対象ファイル（既存拡張）:**
+- `tests/test_training_history.py`
+
+**追加内容:**
+
+```python
+def test_training_history_with_oof_coverage_survives_roundtrip(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    history = {
+        "folds": [{"fold": 1, "eval_history": {"rmse": [0.8]}}],
+        "final_model": {"eval_history": {"rmse": [0.7]}},
+        "oof_total_rows": 100,
+        "oof_scored_rows": 80,
+        "oof_coverage_ratio": 0.8,
+    }
+    artifact = Artifact.from_config(
+        config,
+        run_id="run-oof",
+        feature_schema={"feature_names": ["x1"], "target": "y", "task_type": "regression"},
+        training_history=history,
+    )
+    out_dir = tmp_path / "artifact_oof"
+    artifact.save(out_dir)
+
+    loaded = Artifact.load(out_dir)
+    assert loaded.training_history["oof_total_rows"] == 100
+    assert loaded.training_history["oof_scored_rows"] == 80
+    assert loaded.training_history["oof_coverage_ratio"] == pytest.approx(0.8)
+```
+
+**検証コマンド:**
+```bash
+pytest tests/test_training_history.py -v
+```
+
+---
+
+### 3. 実装優先度
+
+| ID | 優先度 | 理由 |
+|----|--------|------|
+| G1 | **High** | `evaluate()` の公開契約に直結し、新指標の後退を検知する安全網として必要 |
+| G3 | **High** | timeseries 学習 Artifact のメタデータ保全に関わり、データロス系バグを検知する |
+| G2 | **Medium** | `__init__.py` のエクスポート漏れは notebook_e2e でカバーされているが、単独 unit テストで即時検知できると保守性が向上する |
+
+### 4. 成功基準
+- `pytest tests/test_regression_evaluate_metrics.py tests/test_binary_evaluate_metrics.py tests/test_multiclass_evaluate_metrics.py tests/test_training_history.py tests/test_diagnostics_plots.py -v` が green
+- `-m "not gui_e2e and not notebook_e2e"` 全体回帰が green を維持
+
+### 5. 非対象（意図的カバーなし）
+- `plot_confusion_matrix` の単クラス・空入力エッジケース: 実運用データでは発生しないため過剰テストと判断
+- `multiclass_metrics` の極端に小さなサンプル（n=1）: sklearn 内部で例外を投げるため VeldraML 側での責任外
