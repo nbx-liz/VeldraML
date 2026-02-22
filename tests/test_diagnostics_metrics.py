@@ -14,7 +14,8 @@ from veldra.diagnostics.metrics import (
 
 def test_regression_metrics_contract() -> None:
     out = regression_metrics([1.0, 2.0, 3.0], [1.1, 1.8, 3.2])
-    assert {"rmse", "mae", "mape", "r2"} <= set(out)
+    assert {"rmse", "mae", "mape", "r2", "huber"} <= set(out)
+    assert float(out["huber"]) >= 0.0
 
 
 def test_binary_metrics_contract() -> None:
@@ -53,4 +54,4 @@ def test_split_in_out_metrics_returns_two_labels() -> None:
     )
     assert isinstance(out, pd.DataFrame)
     assert list(out["label"]) == ["in_sample", "out_of_sample"]
-    assert {"rmse", "mae", "mape", "r2"} <= set(out.columns)
+    assert {"rmse", "mae", "mape", "r2", "huber"} <= set(out.columns)

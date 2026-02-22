@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("matplotlib")
+pytest.importorskip("plotly")
 
 from veldra.diagnostics.plots import (
     plot_error_histogram,
     plot_feature_importance,
     plot_frontier_scatter,
+    plot_learning_curve,
     plot_lift_chart,
     plot_nll_histogram,
     plot_pinball_histogram,
@@ -60,6 +62,17 @@ def test_plot_functions_create_png_files(tmp_path) -> None:
         pd.DataFrame({"a": np.random.randn(20), "b": np.random.randn(20)}),
         tmp_path / "shap.png",
     )
+    plot_learning_curve(
+        {
+            "folds": [
+                {"fold": 1, "eval_history": {"rmse": [1.0, 0.9, 0.8]}},
+                {"fold": 2, "eval_history": {"rmse": [1.1, 1.0, 0.95]}},
+            ]
+        },
+        tmp_path / "learning_curve.png",
+    )
+    plot_learning_curve(None, tmp_path / "learning_curve_empty_none.png")
+    plot_learning_curve({"folds": "invalid"}, tmp_path / "learning_curve_empty_invalid.png")
 
     for name in [
         "err.png",
@@ -72,6 +85,9 @@ def test_plot_functions_create_png_files(tmp_path) -> None:
         "pinball.png",
         "frontier.png",
         "importance.png",
+        "learning_curve.png",
+        "learning_curve_empty_none.png",
+        "learning_curve_empty_invalid.png",
         "shap.png",
     ]:
         _assert_file(tmp_path / name)

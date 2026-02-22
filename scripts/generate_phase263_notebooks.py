@@ -141,6 +141,271 @@ UC_ID = '{uc_id}'
 """
 
 
+def _setup_block_uc1() -> str:
+    return """
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from IPython.display import display
+
+from veldra.api import evaluate, fit
+from veldra.api.artifact import Artifact
+from veldra.diagnostics import (
+    build_regression_table,
+    compute_importance,
+    compute_shap,
+    plot_error_histogram,
+    plot_feature_importance,
+    plot_learning_curve,
+    plot_shap_summary,
+    regression_metrics,
+)
+
+ROOT = Path('.').resolve()
+OUT_DIR = ROOT / 'examples' / 'out' / 'phase26_2_uc01_regression_fit_evaluate'
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+diag_dir = OUT_DIR / 'diagnostics'
+diag_dir.mkdir(parents=True, exist_ok=True)
+UC_ID = 'UC-1'
+"""
+
+
+def _build_uc1_notebook(title: str, tutorial_notebook: str) -> nbformat.NotebookNode:
+    section_cells: list[tuple[str, str]] = [
+        (
+            "## 1. データ準備 — 読み込みと訓練/テスト分割",
+            """
+from sklearn.model_selection import train_test_split
+
+source_df = pd.read_csv(ROOT / 'examples' / 'out' / 'phase26_2_uc07_artifact_evaluate' / 'eval.csv')
+train_df, test_df = train_test_split(source_df, test_size=0.25, random_state=42)
+train_df = train_df.reset_index(drop=True)
+test_df = test_df.reset_index(drop=True)
+train_path = OUT_DIR / 'train.csv'
+test_path = OUT_DIR / 'test.csv'
+train_df.to_csv(train_path, index=False)
+test_df.to_csv(test_path, index=False)
+""",
+        ),
+        (
+            "## 2. Config 設定 — LightGBM / CV / ハイパーパラメーター",
+            """
+target_col = 'target'
+feature_cols = [col for col in train_df.columns if col != target_col]
+cat_cols = train_df.loc[:, feature_cols].select_dtypes(include=['object', 'category']).columns.tolist()
+for col in cat_cols:
+    train_df[col] = train_df[col].astype('category')
+    test_df[col] = test_df[col].astype('category')
+
+config = {
+    'config_version': 1,
+    'task': {'type': 'regression'},
+    'data': {'path': str(train_path), 'target': target_col},
+    'split': {'type': 'kfold', 'n_splits': 4, 'seed': 42},
+    'train': {
+        'seed': 42,
+        'num_boost_round': 2000,
+        'early_stopping_rounds': 200,
+        'early_stopping_validation_fraction': 0.2,
+        'auto_num_leaves': True,
+        'num_leaves_ratio': 1.0,
+        'min_data_in_leaf_ratio': 0.01,
+        'min_data_in_bin_ratio': 0.01,
+        'metrics': ['rmse', 'mae'],
+        'lgb_params': {
+            'learning_rate': 0.01,
+            'max_bin': 255,
+            'max_depth': 10,
+            'feature_fraction': 1.0,
+            'bagging_fraction': 1.0,
+            'bagging_freq': 0,
+            'lambda_l1': 0.0,
+            'lambda_l2': 0.000001,
+            'min_child_samples': 20,
+            'first_metric_only': True,
+        },
+    },
+    'export': {'artifact_dir': str(OUT_DIR / 'artifacts')},
+}
+""",
+        ),
+        (
+            "## 3. 学習 — `fit()` を実行して CV でモデルを訓練",
+            """
+run_result = fit(config)
+artifact = Artifact.load(run_result.artifact_path)
+eval_result = evaluate(artifact, test_df)
+(OUT_DIR / 'latest_artifact_path.txt').write_text(run_result.artifact_path, encoding='utf-8')
+""",
+        ),
+        (
+            "## 4. 予測 — 訓練・テストデータへの予測値生成",
+            """
+x_train = train_df.drop(columns=[target_col])
+y_train = train_df[target_col].to_numpy(dtype=float)
+x_test = test_df.drop(columns=[target_col])
+y_test = test_df[target_col].to_numpy(dtype=float)
+pred_train = np.asarray(artifact.predict(x_train), dtype=float)
+pred_test = np.asarray(artifact.predict(x_test), dtype=float)
+
+score_table = build_regression_table(
+    pd.concat([x_train, x_test], ignore_index=True),
+    np.concatenate([y_train, y_test]),
+    np.concatenate([
+        np.zeros(len(x_train), dtype=int),
+        np.ones(len(x_test), dtype=int),
+    ]),
+    np.concatenate([pred_train, pred_test]),
+    ['in_sample'] * len(x_train) + ['out_of_sample'] * len(x_test),
+)
+score_path = OUT_DIR / 'regression_scores.csv'
+score_table.to_csv(score_path, index=False)
+""",
+        ),
+        (
+            "## 5. 予測精度評価 — MAE / MAPE / RMSE / Huber（In & Out）",
+            """
+metrics_df = pd.DataFrame(
+    [
+        regression_metrics(y_train, pred_train, label='in_sample'),
+        regression_metrics(y_test, pred_test, label='out_of_sample'),
+    ]
+)
+metrics_path = OUT_DIR / 'metrics.csv'
+metrics_df.to_csv(metrics_path, index=False)
+display(metrics_df)
+""",
+        ),
+        (
+            "## 6. 残差分布グラフ — 予測誤差の分布を In/Out で比較",
+            """
+residual_train = y_train - pred_train
+residual_test = y_test - pred_test
+residual_path = diag_dir / 'residual_hist.png'
+residual_fig = plot_error_histogram(
+    residual_train,
+    residual_test,
+    metrics_df.iloc[0].to_dict(),
+    metrics_df.iloc[1].to_dict(),
+    residual_path,
+)
+display(residual_fig)
+""",
+        ),
+        (
+            "## 7. 学習曲線 — フォールド別 CV 損失の収束を可視化",
+            """
+learning_curve_path = diag_dir / 'learning_curve.png'
+learning_curve_fig = plot_learning_curve(artifact.training_history, learning_curve_path)
+display(learning_curve_fig)
+""",
+        ),
+        (
+            "## 8. Importance グラフ (Split) — 分岐回数ベースの特徴量重要度",
+            """
+booster = artifact._get_booster()
+importance_split_df = compute_importance(booster, importance_type='split', top_n=20)
+importance_split_path = diag_dir / 'importance_split.png'
+importance_split_fig = plot_feature_importance(importance_split_df, 'split', importance_split_path)
+display(importance_split_fig)
+""",
+        ),
+        (
+            "## 9. Importance 表 (Split)",
+            """
+display(importance_split_df)
+importance_split_csv_path = OUT_DIR / 'importance_split.csv'
+importance_split_df.to_csv(importance_split_csv_path, index=False)
+""",
+        ),
+        (
+            "## 10. Importance グラフ (Gain) — 情報利得ベースの特徴量重要度",
+            """
+importance_gain_df = compute_importance(booster, importance_type='gain', top_n=20)
+importance_gain_path = diag_dir / 'importance_gain.png'
+importance_gain_fig = plot_feature_importance(importance_gain_df, 'gain', importance_gain_path)
+display(importance_gain_fig)
+""",
+        ),
+        (
+            "## 11. Importance 表 (Gain)",
+            """
+display(importance_gain_df)
+importance_gain_csv_path = OUT_DIR / 'importance_gain.csv'
+importance_gain_df.to_csv(importance_gain_csv_path, index=False)
+""",
+        ),
+        (
+            "## 12. SHAP グラフ — 個別予測への特徴量貢献量（平均絶対値）",
+            """
+shap_input = x_train.head(min(len(x_train), 64))
+shap_frame = compute_shap(booster, shap_input)
+shap_path = diag_dir / 'shap_summary.png'
+shap_fig = plot_shap_summary(shap_frame, shap_input, shap_path)
+display(shap_fig)
+""",
+        ),
+        (
+            "## 13. SHAP 表",
+            """
+shap_mean_abs_df = (
+    shap_frame.abs()
+    .mean()
+    .sort_values(ascending=False)
+    .reset_index()
+    .rename(columns={'index': 'feature', 0: 'mean_abs_shap'})
+)
+display(shap_mean_abs_df)
+shap_mean_abs_path = OUT_DIR / 'shap_mean_abs.csv'
+shap_mean_abs_df.to_csv(shap_mean_abs_path, index=False)
+display(score_table.head(10))
+
+summary_outputs = [
+    train_path,
+    test_path,
+    metrics_path,
+    residual_path,
+    learning_curve_path,
+    importance_split_path,
+    importance_split_csv_path,
+    importance_gain_path,
+    importance_gain_csv_path,
+    shap_path,
+    shap_mean_abs_path,
+    score_path,
+]
+artifact_path_for_summary = run_result.artifact_path
+""",
+        ),
+    ]
+
+    nb = nbformat.v4.new_notebook()
+    nb.metadata = NOTEBOOK_METADATA
+    nb.cells = [
+        nbformat.v4.new_markdown_cell(
+            f"# {title}\n\n1セル1処理で回帰学習・評価・診断を確認する quick reference."
+        ),
+        nbformat.v4.new_markdown_cell("## Setup"),
+        nbformat.v4.new_code_cell(textwrap.dedent(_setup_block_uc1()).strip() + "\n"),
+    ]
+    for section_title, code in section_cells:
+        nb.cells.append(nbformat.v4.new_markdown_cell(section_title))
+        nb.cells.append(nbformat.v4.new_code_cell(textwrap.dedent(code).strip() + "\n"))
+
+    nb.cells.extend(
+        [
+            nbformat.v4.new_markdown_cell("## Result Summary"),
+            nbformat.v4.new_code_cell(SUMMARY_CELL + "\n"),
+        ]
+    )
+    return nb
+
+
 def _workflow_uc1() -> str:
     return """
 from sklearn.model_selection import train_test_split
@@ -1419,7 +1684,10 @@ def main() -> None:
     for nb_name, title, setup, workflow, overview, tutorial in SPEC:
         path = NB_DIR / nb_name
         path.parent.mkdir(parents=True, exist_ok=True)
-        notebook = _build_notebook(title, setup, workflow, overview, tutorial)
+        if nb_name == "quick_reference/reference_01_regression_fit_evaluate.ipynb":
+            notebook = _build_uc1_notebook(title, tutorial)
+        else:
+            notebook = _build_notebook(title, setup, workflow, overview, tutorial)
         path.write_text(nbformat.writes(notebook), encoding="utf-8")
 
     for nb_name, *_ in SPEC:

@@ -24,12 +24,20 @@ from sklearn.metrics import (
 def regression_metrics(y_true: Any, y_pred: Any, label: str = "overall") -> dict[str, float | str]:
     y_true_f = np.asarray(y_true, dtype=float)
     y_pred_f = np.asarray(y_pred, dtype=float)
+    err = np.abs(y_true_f - y_pred_f)
+    huber_delta = 1.0
+    huber = np.where(
+        err < huber_delta,
+        0.5 * (err**2),
+        huber_delta * (err - 0.5 * huber_delta),
+    )
     return {
         "label": label,
         "rmse": float(np.sqrt(mean_squared_error(y_true_f, y_pred_f))),
         "mae": float(mean_absolute_error(y_true_f, y_pred_f)),
         "mape": float(mean_absolute_percentage_error(y_true_f, y_pred_f)),
         "r2": float(r2_score(y_true_f, y_pred_f)),
+        "huber": float(np.mean(huber)),
     }
 
 

@@ -862,7 +862,7 @@ pytest tests/ -v --tb=short
 - 影響範囲: `src/veldra/gui/{_lazy_runtime.py,app.py,services.py}`, `tests/conftest.py`,
   `tests/test_gui_lazy_import_contract.py`, `README.md`, `HISTORY.md`
 
-## 21. Phase34: Studio UX — 2画面高速モデリング
+## 21 Phase34: Studio UX — 2画面高速モデリング
 
 ### 1. 目的
 - 現行の9画面ステップフローは画面遷移が多く、慣れたユーザーには冗長。
@@ -1154,3 +1154,415 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 - 内容: Phase34 は `/studio` 追加 + 既存ページの Guided Mode 整理とし、既存ページの URL 変更・削除は実施しない。
 - 理由: 破壊的変更を避けつつ Studio UX を提供し、初心者ガイダンスとして既存フローを継続活用するため。
 - 影響範囲: `src/veldra/gui/{app.py,services.py,types.py,pages/studio_page.py,components/studio_parts.py}`, 既存ページファイル（バナー追加のみ）, `tests/test_gui_studio.py`
+
+## 22 Phase35: Notebook 内容充実
+### 1. 目的
+- quick_referenceは1セルで複数の処理を実施しており、どの処理のためにどのコードが必要なのかがわかりづらい。
+- 1セル1処理の原則に従い、コードを分割して、各セルに説明コメントを追加する。
+- 実践している処理も限定的なので充実させる
+
+### 2. 共通条件
+
+以下の条件はすべての Notebook・バックエンド変更に横断的に適用する。
+
+#### グラフは Plotly で生成する
+- 現行の Matplotlib (`plot_*` 関数群) を Plotly (`plotly.graph_objects` / `plotly.express`) に置き換える。
+- 各 `plot_*` 関数は PNG ファイルに保存する従来の `save_path` インターフェースを維持しつつ、`fig.write_image(save_path)` (kaleido) で出力する。
+  - `matplotlib` 依存を持ち込まない（既存の `matplotlib.use('Agg')` 行も Notebook から削除）。
+- Notebook での `display(Image(...))` は `display(fig)` または `fig.show()` に変更し、インタラクティブ表示を可能にする。
+- ファイルとして保存する機能（`save_path` 引数）は引き続き保持し、E2E テストで PNG の存在確認ができるようにする。
+
+#### カテゴリー列は Categorical として LightGBM に投入する
+- 学習データ読み込み後、カテゴリー型の列（`dtype == 'object'` または明示的に `category` 型と判断される列）は `pd.CategoricalDtype` に変換してから `fit()` に渡す。
+- Notebook での典型的な処理パターン:
+  ```python
+  cat_cols = train_df.select_dtypes(include='object').columns.tolist()
+  for col in cat_cols:
+      train_df[col] = train_df[col].astype('category')
+      test_df[col] = test_df[col].astype('category')
+  ```
+- Config の `data.categorical_features` キーを利用する場合はそちらに一覧を渡してもよい（既存 API に従う）。
+- カテゴリー変換セルは「特徴量指定」セルに含める（専用の独立セルとして切り出す）。
+
+### 3. 分析シナリオ
+- reference_01_quick_reference.ipynb の内容を以下のように分割する。
+  - Config設定
+  - データ指定
+  - 目的変数指定
+  - 特徴量指定
+    - 目的変数以外を特徴量とする
+    - 特徴量として使わないColumnを指定
+  - CV設定
+    - GROUP Column / Time Series Columnを指定
+    - 指定したColumnは特徴量から除外
+  - LightGBM設定
+    - パラメーター
+- パラメーター最適化（学習データCV）
+- 学習（学習データ）
+- 予測（評価データ）
+- 予測精度評価(In & Out)
+  - MAE
+  - MAPE
+  - RMSE
+  - Huber
+  - 残差分布 グラフ
+- モデル評価
+  - 学習曲線
+  - Importance グラフ (Split)
+  - Importance 表 (Split)
+  - Importance グラフ (Gain)
+  - Importance 表 (Gain)
+  - SHAP グラフ
+  - SHAP 表
+
+### 4. reference_01_quick_reference.ipynbを作りこんでから他のNotebookも同様に充実させる。そのための計画を策定する。現時点での想定シナリオ。
+#### Binary分析
+- Config設定
+  - データ指定
+  - 目的変数指定
+  - 特徴量指定
+    - 目的変数以外を特徴量とする
+    - 特徴量として使わないColumnを指定
+  - CV設定
+    - GROUP Column / Time Series Columnを指定
+    - 指定したColumnは特徴量から除外
+  - Tuning設定
+    - 目的関数
+    - Space
+    - Iteration
+  - LightGBM設定
+    - パラメーター
+- パラメーター最適化（学習データCV）
+- 学習（学習データ）
+- 予測（評価データ）
+- 予測精度評価(In & Out)
+  - AUC
+  - PR-AUC
+  - Top-k Accuracy
+  - Log Loss
+  - Brier score
+  - ROC-AUC グラフ
+  - 混合行列
+- モデル評価
+  - 学習曲線
+  - Importance グラフ (Split)
+  - Importance 表 (Split)
+  - Importance グラフ (Gain)
+  - Importance 表 (Gain)
+  - SHAP グラフ
+  - SHAP 表
+
+#### Multiclass分析
+- Config設定
+  - データ指定
+  - 目的変数指定
+  - 特徴量指定
+    - 目的変数以外を特徴量とする
+    - 特徴量として使わないColumnを指定
+  - CV設定
+    - GROUP Column / Time Series Columnを指定
+    - 指定したColumnは特徴量から除外
+  - LightGBM設定
+    - パラメーター
+- パラメーター最適化（学習データCV）
+- 学習（学習データ）
+- 予測（評価データ）
+- 予測精度評価(In & Out)
+  - One-vs-Rest ROC-AUC (macro / weighted / micro)
+  - PR-AUC
+  - Top-k Accuracy
+  - Accuracy
+  - Balanced Accuracy
+  - Log Loss
+  - Brier score
+  - One-vs-Rest ROC-AUC グラフ
+  - 混合行列
+- モデル評価
+  - 学習曲線
+  - Importance グラフ (Split)
+  - Importance 表 (Split)
+  - Importance グラフ (Gain)
+  - Importance 表 (Gain)
+  - SHAP グラフ
+  - SHAP 表
+
+
+#### 時系列回帰分析
+- Config設定
+  - データ指定
+  - 目的変数指定
+  - 特徴量指定
+    - 目的変数以外を特徴量とする
+    - 特徴量として使わないColumnを指定
+  - CV設定
+    - GROUP Column / Time Series Columnを指定
+    - 指定したColumnは特徴量から除外
+  - Tuning設定
+    - 目的関数
+    - Space
+    - Iteration
+  - LightGBM設定
+    - パラメーター
+- パラメーター最適化（学習データCV）
+- 学習（学習データ）
+- 予測（評価データ）
+- 予測精度評価(In & Out)
+  - MAE
+  - MAPE
+  - RMSE
+  - Huber
+  - 時系列の目的変数・予測値グラフ（In / Out の区切り付き）
+  - 時系列の残差グラフ（In / Out の区切り付き）
+- モデル評価
+  - Importance グラフ (Split)
+  - Importance 表 (Split)
+  - Importance グラフ (Gain)
+  - Importance 表 (Gain)
+  - SHAP グラフ
+  - SHAP 表
+
+---
+
+### 5. サブフェーズ構成
+
+#### Phase35.1: `reference_01_regression_fit_evaluate.ipynb` 充実
+
+**目的**
+現行の1セル巨大ワークフローを1セル1処理に分割し、Huber・学習曲線・Importance Split を追加する。
+
+**実装方針（2026-02-20 追記）**
+- Plotly 移行は Phase35.1 では UC-1 で利用する描画関数（`plot_error_histogram` / `plot_feature_importance` / `plot_shap_summary` / `plot_learning_curve`）に限定して先行適用する。
+- Notebook の更新は手編集ではなく `scripts/generate_phase263_notebooks.py` を唯一の生成元（source of truth）として実施し、UC-1 Notebook は再生成で反映する。
+
+**バックエンド変更（先に完成させてからNotebook改修に入る）**
+
+`src/veldra/diagnostics/metrics.py`
+- `regression_metrics()` に `huber` キーを追加
+  - 実装式: `delta=1.0`、`|e| < delta → 0.5*e²`、`|e| >= delta → delta*(|e| - 0.5*delta)` の平均
+  - NumPy のみで実装し依存追加なし
+
+`src/veldra/diagnostics/plots.py`
+- `plot_learning_curve(training_history: dict, save_path)` を新規追加
+  - `training_history["folds"]` から各フォールドの first_metric（バリデーション損失系列）を薄い線でプロット
+  - フォールド平均を太い線でプロット
+  - x 軸: iteration、y 軸: metric 値、タイトル: `"Learning Curve (CV Folds)"`
+  - `training_history` が `None` または不正フォーマットの場合はエラーを出さず空 PNG を保存
+
+`src/veldra/diagnostics/__init__.py`
+- `plot_learning_curve` をエクスポートリストに追加
+
+**ノートブック セル構成（1セル1処理）**
+
+| セル | 種別 | 内容 |
+|---|---|---|
+| 1 | markdown | # UC-1 Regression Fit/Evaluate（タイトル・目的・使い方ガイド） |
+| 2 | markdown | ## Setup |
+| 3 | code | インポート・OUT_DIR 定義 |
+| 4 | markdown | ## 1. データ準備 — 読み込みと訓練/テスト分割 |
+| 5 | code | `pd.read_csv` → `train_test_split` → CSV 保存 |
+| 6 | markdown | ## 2. Config 設定 — LightGBM / CV / ハイパーパラメーター |
+| 7 | code | `config = {...}` （各パラメーターにインラインコメント） |
+| 8 | markdown | ## 3. 学習 — `fit()` を実行して CV でモデルを訓練 |
+| 9 | code | `run_result = fit(config)` → `artifact = Artifact.load(...)` |
+| 10 | markdown | ## 4. 予測 — 訓練・テストデータへの予測値生成 |
+| 11 | code | `artifact.predict(x_train/x_test)` |
+| 12 | markdown | ## 5. 予測精度評価 — MAE / MAPE / RMSE / Huber（In & Out） |
+| 13 | code | `regression_metrics(...)` × 2 → `metrics_df` 表示 |
+| 14 | markdown | ## 6. 残差分布グラフ — 予測誤差の分布を In/Out で比較 |
+| 15 | code | `plot_error_histogram(...)` → `display(Image(...))` |
+| 16 | markdown | ## 7. 学習曲線 — フォールド別 CV 損失の収束を可視化 |
+| 17 | code | `plot_learning_curve(artifact.training_history, ...)` → `display(Image(...))` |
+| 18 | markdown | ## 8. Importance グラフ (Split) — 分岐回数ベースの特徴量重要度 |
+| 19 | code | `compute_importance(booster, 'split')` → `plot_feature_importance(...)` |
+| 20 | markdown | ## 9. Importance 表 (Split) |
+| 21 | code | `display(importance_split_df)` → CSV 保存 |
+| 22 | markdown | ## 10. Importance グラフ (Gain) — 情報利得ベースの特徴量重要度 |
+| 23 | code | `compute_importance(booster, 'gain')` → `plot_feature_importance(...)` |
+| 24 | markdown | ## 11. Importance 表 (Gain) |
+| 25 | code | `display(importance_gain_df)` → CSV 保存 |
+| 26 | markdown | ## 12. SHAP グラフ — 個別予測への特徴量貢献量（平均絶対値） |
+| 27 | code | `compute_shap(booster, x_train.head(64))` → `plot_shap_summary(...)` |
+| 28 | markdown | ## 13. SHAP 表 |
+| 29 | code | `shap_frame.abs().mean().sort_values(ascending=False).reset_index()` 表示 → CSV 保存 |
+| 30 | markdown | ## Result Summary |
+| 31 | code | `SUMMARY = {...}` → JSON 保存 |
+
+---
+
+#### Phase35.2: `reference_02_binary_tune_evaluate.ipynb` 充実
+
+**目的**
+Binary 分析ノートブックを1セル1処理に分割し、Top-k Accuracy・混合行列・Importance Split・学習曲線を追加する。
+
+**バックエンド変更**
+
+`src/veldra/diagnostics/metrics.py`
+- `binary_metrics()` に `top5_pct_positive` キーを追加
+  - 実装: スコア上位5%内（`max(1, int(len(score)*0.05))` 件）における正例率
+  - `top5_pct_positive = y_true_i[np.argsort(-score)[:max(1, int(len(score)*0.05))]].mean()`
+
+`src/veldra/diagnostics/plots.py`
+- `plot_confusion_matrix(y_true, y_pred, class_names, save_path)` を新規追加
+  - `sklearn.metrics.ConfusionMatrixDisplay` を使用してヒートマップ形式で PNG 保存
+  - binary（2×2）・multiclass（n×n）の両方に対応
+
+`src/veldra/diagnostics/__init__.py`
+- `plot_confusion_matrix` をエクスポートリストに追加
+
+**ノートブック セル構成（主要部のみ記載）**
+
+| セル | 種別 | 内容 |
+|---|---|---|
+| データ準備 | code | CSV 読み込み → stratified split → CSV 保存 |
+| Base Config | code | `base_config = {...}` （各パラメーターにコメント） |
+| Tune Config | code | `tune_config["tuning"] = {...}` （Space・試行数にコメント） |
+| パラメーター最適化 | code | `tune_result = tune(tune_config)` |
+| 学習 | code | best params 反映 → `run_result = fit(fit_config)` |
+| 予測 | code | `artifact.predict(x_train/x_test)` → スコア列抽出 |
+| 予測精度評価 | code | `binary_metrics(...)` × 2 → `metrics_df` 表示（AUC / PR-AUC / Top5% / Log Loss / Brier） |
+| ROC-AUC グラフ | code | `plot_roc_comparison(...)` |
+| 混合行列 | code | `plot_confusion_matrix(y_test, pred_label_test, ['0','1'], ...)` |
+| 学習曲線 | code | `plot_learning_curve(artifact.training_history, ...)` |
+| Importance グラフ (Split) | code | `compute_importance(booster, 'split')` → `plot_feature_importance(...)` |
+| Importance 表 (Split) | code | display + CSV 保存 |
+| Importance グラフ (Gain) | code | `compute_importance(booster, 'gain')` → `plot_feature_importance(...)` |
+| Importance 表 (Gain) | code | display + CSV 保存 |
+| SHAP グラフ | code | `compute_shap(...)` → `plot_shap_summary(...)` |
+| SHAP 表 | code | display + CSV 保存 |
+| Result Summary | code | SUMMARY JSON 保存 |
+
+---
+
+#### Phase35.3: `reference_11_multiclass_fit_evaluate.ipynb` 充実
+
+**目的**
+Multiclass ノートブックを1セル1処理に分割し、One-vs-Rest ROC-AUC グラフ・混合行列・Balanced Accuracy・Brier・PR-AUC・Importance Split・学習曲線を追加する。
+
+**バックエンド変更**
+
+`src/veldra/diagnostics/metrics.py`
+- `multiclass_metrics()` に以下を追加:
+  - `balanced_accuracy`: `sklearn.metrics.balanced_accuracy_score(y_true_i, y_pred)`
+  - `brier_macro`: クラスごとに `brier_score_loss(one_hot_col, proba_col)` を計算して平均
+  - `ovr_roc_auc_macro`: `roc_auc_score(y_true_i, proba, multi_class='ovr', average='macro')`
+  - `average_precision_macro`: `average_precision_score(one_hot, proba, average='macro')`
+
+`src/veldra/diagnostics/plots.py`
+- `plot_roc_multiclass(y_true, y_proba, class_names, save_path)` を新規追加
+  - クラスごとの One-vs-Rest ROC 曲線を重ね書きし PNG 保存
+
+`src/veldra/diagnostics/__init__.py`
+- `plot_roc_multiclass` をエクスポートリストに追加
+
+**ノートブック セル構成（主要部のみ記載）**
+
+| セル | 種別 | 内容 |
+|---|---|---|
+| データ準備 | code | iris_multiclass.csv → stratified split |
+| Config | code | multiclass 設定（コメント付き） |
+| 学習 | code | `fit(config)` |
+| 予測 | code | `artifact.predict(x_train/x_test)` → proba 列抽出 |
+| 予測精度評価 | code | `multiclass_metrics(...)` × 2（One-vs-Rest ROC-AUC / PR-AUC / Accuracy / Balanced Acc / Log Loss / Brier） |
+| One-vs-Rest ROC-AUC グラフ | code | `plot_roc_multiclass(y_test, proba_test, class_names, ...)` |
+| 混合行列 | code | `plot_confusion_matrix(y_test, pred_class_test, class_names, ...)` |
+| 学習曲線 | code | `plot_learning_curve(artifact.training_history, ...)` |
+| Importance グラフ (Split) | code | `compute_importance(booster, 'split')` → `plot_feature_importance(...)` |
+| Importance 表 (Split) | code | display + CSV 保存 |
+| Importance グラフ (Gain) | code | `compute_importance(booster, 'gain')` → `plot_feature_importance(...)` |
+| Importance 表 (Gain) | code | display + CSV 保存 |
+| SHAP グラフ | code | `compute_shap_multiclass(...)` → `plot_shap_summary(...)` |
+| SHAP 表 | code | display + CSV 保存 |
+| Result Summary | code | SUMMARY JSON 保存 |
+
+---
+
+#### Phase35.4: `reference_12_timeseries_fit_evaluate.ipynb` 充実
+
+**目的**
+時系列回帰ノートブックを1セル1処理に分割し、Huber・Importance Split・学習曲線を追加する。
+（`plot_learning_curve` は Phase35.1 で追加済みのため追加変更なし）
+
+**バックエンド変更**
+- Phase35.1 で追加した `regression_metrics` の Huber と `plot_learning_curve` を利用（本 Phase での追加変更なし）
+
+**ノートブック セル構成（主要部のみ記載）**
+
+| セル | 種別 | 内容 |
+|---|---|---|
+| データ準備 | code | california_housing.csv → event_time 列追加 → 時系列順 split |
+| Config | code | 時系列特有パラメーター（`drop_cols: ['event_time']` 等）にコメント |
+| 学習 | code | `fit(config)` |
+| 予測 | code | 訓練/テストデータへの予測値生成 |
+| 予測精度評価 | code | `regression_metrics(...)` × 2（MAE / MAPE / RMSE / Huber） |
+| 時系列 予測値グラフ | code | `plot_timeseries_prediction(time_index, y_all, y_pred_all, split_point, ...)` |
+| 時系列 残差グラフ | code | `plot_timeseries_residual(time_index, residuals, split_point, ...)` |
+| 学習曲線 | code | `plot_learning_curve(artifact.training_history, ...)` |
+| Importance グラフ (Split) | code | `compute_importance(booster, 'split')` → `plot_feature_importance(...)` |
+| Importance 表 (Split) | code | display + CSV 保存 |
+| Importance グラフ (Gain) | code | `compute_importance(booster, 'gain')` → `plot_feature_importance(...)` |
+| Importance 表 (Gain) | code | display + CSV 保存 |
+| SHAP グラフ | code | `compute_shap(booster, shap_input.head(64))` → `plot_shap_summary(...)` |
+| SHAP 表 | code | display + CSV 保存 |
+| Result Summary | code | SUMMARY JSON 保存 |
+
+---
+
+### 6. テスト要件
+
+| カテゴリ | テスト対象 | 方針 |
+|---|---|---|
+| Unit | `regression_metrics` | `huber` キーが返り値に含まれ、非負であること |
+| Unit | `binary_metrics` | `top5_pct_positive` キーが含まれ、0〜1 の範囲であること |
+| Unit | `multiclass_metrics` | `balanced_accuracy`・`brier_macro`・`ovr_roc_auc_macro`・`average_precision_macro` が含まれること |
+| Unit | `plot_learning_curve` | 正常な training_history で PNG を保存できること／`None` 入力時にエラーなく空 PNG を保存できること |
+| Unit | `plot_confusion_matrix` | binary（2×2）・multiclass（3×3）で PNG を保存できること |
+| Unit | `plot_roc_multiclass` | クラス数 3 のデータで PNG を保存できること |
+| Notebook E2E | reference_{01,02,11,12} のノートブック実行 | `pytest -m notebook_e2e` が green を維持 |
+| Regression | 全既存テスト | `-m "not gui_e2e and not notebook_e2e"` が green を維持 |
+
+---
+
+### 7. 対象ファイル
+
+**バックエンド変更**
+- `src/veldra/diagnostics/metrics.py` — `regression_metrics`・`binary_metrics`・`multiclass_metrics` に新指標追加
+- `src/veldra/diagnostics/plots.py` — `plot_learning_curve`・`plot_confusion_matrix`・`plot_roc_multiclass` を追加
+- `src/veldra/diagnostics/__init__.py` — 新関数をエクスポートリストに追加
+
+**Notebook 改修**
+- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` — セル分割 + Huber + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_02_binary_tune_evaluate.ipynb` — セル分割 + 混合行列 + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` — セル分割 + 多クラス ROC + 混合行列 + 学習曲線 + Importance Split
+- `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` — セル分割 + Huber + 学習曲線 + Importance Split
+
+**変更なし（再利用）**
+- `src/veldra/diagnostics/importance.py` — `compute_importance(importance_type='split')` は既存機能で対応
+- `src/veldra/diagnostics/shap_native.py` — 変更不要
+
+---
+
+### 8. 成功基準
+
+- 各 quick_reference notebook が「1セル1処理」構成となり、セル単独で実行可能である
+- 各 Notebook のすべての出力セルに実行済み結果（数値・グラフ）が残っており、レビュー可能である
+- `regression_metrics` が `huber` を返し、Notebook でも表示されている
+- `plot_learning_curve` が PNG を生成し、4 本すべての Notebook の学習曲線セルで表示されている
+- `plot_confusion_matrix` が binary・multiclass の両 Notebook で表示されている
+- `plot_roc_multiclass` が multiclass Notebook で表示されている
+- Importance が Split / Gain の両方で表示・CSV 保存されている
+- `pytest -m "not gui_e2e and not notebook_e2e"` が green を維持する
+
+---
+
+### 9. 実装順序
+
+1. **バックエンド先行**: `metrics.py` → `plots.py` → `__init__.py` の順に変更し、ユニットテストを通す
+2. **Phase35.1**: `reference_01` で新バックエンドを使い1セル1処理に分割・動作確認
+3. **Phase35.2〜35.4**: Phase35.1 の構成を参考に残り3本を同様に整備
+
+---
+
+### Decision（provisional）
+- 内容: Phase35 はバックエンドの診断機能追加（Huber・学習曲線・混合行列・多クラス ROC・Top-k）と、quick_reference 4本のセル分割・充実を同一フェーズで実施する。
+- 理由: バックエンドと Notebook を別フェーズにすると動作確認が分断され、Notebook E2E テストの green 維持が難しくなるため。
+- 影響範囲: `src/veldra/diagnostics/{metrics,plots,__init__}.py`, `notebooks/quick_reference/reference_{01,02,11,12}_*.ipynb`

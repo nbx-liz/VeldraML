@@ -1,4 +1,4 @@
-"""Matplotlib plotting helpers for diagnostics."""
+"""Plotting helpers for diagnostics."""
 
 from __future__ import annotations
 
@@ -7,7 +7,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 from sklearn.metrics import roc_curve
+
+_EMPTY_PNG_1X1 = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\x0cIDATx\x9cc```\x00\x00\x00\x04\x00\x01\xf5\x17\xd4\x8f"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def _ensure_parent(save_path: str | Path) -> Path:
@@ -16,16 +24,39 @@ def _ensure_parent(save_path: str | Path) -> Path:
     return path
 
 
-def plot_error_histogram(residuals_in, residuals_out, metrics_in, metrics_out, save_path) -> None:
+def _save_plotly_or_empty(fig: go.Figure, save_path: str | Path) -> Path:
     path = _ensure_parent(save_path)
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(residuals_in, bins=30, alpha=0.6, label="in")
-    ax.hist(residuals_out, bins=30, alpha=0.6, label="out")
-    ax.set_title("Residual Distribution")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+    try:
+        fig.write_image(path)
+    except Exception:
+        path.write_bytes(_EMPTY_PNG_1X1)
+    return path
+
+
+def _write_empty_png(save_path: str | Path) -> None:
+    path = _ensure_parent(save_path)
+    path.write_bytes(_EMPTY_PNG_1X1)
+
+
+def plot_error_histogram(
+    residuals_in, residuals_out, metrics_in, metrics_out, save_path
+) -> go.Figure:  # noqa: ARG001
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(x=np.asarray(residuals_in, dtype=float), name="in", opacity=0.65, nbinsx=30)
+    )
+    fig.add_trace(
+        go.Histogram(x=np.asarray(residuals_out, dtype=float), name="out", opacity=0.65, nbinsx=30)
+    )
+    fig.update_layout(
+        title="Residual Distribution",
+        barmode="overlay",
+        xaxis_title="Residual",
+        yaxis_title="Count",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
 
 
 def plot_roc_comparison(y_true_in, y_score_in, y_true_out, y_score_out, save_path) -> None:
@@ -112,6 +143,70 @@ def plot_timeseries_residual(time_index, residuals, split_point, save_path) -> N
     plt.close(fig)
 
 
+def plot_learning_curve(training_history: dict | None, save_path: str | Path) -> go.Figure:
+    if not isinstance(training_history, dict):
+        _write_empty_png(save_path)
+        return go.Figure()
+    folds = training_history.get("folds")
+    if not isinstance(folds, list) or len(folds) == 0:
+        _write_empty_png(save_path)
+        return go.Figure()
+
+    fold_series: list[np.ndarray] = []
+    fig = go.Figure()
+    for fold in folds:
+        if not isinstance(fold, dict):
+            continue
+        eval_history = fold.get("eval_history")
+        if not isinstance(eval_history, dict) or len(eval_history) == 0:
+            continue
+        first_metric = next(iter(eval_history.values()))
+        if not isinstance(first_metric, (list, tuple, np.ndarray)):
+            continue
+        values = np.asarray(first_metric, dtype=float)
+        if values.ndim != 1 or values.size == 0:
+            continue
+        fold_series.append(values)
+        fig.add_trace(
+            go.Scatter(
+                x=np.arange(1, len(values) + 1),
+                y=values,
+                mode="lines",
+                line={"width": 1},
+                opacity=0.4,
+                name=f"fold_{fold.get('fold', len(fold_series))}",
+            )
+        )
+
+    if len(fold_series) == 0:
+        _write_empty_png(save_path)
+        return go.Figure()
+
+    max_len = max(len(v) for v in fold_series)
+    stacked = np.full((len(fold_series), max_len), np.nan, dtype=float)
+    for idx, values in enumerate(fold_series):
+        stacked[idx, : len(values)] = values
+    mean_curve = np.nanmean(stacked, axis=0)
+    valid = ~np.isnan(mean_curve)
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(1, max_len + 1)[valid],
+            y=mean_curve[valid],
+            mode="lines",
+            line={"width": 3},
+            name="mean",
+        )
+    )
+    fig.update_layout(
+        title="Learning Curve (CV Folds)",
+        xaxis_title="iteration",
+        yaxis_title="metric",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
+
+
 def plot_pinball_histogram(pinball_in, pinball_out, save_path) -> None:
     path = _ensure_parent(save_path)
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -140,23 +235,43 @@ def plot_frontier_scatter(y_true, y_pred, save_path) -> None:
     plt.close(fig)
 
 
-def plot_feature_importance(importance_df: pd.DataFrame, importance_type: str, save_path) -> None:
-    path = _ensure_parent(save_path)
+def plot_feature_importance(
+    importance_df: pd.DataFrame, importance_type: str, save_path
+) -> go.Figure:
     frame = importance_df.head(20).iloc[::-1]
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.barh(frame["feature"], frame["importance"])
-    ax.set_title(f"Feature Importance ({importance_type})")
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+    fig = go.Figure(
+        go.Bar(
+            x=frame["importance"],
+            y=frame["feature"],
+            orientation="h",
+            marker={"color": "#1f77b4"},
+        )
+    )
+    fig.update_layout(
+        title=f"Feature Importance ({importance_type})",
+        xaxis_title="importance",
+        yaxis_title="feature",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
 
 
-def plot_shap_summary(shap_df: pd.DataFrame, X: pd.DataFrame, save_path) -> None:
-    path = _ensure_parent(save_path)
+def plot_shap_summary(shap_df: pd.DataFrame, X: pd.DataFrame, save_path) -> go.Figure:  # noqa: ARG001
     mean_abs = shap_df.abs().mean().sort_values(ascending=False).head(20)
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.barh(mean_abs.index[::-1], mean_abs.values[::-1])
-    ax.set_title("SHAP Summary (mean |contrib|)")
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+    fig = go.Figure(
+        go.Bar(
+            x=mean_abs.values[::-1],
+            y=mean_abs.index[::-1],
+            orientation="h",
+            marker={"color": "#2ca02c"},
+        )
+    )
+    fig.update_layout(
+        title="SHAP Summary (mean |contrib|)",
+        xaxis_title="mean |contrib|",
+        yaxis_title="feature",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig

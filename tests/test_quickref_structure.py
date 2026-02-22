@@ -15,6 +15,7 @@ NOTEBOOKS = [
     "quick_reference/reference_11_multiclass_fit_evaluate.ipynb",
     "quick_reference/reference_12_timeseries_fit_evaluate.ipynb",
 ]
+UC1_NOTEBOOK = "quick_reference/reference_01_regression_fit_evaluate.ipynb"
 
 UC_NOTEBOOKS = [
     "quick_reference/reference_01_regression_fit_evaluate.ipynb",
@@ -65,15 +66,22 @@ def test_quickref_notebook_contract() -> None:
         path = Path("notebooks") / nb
         payload = _load(path)
         src = _source(path)
-        assert "## Overview" in src
-        assert "## Learn More" in src
+        if nb != UC1_NOTEBOOK:
+            assert "## Overview" in src
+            assert "## Learn More" in src
         assert "## Setup" in src
-        assert "## Config Notes" in src
-        assert "## Workflow" in src
-        assert "### Output Annotation" in src
+        if nb != UC1_NOTEBOOK:
+            assert "## Config Notes" in src
+            assert "## Workflow" in src
+        if nb != UC1_NOTEBOOK:
+            assert "### Output Annotation" in src
         assert "## Result Summary" in src
         assert "SUMMARY =" in src
-        assert "matplotlib.use('Agg')" in src
+        if nb == UC1_NOTEBOOK:
+            assert "matplotlib.use('Agg')" not in src
+            assert "plot_learning_curve(" in src
+        else:
+            assert "matplotlib.use('Agg')" in src
         assert "from veldra.diagnostics import" in src
         assert "metrics_df" in src
         assert "display(" in src
@@ -84,6 +92,9 @@ def test_quickref_notebook_contract() -> None:
         assert all(cell.get("execution_count") is not None for cell in code_cells), nb
         assert any(cell.get("outputs") for cell in code_cells), nb
 
+        if nb == UC1_NOTEBOOK:
+            assert len(payload.get("cells", [])) == 31, nb
+
 
 def test_quick_reference_notebooks_exist() -> None:
     for notebook in UC_NOTEBOOKS:
@@ -93,11 +104,13 @@ def test_quick_reference_notebooks_exist() -> None:
 def test_quick_reference_notebooks_have_required_sections() -> None:
     for notebook in UC_NOTEBOOKS:
         source = _source(Path("notebooks") / notebook)
-        assert "## Overview" in source, notebook
-        assert "## Learn More" in source, notebook
+        if notebook != UC1_NOTEBOOK:
+            assert "## Overview" in source, notebook
+            assert "## Learn More" in source, notebook
         assert "## Setup" in source, notebook
-        assert "## Config Notes" in source, notebook
-        assert "## Workflow" in source, notebook
+        if notebook != UC1_NOTEBOOK:
+            assert "## Config Notes" in source, notebook
+            assert "## Workflow" in source, notebook
         assert "## Result Summary" in source, notebook
         assert "SUMMARY" in source, notebook
 

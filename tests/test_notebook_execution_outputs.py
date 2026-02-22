@@ -25,7 +25,7 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 REQUIRED_CSV_COLUMNS: dict[str, dict[str, set[str]]] = {
     "UC-1": {
-        "metrics.csv": {"label", "rmse", "mae", "mape", "r2"},
+        "metrics.csv": {"label", "rmse", "mae", "mape", "r2", "huber"},
         "regression_scores.csv": {"y_true", "prediction", "residual", "in_out_label"},
     },
     "UC-2": {

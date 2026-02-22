@@ -1918,3 +1918,36 @@
 - `uv run ruff check src/veldra/gui/pages src/veldra/gui/components/guided_mode_banner.py tests/test_gui_guided_mode_pages.py tests/test_gui_app_helpers.py tests/test_gui_studio.py DESIGN_BLUEPRINT.md HISTORY.md` を通過。
 - `uv run pytest -q tests/test_gui_guided_mode_pages.py tests/test_gui_app_helpers.py tests/test_gui_studio.py` を実施（`25 passed`）。
 - `uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`764 passed, 15 deselected`）。
+
+### 2026-02-20（作業/PR: phase35-1-uc1-regression-notebook-enhancement）
+**背景**
+- quick_reference の UC-1 は1セルに処理が集中しており、手順の可読性と段階実行性が不足していた。
+- Phase35.1 の着手として、Notebook 改修前に diagnostics 拡張と生成スクリプト主導の更新方式を固定する必要があった。
+
+**変更内容**
+- `src/veldra/diagnostics/metrics.py` の `regression_metrics()` に `huber` 指標を追加した。
+- `src/veldra/diagnostics/plots.py` に `plot_learning_curve()` を追加し、UC-1 で利用する `plot_error_histogram` / `plot_feature_importance` / `plot_shap_summary` を Plotly 出力へ移行した（`save_path` は PNG 保存を維持）。
+- `src/veldra/diagnostics/__init__.py` に `plot_learning_curve` を公開追加した。
+- `scripts/generate_phase263_notebooks.py` に UC-1 専用 31セル構成の生成ロジックを追加し、`notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` を再生成した。
+- 生成スクリプトの全件実行により、quick_reference 全 Notebook の実行済み出力（execution metadata / outputs）を更新した。
+- テストを更新（`tests/test_diagnostics_metrics.py`, `tests/test_diagnostics_plots.py`, `tests/test_quickref_structure.py`, `tests/test_notebook_execution_outputs.py`）。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Plotly 移行は Phase35.1 では UC-1 で利用する描画関数（`plot_error_histogram` / `plot_feature_importance` / `plot_shap_summary` / `plot_learning_curve`）に限定し、他 UC は後続サブフェーズで順次移行する。
+  - 理由: 変更範囲を UC-1 に限定して回帰リスクを抑えつつ、Phase35.1 の完了条件（Huber/学習曲線/1セル1処理）を先に達成するため。
+  - 影響範囲: `src/veldra/diagnostics/{plots.py,__init__.py}`, `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb`
+- Decision: provisional（暫定）
+  - 内容: Notebook 更新は手編集ではなく `scripts/generate_phase263_notebooks.py` を唯一の生成元として実施する。
+  - 理由: 実体 notebook と生成元の乖離を防ぎ、Phase35.2 以降へ同じ更新方式を横展開するため。
+  - 影響範囲: `scripts/generate_phase263_notebooks.py`, `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb`
+- Decision: confirmed（確定）
+  - 内容: Phase35.1 は UC-1 の 31セル化、Huber 追加、学習曲線追加、UC-1対象 Plotly 先行移行、生成スクリプト主導更新の方針で完了した。
+  - 理由: Stable API を壊さずに DoD（指標・可視化・構造・回帰テスト）を満たしたため。
+  - 影響範囲: `src/veldra/diagnostics/{metrics.py,plots.py,__init__.py}`, `scripts/generate_phase263_notebooks.py`, `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb`, `tests/test_*`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run ruff check src/veldra/diagnostics/metrics.py src/veldra/diagnostics/plots.py src/veldra/diagnostics/__init__.py scripts/generate_phase263_notebooks.py tests/test_diagnostics_metrics.py tests/test_diagnostics_plots.py tests/test_quickref_structure.py tests/test_notebook_execution_outputs.py` を通過。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_diagnostics_metrics.py tests/test_diagnostics_plots.py tests/test_quickref_structure.py` を実施（`11 passed`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`764 passed, 15 deselected`）。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_execution_outputs.py -m notebook_e2e` を実施（`1 passed`）。
