@@ -1,0 +1,18 @@
+{
+  "datasets": {
+    "lalonde": {
+      "source_url": "https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/MatchIt/lalonde.csv",
+      "retrieved_at_utc": "2026-02-22T10:12:32.652265+00:00",
+      "sha256": "c30d4447a5e872d676b0d8e6f54748c6287068b9cea818f9988e4dce3540e9b1",
+      "license_note": "Refer to upstream dataset license and terms.",
+      "transform_version": "phase35.5A-v1-offline-seeded"
+    },
+    "cps_panel": {
+      "source_url": "https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/DRDID/nsw_long.csv",
+      "retrieved_at_utc": "2026-02-22T10:12:32.652265+00:00",
+      "sha256": "1e4d7c543ccc2329c154ecc05fede2725e0bcef2371f88e0bec0cf3db6a321b2",
+      "license_note": "Refer to upstream dataset license and terms.",
+      "transform_version": "phase35.5A-v1-offline-seeded"
+    }
+  }
+}

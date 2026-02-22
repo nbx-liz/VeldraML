@@ -20,6 +20,7 @@ from veldra.diagnostics.metrics import (
     split_in_out_metrics,
 )
 from veldra.diagnostics.plots import (
+    plot_confusion_matrix,
     plot_error_histogram,
     plot_feature_importance,
     plot_frontier_scatter,
@@ -28,6 +29,7 @@ from veldra.diagnostics.plots import (
     plot_nll_histogram,
     plot_pinball_histogram,
     plot_roc_comparison,
+    plot_roc_multiclass,
     plot_shap_summary,
     plot_timeseries_prediction,
     plot_timeseries_residual,
@@ -60,6 +62,7 @@ __all__ = [
     "frontier_metrics",
     "get_if_outliers",
     "multiclass_metrics",
+    "plot_confusion_matrix",
     "plot_error_histogram",
     "plot_feature_importance",
     "plot_frontier_scatter",
@@ -72,6 +75,7 @@ __all__ = [
     "plot_pinball_histogram",
     "plot_propensity_distribution",
     "plot_roc_comparison",
+    "plot_roc_multiclass",
     "plot_shap_summary",
     "plot_timeseries_prediction",
     "plot_timeseries_residual",

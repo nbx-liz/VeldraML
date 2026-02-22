@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from sklearn.metrics import roc_curve
+from sklearn.metrics import confusion_matrix, roc_curve
 
 _EMPTY_PNG_1X1 = (
     b"\x89PNG\r\n\x1a\n"
@@ -59,20 +59,115 @@ def plot_error_histogram(
     return fig
 
 
-def plot_roc_comparison(y_true_in, y_score_in, y_true_out, y_score_out, save_path) -> None:
-    path = _ensure_parent(save_path)
+def plot_roc_comparison(y_true_in, y_score_in, y_true_out, y_score_out, save_path) -> go.Figure:
     fpr_in, tpr_in, _ = roc_curve(y_true_in, y_score_in)
     fpr_out, tpr_out, _ = roc_curve(y_true_out, y_score_out)
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(fpr_in, tpr_in, label="in")
-    ax.plot(fpr_out, tpr_out, label="out")
-    ax.plot([0, 1], [0, 1], "k--", alpha=0.5)
-    ax.set_xlabel("FPR")
-    ax.set_ylabel("TPR")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=fpr_in,
+            y=tpr_in,
+            mode="lines",
+            name="in",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=fpr_out,
+            y=tpr_out,
+            mode="lines",
+            name="out",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0, 1.0],
+            y=[0.0, 1.0],
+            mode="lines",
+            name="baseline",
+            line={"dash": "dash", "color": "#666666"},
+        )
+    )
+    fig.update_layout(
+        title="ROC Comparison",
+        xaxis_title="FPR",
+        yaxis_title="TPR",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
+
+
+def plot_confusion_matrix(
+    y_true,
+    y_pred,
+    class_names,
+    save_path,
+) -> go.Figure:
+    y_true_arr = np.asarray(y_true)
+    y_pred_arr = np.asarray(y_pred)
+    class_labels = [str(v) for v in class_names]
+    labels = (
+        list(range(len(class_labels)))
+        if np.issubdtype(y_true_arr.dtype, np.number)
+        else class_labels
+    )
+    cm = confusion_matrix(y_true_arr, y_pred_arr, labels=labels)
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=cm,
+            x=class_labels,
+            y=class_labels,
+            colorscale="Blues",
+            showscale=True,
+            text=cm,
+            texttemplate="%{text}",
+            hovertemplate="pred=%{x}<br>true=%{y}<br>count=%{z}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Confusion Matrix",
+        xaxis_title="Predicted",
+        yaxis_title="True",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
+
+
+def plot_roc_multiclass(y_true, y_proba, class_names, save_path) -> go.Figure:
+    y_true_arr = np.asarray(y_true, dtype=int)
+    proba = np.asarray(y_proba, dtype=float)
+    labels = [str(v) for v in class_names]
+    fig = go.Figure()
+    for class_idx, class_label in enumerate(labels):
+        y_bin = (y_true_arr == class_idx).astype(int)
+        fpr, tpr, _ = roc_curve(y_bin, proba[:, class_idx])
+        fig.add_trace(
+            go.Scatter(
+                x=fpr,
+                y=tpr,
+                mode="lines",
+                name=f"{class_label} vs rest",
+            )
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0, 1.0],
+            y=[0.0, 1.0],
+            mode="lines",
+            name="baseline",
+            line={"dash": "dash", "color": "#666666"},
+        )
+    )
+    fig.update_layout(
+        title="Multiclass ROC (OvR)",
+        xaxis_title="FPR",
+        yaxis_title="TPR",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
 
 
 def plot_lift_chart(y_true, y_score, save_path) -> None:
@@ -119,28 +214,34 @@ def plot_true_class_prob_histogram(prob_in, prob_out, save_path) -> None:
     plt.close(fig)
 
 
-def plot_timeseries_prediction(time_index, y_true, y_pred, split_point, save_path) -> None:
-    path = _ensure_parent(save_path)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(time_index, y_true, label="actual")
-    ax.plot(time_index, y_pred, label="pred")
-    ax.axvline(split_point, color="k", linestyle="--", alpha=0.7)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+def plot_timeseries_prediction(time_index, y_true, y_pred, split_point, save_path) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=time_index, y=y_true, mode="lines", name="actual"))
+    fig.add_trace(go.Scatter(x=time_index, y=y_pred, mode="lines", name="pred"))
+    fig.add_vline(x=split_point, line_dash="dash", line_color="#444444")
+    fig.update_layout(
+        title="Timeseries Prediction",
+        xaxis_title="time",
+        yaxis_title="value",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
 
 
-def plot_timeseries_residual(time_index, residuals, split_point, save_path) -> None:
-    path = _ensure_parent(save_path)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(time_index, residuals, label="residual")
-    ax.axhline(0.0, color="k", linestyle="--", alpha=0.5)
-    ax.axvline(split_point, color="k", linestyle="--", alpha=0.7)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
+def plot_timeseries_residual(time_index, residuals, split_point, save_path) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=time_index, y=residuals, mode="lines", name="residual"))
+    fig.add_hline(y=0.0, line_dash="dash", line_color="#666666")
+    fig.add_vline(x=split_point, line_dash="dash", line_color="#444444")
+    fig.update_layout(
+        title="Timeseries Residual",
+        xaxis_title="time",
+        yaxis_title="residual",
+        template="plotly_white",
+    )
+    _save_plotly_or_empty(fig, save_path)
+    return fig
 
 
 def plot_learning_curve(training_history: dict | None, save_path: str | Path) -> go.Figure:

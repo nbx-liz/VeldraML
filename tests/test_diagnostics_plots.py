@@ -10,6 +10,7 @@ pytest.importorskip("matplotlib")
 pytest.importorskip("plotly")
 
 from veldra.diagnostics.plots import (
+    plot_confusion_matrix,
     plot_error_histogram,
     plot_feature_importance,
     plot_frontier_scatter,
@@ -18,6 +19,7 @@ from veldra.diagnostics.plots import (
     plot_nll_histogram,
     plot_pinball_histogram,
     plot_roc_comparison,
+    plot_roc_multiclass,
     plot_shap_summary,
     plot_timeseries_prediction,
     plot_timeseries_residual,
@@ -38,6 +40,31 @@ def test_plot_functions_create_png_files(tmp_path) -> None:
         [0, 1, 0, 1],
         [0.2, 0.7, 0.4, 0.6],
         tmp_path / "roc.png",
+    )
+    plot_confusion_matrix(
+        [0, 1, 0, 1],
+        [0, 1, 1, 1],
+        ["0", "1"],
+        tmp_path / "cm_binary.png",
+    )
+    plot_confusion_matrix(
+        [0, 1, 2, 1, 2],
+        [0, 2, 2, 1, 0],
+        ["0", "1", "2"],
+        tmp_path / "cm_multiclass.png",
+    )
+    plot_roc_multiclass(
+        [0, 1, 2, 1, 2, 0],
+        [
+            [0.9, 0.05, 0.05],
+            [0.05, 0.9, 0.05],
+            [0.05, 0.1, 0.85],
+            [0.2, 0.7, 0.1],
+            [0.1, 0.2, 0.7],
+            [0.8, 0.1, 0.1],
+        ],
+        ["0", "1", "2"],
+        tmp_path / "roc_multiclass.png",
     )
     plot_lift_chart([0, 1, 0, 1], [0.2, 0.9, 0.3, 0.8], tmp_path / "lift.png")
     plot_nll_histogram(np.random.rand(20), np.random.rand(20), tmp_path / "nll.png")
@@ -84,6 +111,9 @@ def test_plot_functions_create_png_files(tmp_path) -> None:
         "ts_res.png",
         "pinball.png",
         "frontier.png",
+        "cm_binary.png",
+        "cm_multiclass.png",
+        "roc_multiclass.png",
         "importance.png",
         "learning_curve.png",
         "learning_curve_empty_none.png",

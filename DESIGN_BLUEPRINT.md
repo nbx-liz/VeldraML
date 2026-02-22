@@ -1174,7 +1174,7 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
 
 #### カテゴリー列は自動判定して Categorical に変換し LightGBM Embedding を使う
 - データ読み込み後、`dtype == 'object'` または `dtype.name == 'category'` の列を `select_dtypes` で自動検出し、`pd.CategoricalDtype` に変換する。手動指定は不要。
-- 変換後、列名リストを Config の `data.categorical_features` キーに渡すことで LightGBM の Categorical Embedding（内部 one-hot ではなく木ベースの離散分割）が有効になる。
+- 変換後、列名リストを Config の `data.categorical` キーに渡すことで LightGBM の Categorical Embedding（内部 one-hot ではなく木ベースの離散分割）が有効になる。
 - Notebook での標準処理パターン（「カテゴリー列変換」独立セルとして配置）:
   ```python
   cat_cols = (
@@ -1185,7 +1185,7 @@ Studio には専用 `dcc.Store` を導入し、既存の `workflow-state` と分
   for col in cat_cols:
       train_df[col] = train_df[col].astype('category')
       test_df[col] = test_df[col].astype('category')
-  config["data"]["categorical_features"] = cat_cols
+  config["data"]["categorical"] = cat_cols
   ```
 - カテゴリー変換セルは「特徴量指定」の後に独立セルとして配置する（他セルと混在させない）。
 - 評価データ（`latest.csv` 等）を別途読み込む場合も同じ `cat_cols` でキャストすること。
@@ -1544,7 +1544,7 @@ Binary 分析ノートブック（Tuning なし）を新番号 `reference_02` �
 |---|---|---|
 | データ準備 | code | `titanic.csv` 読み込み → stratified split → CSV 保存 |
 | 特徴量指定 | code | 目的変数・除外列設定 |
-| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical_features"]` |
+| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical"]` |
 | Config | code | `config = {...}` （各パラメーターにコメント） |
 | 学習 | code | `run_result = fit(config)` |
 | 予測 | code | `artifact.predict(x_train/x_test)` → スコア列抽出 |
@@ -1619,7 +1619,7 @@ Multiclass ノートブックを新番号 `reference_03` として整備し、1�
 | セル | 種別 | 内容 |
 |---|---|---|
 | データ準備 | code | `bike_sharing.csv` 読み込み → 時系列順 split |
-| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical_features"]` |
+| カテゴリー列変換 | code | `select_dtypes(['object','category'])` → `astype('category')` → `config["data"]["categorical"]` |
 | Config | code | 時系列特有パラメーター（CV Time Series Column 指定等）にコメント |
 | 学習 | code | `fit(config)` |
 | 予測 | code | 訓練/テストデータへの予測値生成 |
@@ -1684,7 +1684,7 @@ Multiclass ノートブックを新番号 `reference_03` として整備し、1�
 
 - 各 quick_reference notebook が「1セル1処理」構成となり、セル単独で実行可能である
 - 各 Notebook のすべての出力セルに実行済み結果（数値・グラフ）が残っており、レビュー可能である
-- カテゴリー列が自動検出されて `CategoricalDtype` に変換され、`config["data"]["categorical_features"]` に渡されている
+- カテゴリー列が自動検出されて `CategoricalDtype` に変換され、`config["data"]["categorical"]` に渡されている
 - `regression_metrics` が `huber` を返し、Notebook でも表示されている
 - `plot_learning_curve` が PNG を生成し、Phase35.1〜35.4 の Notebook の学習曲線セルで表示されている
 - `plot_confusion_matrix` が binary・multiclass の両 Notebook で表示されている
@@ -1711,3 +1711,188 @@ Multiclass ノートブックを新番号 `reference_03` として整備し、1�
 - 内容: Phase35 は Notebook の番号体系を 01〜13 の 13本構成（シナリオ別・Tuning あり/なし対称）に整理し、デモデータ生成（Phase35.0）・バックエンド診断機能追加・quick_reference 4本（01〜04）のセル分割・充実を Phase35.0〜35.4 として先行実施する。残り 9本（05〜13）は Phase35.5 以降で計画する。
 - 理由: カテゴリー自動判定と LightGBM Embedding の共通方針を全 Notebook に適用するため、データセットを実務的なものに刷新する。Notebook 番号はシナリオ区分（基本→応用→Tuning）に対応した直感的な順序とする。
 - 影響範囲: `scripts/generate_frontier_demo_data.py`（新規）, `data/demo/frontier/`（新規）, `tests/test_frontier_demo_data.py`（新規）, `src/veldra/diagnostics/{metrics,plots,__init__}.py`, `notebooks/quick_reference/reference_{01,02,03,04}_*.ipynb`（reference_02〜04 は新規作成）
+
+### 10. Phase35.1.1以降の段階移行アップデート（2026-02-22）
+#### 10.1 移行方針（確定）
+- Legacy quick reference は `notebooks/quick_reference/` に維持する。
+- Phase35 preview は `notebooks/quick_reference_phase35/` に新設する。
+- Notebook 実行出力は legacy を `examples/out/phase26_*`、preview を `examples/out/phase35_*` に分離する。
+- 最終 cutover（`quick_reference_phase35` -> `quick_reference` 置換）は Phase35.5 で実施し、Phase35.1.1〜35.4 では実施しない。
+
+#### 10.2 スコープ（確定）
+- 実装対象: Phase35.1.1 + Phase35.2 + Phase35.3 + Phase35.4。
+- 非対象: `reference_05`〜`reference_13` の preview 置換は別計画。
+
+#### 10.3 データ方針（確定）
+- Notebook 実行時の外部依存を排除するため、`data/` へローカル CSV を配置して利用する。
+- 対象データ: `data/ames_housing.csv`, `data/titanic.csv`, `data/penguins.csv`, `data/bike_sharing.csv`。
+- `scripts/prepare_phase35_data.py` を基準生成・契約検証スクリプトとする。
+
+#### 10.4 API拡張（確定）
+- `binary_metrics` に `top5_pct_positive` を追加（既存キーは維持）。
+- `multiclass_metrics` に `balanced_accuracy`, `brier_macro`, `ovr_roc_auc_macro`, `average_precision_macro` を追加（既存キーは維持）。
+- `plot_confusion_matrix` と `plot_roc_multiclass` を `veldra.diagnostics` の公開APIとして追加する。
+- 新規可視化は Plotly 実装を標準とし、`save_path` への PNG 出力互換は維持する。
+
+#### 10.5 Notebook生成インターフェース（確定）
+- `scripts/generate_phase263_notebooks.py` に生成ターゲットを追加する。
+  - `--target legacy`
+  - `--target phase35_preview`
+  - `--target all`
+- Phase35 preview 生成は `scripts/generate_phase35_preview_notebooks.py` を利用し、手編集禁止を継続する。
+
+#### Decision（confirmed）
+- 内容: Phase35.1.1〜35.4 は段階移行（Legacy 維持 + Phase35 preview 新設）で実施し、診断API拡張・ローカルデータ契約・Phase35 preview notebook 4本・回帰テスト追加を同一方針で固定する。
+- 理由: Stable API と既存 quick reference の運用互換を維持しながら、データ/可視化/Notebook の刷新を小さな差分で進めるため。
+- 影響範囲: `scripts/generate_phase263_notebooks.py`, `scripts/generate_phase35_preview_notebooks.py`, `scripts/prepare_phase35_data.py`, `src/veldra/diagnostics/{metrics,plots,__init__.py}`, `notebooks/quick_reference_phase35/*.ipynb`, `data/*.csv`, `tests/test_phase35_*`
+
+### 11. Phase35.5A（2026-02-22）: `reference_05`〜`reference_08` 先行実装
+#### 11.1 方針（確定）
+- 段階移行を維持し、`quick_reference_phase35` へ `reference_05`〜`reference_08` を追加する。
+- Legacy `quick_reference` は非破壊維持し、cutover は Phase35.5 後続計画へ据え置く。
+- Notebook 実行時ネットワーク非依存を維持し、必要データは `data/` のローカルCSVを利用する。
+
+#### 11.2 データ契約（確定）
+- `data/lalonde.csv`（DR）
+  - 必須列: `treatment`, `outcome`, `x1`, `x2`
+- `data/cps_panel.csv`（DR-DiD panel）
+  - 必須列: `unit_id`, `time`, `post`, `treatment`, `age`, `skill`, `target`
+- 取得元追跡ファイルとして `data/phase35_sources.json` を追加し、`source_url`, `retrieved_at_utc`, `sha256`, `license_note`, `transform_version` を保持する。
+- `scripts/prepare_phase35_data.py --fetch-snapshots` で公開ミラー取得を実行し、失敗時は明示エラーとする（暗黙フォールバックなし）。
+
+#### 11.3 Notebook 追加（確定）
+- `notebooks/quick_reference_phase35/reference_05_frontier_fit_evaluate.ipynb`
+  - `data/demo/frontier/train_eval.csv` を用いた frontier 学習・評価・診断。
+  - `latest_artifact_path.txt` を出力し、UC-8 へ受け渡す。
+- `notebooks/quick_reference_phase35/reference_06_dr_estimate.ipynb`
+  - `data/lalonde.csv` を用いた DR 推定（ATT/CI/overlap/balance）。
+- `notebooks/quick_reference_phase35/reference_07_drdid_estimate.ipynb`
+  - `data/cps_panel.csv` を用いた DR-DiD（panel）推定と parallel trends 可視化。
+- `notebooks/quick_reference_phase35/reference_08_artifact_evaluate.ipynb`
+  - UC-5 の artifact をロードし `data/demo/frontier/latest.csv` を再評価。
+  - 探索順: `latest_artifact_path.txt` -> `artifacts/*` 最新。
+
+#### 11.4 テスト拡張（確定）
+- `tests/test_phase35_data_contract.py` を `lalonde/cps_panel/sources manifest` 契約へ拡張。
+- `tests/test_phase35_quickref_structure.py` を `reference_01`〜`reference_08` 検証へ拡張。
+- `tests/test_phase35_quickref_paths.py` を `reference_05`〜`reference_08` のパス/API断片検証へ拡張。
+- `tests/test_phase35_notebook_execution_outputs.py` を `UC-5`〜`UC-8` まで拡張。
+
+#### Decision（confirmed）
+- 内容: Phase35.5A として `reference_05`〜`reference_08` を preview 側へ追加し、`data/lalonde.csv` と `data/cps_panel.csv` をローカル契約データとして固定した。
+- 理由: Legacy 非破壊を維持しつつ、frontier/causal/artifact 再評価の主要シナリオを Phase35 preview で先行完結させるため。
+- 影響範囲: `scripts/{prepare_phase35_data.py,generate_phase35_preview_notebooks.py}`, `data/{lalonde.csv,cps_panel.csv,phase35_sources.json}`, `notebooks/quick_reference_phase35/reference_{05,06,07,08}_*.ipynb`, `tests/test_phase35_*`, `README.md`, `HISTORY.md`, `notebooks/reference_index.ipynb`
+
+### 12. Phase35.5B（2026-02-22）: `reference_09`〜`reference_13` 追加
+#### 12.1 方針（確定）
+- 段階移行を維持し、`quick_reference_phase35` へ tuning 系 notebook（09〜13）を追加する。
+- Legacy `quick_reference` は非破壊維持し、cutover は後続フェーズへ据え置く。
+- Notebook 実行時はローカルCSVのみを利用し、`n_trials=3` を固定する。
+
+#### 12.2 Notebook 追加（確定）
+- `notebooks/quick_reference_phase35/reference_09_binary_tune_evaluate.ipynb`
+  - `data/titanic.csv` / objective=`brier` / `tune -> fit -> evaluate`。
+- `notebooks/quick_reference_phase35/reference_10_timeseries_tune_evaluate.ipynb`
+  - `data/bike_sharing.csv` / objective=`rmse` / timeseries split の tune-evaluate。
+- `notebooks/quick_reference_phase35/reference_11_frontier_tune_evaluate.ipynb`
+  - `data/demo/frontier/train_eval.csv` / objective=`pinball_coverage_penalty` / `latest_artifact_path.txt` 出力。
+- `notebooks/quick_reference_phase35/reference_12_dr_tune_estimate.ipynb`
+  - `data/lalonde.csv` / objective=`dr_balance_priority` / `tune -> estimate_dr`。
+- `notebooks/quick_reference_phase35/reference_13_drdid_tune_estimate.ipynb`
+  - `data/cps_panel.csv` / objective=`drdid_balance_priority` / `tune -> estimate_dr(method=dr_did, design=panel)`。
+
+#### 12.3 既存 notebook 更新（確定）
+- `reference_08_artifact_evaluate.ipynb` の artifact 探索順を拡張する。
+  - `phase35_uc11_frontier_tune_evaluate/latest_artifact_path.txt`
+  - `phase35_uc05_frontier_fit_evaluate/latest_artifact_path.txt`
+  - `phase35_uc11_frontier_tune_evaluate/artifacts/*` 最新
+  - `phase35_uc05_frontier_fit_evaluate/artifacts/*` 最新
+
+#### 12.4 テスト拡張（確定）
+- `tests/test_phase35_quickref_structure.py` を `reference_01`〜`reference_13` 検証へ拡張。
+- `tests/test_phase35_quickref_paths.py` を `reference_09`〜`reference_13` と UC-8 探索順検証へ拡張。
+- `tests/test_phase35_notebook_execution_outputs.py` を `UC-9`〜`UC-13` へ拡張し、`tuning_trials.csv` 列契約を追加。
+
+#### Decision（confirmed）
+- 内容: Phase35 preview の対象を `reference_01`〜`reference_13` へ拡張し、tuning 系導線を preview 側で完結させた。
+- 理由: Legacy を維持したまま、Phase35 の全シナリオ（非tuning + tuning）を同一生成/検証パイプラインへ収束させるため。
+- 影響範囲: `scripts/generate_phase35_preview_notebooks.py`, `notebooks/quick_reference_phase35/reference_{09,10,11,12,13}_*.ipynb`, `examples/out/phase35_uc0[9]_*/`, `examples/out/phase35_uc1[0-3]_*/`, `tests/test_phase35_*`, `README.md`, `HISTORY.md`, `notebooks/reference_index.ipynb`
+
+### 13. Phase35 completion（2026-02-22）: Hard cutover + TimeSeries CS
+#### 13.1 方針（確定）
+- `quick_reference` を Phase35 `reference_01`〜`reference_13` へ置換し、本線を一本化する。
+- 旧 quick reference は `notebooks/quick_reference_legacy/phase26/` へ退避し、破壊的削除は行わない。
+- `quick_reference_phase35` は互換確認用途として 1 フェーズ併存させる。
+
+#### 13.2 TimeSeries CV 契約（確定）
+- `split.type="timeseries"` のみ partial OOF を許容する。
+- mean metrics/calibration/threshold 最適化は「OOF 有効行」のみで計算する。
+- 非 timeseries（kfold/stratified/group）は従来どおり OOF 欠損をエラーとする。
+- `training_history` に `oof_total_rows`, `oof_scored_rows`, `oof_coverage_ratio` を記録する。
+
+#### 13.3 Notebook / 生成導線（確定）
+- `scripts/generate_phase35_preview_notebooks.py` は出力先を `quick_reference` / `quick_reference_phase35` で切替可能にする。
+- `scripts/generate_phase263_notebooks.py` は `--target phase35_main` を追加し、default を `phase35_main` にする。
+- `reference_04` / `reference_10` は `split.type='timeseries'` + `time_col='dteday'` + `timeseries_mode='expanding'` を必須化する。
+- `notebooks/reference_index.ipynb` は主導線を `quick_reference`（Phase35 Main）へ更新し、legacy 退避先を明示する。
+
+#### Decision（provisional）
+- 内容: Hard cutover と timeseries partial OOF 契約を同時適用し、Phase35 を quick reference 本線として完了させる。
+- 理由: timeseries の実split（先頭区間が未スコア）を許容しない現行挙動では、Phase35 時系列 notebook の契約と矛盾するため。
+- 影響範囲: `src/veldra/modeling/{_cv_runner.py,binary.py}`, `scripts/generate_{phase35_preview,phase263}_notebooks.py`, `notebooks/{quick_reference,quick_reference_legacy,reference_index}.ipynb`, `tests/test_*quickref*`, `tests/test_*internal.py`, `README.md`, `HISTORY.md`
+
+#### Decision（confirmed）
+- 内容: `quick_reference` を Phase35 01〜13 に本線化し、timeseries は partial OOF を許容する CS 契約へ更新した。
+- 理由: Phase35 の DoD（本線 01〜13 統一 + timeseries split 契約）を満たしつつ、非 timeseries の既存厳格契約を維持できたため。
+- 影響範囲: `src/veldra/modeling/{_cv_runner.py,binary.py}`, `scripts/generate_phase35_preview_notebooks.py`, `scripts/generate_phase263_notebooks.py`, `notebooks/quick_reference/*.ipynb`, `notebooks/quick_reference_legacy/phase26/*.ipynb`, `tests/test_{quickref_paths,quickref_structure,notebook_execution_outputs,notebook_execution_evidence,notebook_reference_ab_contract}.py`, `tests/e2e_playwright/conftest.py`, `README.md`, `HISTORY.md`, `notebooks/reference_index.ipynb`
+
+### 14. Phase35.5C（2026-02-22）: De-dup cleanup + English quick reference standard
+#### 14.1 方針（確定）
+- `notebooks/quick_reference/` を唯一の canonical quick reference 出力として固定する。
+- `quick_reference_phase35` の重複 notebook 群は canonical 契約から外し、オンデマンド生成の互換用途へ移行する。
+- Legacy archive（`notebooks/quick_reference_legacy/phase26/`）は保持する。
+
+#### 14.2 生成CLI契約（確定）
+- `--target phase35_main` は canonical 出力（`quick_reference/`）を生成する。
+- `--target phase35_preview` は 1フェーズ限定の互換 alias とし、内部的には canonical 出力へルーティングする。
+- `--target all` は `legacy + canonical` のみを生成し、重複 preview セットは生成しない。
+- `phase35_preview` 指定時は deprecation warning を標準エラーへ出力する。
+
+#### 14.3 Notebook言語契約（確定）
+- `reference_01`〜`reference_13` の markdown 見出し/本文を英語で統一する。
+- Notebook の出力ファイル名・API 呼び出し・CSV 契約は既存互換を維持する。
+- 言語契約はテストで「markdown に日本語文字が含まれない」ことを検証する。
+
+#### Decision（provisional）
+- 内容: Phase35.5C では de-dup を優先し、preview 重複資産の必須契約を解除した上で英語Notebook標準化を実施する。
+- 理由: cutover 後の運用コストを最小化しつつ、次フェーズで preview alias を安全に廃止するための準備を整えるため。
+- 影響範囲: `scripts/generate_phase263_notebooks.py`, `scripts/generate_phase35_preview_notebooks.py`, `notebooks/reference_index.ipynb`, `tests/test_{quickref_structure,generate_phase263_notebooks_targets}.py`, docs
+
+#### Decision（confirmed）
+- 内容: canonical quick reference は `quick_reference/` のみとし、`phase35_preview` は deprecation warning 付き alias として維持する。Notebook 01〜13 は英語化を完了する。
+- 理由: 非破壊互換（legacy保全・alias継続）を維持しながら、重複資産と重複契約を整理できるため。
+- 影響範囲: `scripts/generate_phase263_notebooks.py`, `scripts/generate_phase35_preview_notebooks.py`, `notebooks/quick_reference/reference_{01..13}_*.ipynb`, `notebooks/reference_index.ipynb`, `README.md`, `HISTORY.md`, `tests/test_{quickref_structure,generate_phase263_notebooks_targets}.py`
+
+### 15. Naming cleanup（2026-02-22）: Phase-prefixed files role clarification
+#### 15.1 方針（確定）
+- 生成/データ準備の正準スクリプト名は phase 依存を外し、目的ベースの命名へ移行する。
+- phase-prefix スクリプト名は廃止し、CLI は意味ベース名のみ提供する。
+- データ出所 manifest は `data/quick_reference_sources.json` を正準とし、旧 `phase35_sources.json` は互換読み取りに限定する。
+- Legacy notebook 退避先のディレクトリ名は `quick_reference_legacy/archive_2025/` とする。
+
+#### 15.2 正準名（確定）
+- `scripts/generate_quick_reference_notebooks.py`（quick reference 生成CLI）
+- `scripts/generate_quick_reference_notebook_specs.py`（UC-01〜13 notebook section/spec 生成）
+- `scripts/prepare_quick_reference_data.py`（ローカルCSV生成・契約検証・snapshot取得）
+- `tests/test_quick_reference_generator_targets.py`
+- `tests/test_quick_reference_data_contract.py`
+- `tests/test_quick_reference_output_contracts.py`
+- `tests/test_runconfig_metric_extensions.py`
+- `tests/test_tuning_metric_aliases.py`
+- `tests/test_training_output_parity.py`
+- `tests/fixtures/training_output_parity/`
+
+#### Decision（confirmed）
+- 内容: phase-prefix の主要 scripts/tests/fixtures を正準名へ移行し、phase-prefix ファイル名は作業導線から排除した。
+- 理由: ファイル名だけで役割が判別できる状態を最優先し、開発者オンボーディング負荷を下げるため。
+- 影響範囲: `scripts/*quick_reference*.py`, `tests/test_*`, `tests/fixtures/*`, `notebooks/quick_reference_legacy/archive_2025/*`, `data/quick_reference_sources.json`, `README.md`, `HISTORY.md`

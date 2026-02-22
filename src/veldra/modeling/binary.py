@@ -345,25 +345,34 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         ),
     )
     oof_raw = np.asarray(cv_out.oof, dtype=float)
+    oof_valid_mask = np.asarray(cv_out.oof_valid_mask, dtype=bool)
     fold_ids = cv_out.fold_ids
     fold_records = cv_out.fold_records
     cv_results = cv_out.cv_results
+    y_true = y.to_numpy(dtype=int)
+    y_scored = y_true[oof_valid_mask]
+    oof_raw_scored = oof_raw[oof_valid_mask]
+    if np.unique(y_scored).size < 2:
+        raise VeldraValidationError(
+            "Binary timeseries OOF scored rows must contain both classes for calibration."
+        )
 
     calibrator = LogisticRegression(
         solver="lbfgs",
         random_state=config.train.seed,
         max_iter=1000,
     )
-    calibrator.fit(oof_raw.reshape(-1, 1), y.to_numpy())
-    oof_cal = calibrator.predict_proba(oof_raw.reshape(-1, 1))[:, 1]
+    calibrator.fit(oof_raw_scored.reshape(-1, 1), y_scored)
+    oof_cal = np.full(len(oof_raw), np.nan, dtype=float)
+    oof_cal[oof_valid_mask] = calibrator.predict_proba(oof_raw_scored.reshape(-1, 1))[:, 1]
+    oof_cal_scored = oof_cal[oof_valid_mask]
 
-    y_true = y.to_numpy()
-    mean_raw = _binary_metrics(y_true, oof_raw)
-    mean_cal = _binary_metrics(y_true, oof_cal)
+    mean_raw = _binary_metrics(y_scored, oof_raw_scored)
+    mean_cal = _binary_metrics(y_scored, oof_cal_scored)
 
     prob_true, prob_pred = calibration_curve(
-        y.to_numpy(),
-        np.clip(oof_cal, 1e-7, 1 - 1e-7),
+        y_scored,
+        np.clip(oof_cal_scored, 1e-7, 1 - 1e-7),
         n_bins=10,
         strategy="uniform",
     )
@@ -385,7 +394,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
 
     threshold_curve: pd.DataFrame | None = None
     if use_optimization:
-        best_threshold, threshold_curve = _find_best_threshold_f1(y.to_numpy(), oof_cal)
+        best_threshold, threshold_curve = _find_best_threshold_f1(y_scored, oof_cal_scored)
         threshold = {
             "policy": "optimized_f1",
             "value": float(best_threshold),
@@ -397,18 +406,24 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
         )
         threshold = {"policy": "fixed", "value": threshold_value}
 
-    mean_label = _binary_label_metrics(y_true, oof_cal, float(threshold["value"]))
+    mean_label = _binary_label_metrics(y_scored, oof_cal_scored, float(threshold["value"]))
     mean_all = {**mean_cal, **mean_label}
     if config.train.top_k is not None:
         top_k = int(config.train.top_k)
         top_key = f"precision_at_{top_k}"
-        mean_all[top_key] = _precision_at_k(y_true, oof_cal, top_k)
-        mean_raw[top_key] = _precision_at_k(y_true, oof_raw, top_k)
+        mean_all[top_key] = _precision_at_k(y_scored, oof_cal_scored, top_k)
+        mean_raw[top_key] = _precision_at_k(y_scored, oof_raw_scored, top_k)
     metrics = {
         "folds": fold_records,
         "mean": mean_all,
         "mean_raw": mean_raw,
     }
+    threshold_value = float(threshold["value"])
+    if bool(np.all(oof_valid_mask)):
+        label_pred: np.ndarray = (oof_cal >= threshold_value).astype(int)
+    else:
+        label_pred = np.full(len(oof_cal), np.nan, dtype=float)
+        label_pred[oof_valid_mask] = (oof_cal_scored >= threshold_value).astype(float)
     observation_table = pd.DataFrame(
         {
             "fold_id": fold_ids,
@@ -416,7 +431,7 @@ def train_binary_with_cv(config: RunConfig, data: pd.DataFrame) -> BinaryTrainin
             "y_true": y_true.astype(int),
             "score_raw": oof_raw,
             "score": oof_cal,
-            "label_pred": (oof_cal >= float(threshold["value"])).astype(int),
+            "label_pred": label_pred,
         }
     )
 

@@ -1,49 +1,23 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-NOTEBOOKS = [
+QUICKREF_NOTEBOOKS = [
     "quick_reference/reference_01_regression_fit_evaluate.ipynb",
-    "quick_reference/reference_02_binary_tune_evaluate.ipynb",
-    "quick_reference/reference_03_frontier_fit_evaluate.ipynb",
-    "quick_reference/reference_04_causal_dr_estimate.ipynb",
-    "quick_reference/reference_05_causal_drdid_estimate.ipynb",
-    "quick_reference/reference_06_causal_dr_tune.ipynb",
-    "quick_reference/reference_07_artifact_evaluate.ipynb",
-    "quick_reference/reference_08_artifact_reevaluate.ipynb",
-    "quick_reference/reference_11_multiclass_fit_evaluate.ipynb",
-    "quick_reference/reference_12_timeseries_fit_evaluate.ipynb",
-]
-UC1_NOTEBOOK = "quick_reference/reference_01_regression_fit_evaluate.ipynb"
-
-UC_NOTEBOOKS = [
-    "quick_reference/reference_01_regression_fit_evaluate.ipynb",
-    "quick_reference/reference_02_binary_tune_evaluate.ipynb",
-    "quick_reference/reference_03_frontier_fit_evaluate.ipynb",
-    "quick_reference/reference_04_causal_dr_estimate.ipynb",
-    "quick_reference/reference_05_causal_drdid_estimate.ipynb",
-    "quick_reference/reference_06_causal_dr_tune.ipynb",
-    "quick_reference/reference_07_artifact_evaluate.ipynb",
-    "quick_reference/reference_08_artifact_reevaluate.ipynb",
-    "quick_reference/reference_09_export_python_onnx.ipynb",
-    "quick_reference/reference_10_export_html_excel.ipynb",
-]
-
-REMOVED_LEGACY_NOTEBOOKS = [
-    "phase26_2_uc01_regression_fit_evaluate.ipynb",
-    "phase26_2_uc02_binary_tune_evaluate.ipynb",
-    "phase26_2_uc03_frontier_fit_evaluate.ipynb",
-    "phase26_2_uc04_causal_dr_estimate.ipynb",
-    "phase26_2_uc05_causal_drdid_estimate.ipynb",
-    "phase26_2_uc06_causal_dr_tune.ipynb",
-    "phase26_2_uc07_artifact_evaluate.ipynb",
-    "phase26_2_uc08_artifact_reevaluate.ipynb",
-    "phase26_2_uc09_export_python_onnx.ipynb",
-    "phase26_2_uc10_export_html_excel.ipynb",
-    "phase26_3_uc_multiclass_fit_evaluate.ipynb",
-    "phase26_3_uc_timeseries_fit_evaluate.ipynb",
-    "phase26_2_ux_audit.ipynb",
+    "quick_reference/reference_02_binary_fit_evaluate.ipynb",
+    "quick_reference/reference_03_multiclass_fit_evaluate.ipynb",
+    "quick_reference/reference_04_timeseries_fit_evaluate.ipynb",
+    "quick_reference/reference_05_frontier_fit_evaluate.ipynb",
+    "quick_reference/reference_06_dr_estimate.ipynb",
+    "quick_reference/reference_07_drdid_estimate.ipynb",
+    "quick_reference/reference_08_artifact_evaluate.ipynb",
+    "quick_reference/reference_09_binary_tune_evaluate.ipynb",
+    "quick_reference/reference_10_timeseries_tune_evaluate.ipynb",
+    "quick_reference/reference_11_frontier_tune_evaluate.ipynb",
+    "quick_reference/reference_12_dr_tune_estimate.ipynb",
+    "quick_reference/reference_13_drdid_tune_estimate.ipynb",
 ]
 
 
@@ -61,69 +35,47 @@ def _source(path: Path) -> str:
     return "\n".join(chunks)
 
 
-def test_quickref_notebook_contract() -> None:
-    for nb in NOTEBOOKS:
-        path = Path("notebooks") / nb
+def test_quick_reference_notebook_contract() -> None:
+    for notebook in QUICKREF_NOTEBOOKS:
+        path = Path("notebooks") / notebook
         payload = _load(path)
         src = _source(path)
-        if nb != UC1_NOTEBOOK:
-            assert "## Overview" in src
-            assert "## Learn More" in src
+
         assert "## Setup" in src
-        if nb != UC1_NOTEBOOK:
-            assert "## Config Notes" in src
-            assert "## Workflow" in src
-        if nb != UC1_NOTEBOOK:
-            assert "### Output Annotation" in src
         assert "## Result Summary" in src
         assert "SUMMARY =" in src
-        if nb == UC1_NOTEBOOK:
-            assert "matplotlib.use('Agg')" not in src
-            assert "plot_learning_curve(" in src
-        else:
-            assert "matplotlib.use('Agg')" in src
         assert "from veldra.diagnostics import" in src
-        assert "metrics_df" in src
-        assert "display(" in src
-        assert "placeholder" not in src.lower()
+        assert src.count("## ") >= 12, notebook
+        assert len(payload.get("cells", [])) >= 25, notebook
 
         code_cells = [cell for cell in payload.get("cells", []) if cell.get("cell_type") == "code"]
-        assert code_cells, nb
-        assert all(cell.get("execution_count") is not None for cell in code_cells), nb
-        assert any(cell.get("outputs") for cell in code_cells), nb
-
-        if nb == UC1_NOTEBOOK:
-            assert len(payload.get("cells", [])) == 31, nb
+        assert code_cells, notebook
+        assert all(cell.get("execution_count") is not None for cell in code_cells), notebook
+        assert any(cell.get("outputs") for cell in code_cells), notebook
 
 
 def test_quick_reference_notebooks_exist() -> None:
-    for notebook in UC_NOTEBOOKS:
+    for notebook in QUICKREF_NOTEBOOKS:
         assert (Path("notebooks") / notebook).exists(), notebook
 
 
-def test_quick_reference_notebooks_have_required_sections() -> None:
-    for notebook in UC_NOTEBOOKS:
-        source = _source(Path("notebooks") / notebook)
-        if notebook != UC1_NOTEBOOK:
-            assert "## Overview" in source, notebook
-            assert "## Learn More" in source, notebook
-        assert "## Setup" in source, notebook
-        if notebook != UC1_NOTEBOOK:
-            assert "## Config Notes" in source, notebook
-            assert "## Workflow" in source, notebook
-        assert "## Result Summary" in source, notebook
-        assert "SUMMARY" in source, notebook
-
-
-def test_reference_index_links_all_quick_reference_notebooks() -> None:
+def test_reference_index_links_quick_reference_notebooks() -> None:
     source = _source(Path("notebooks/reference_index.ipynb"))
     assert "Notebook Reference Index" in source
     assert "## Tutorials" in source
-    assert "## Quick Reference" in source
-    for notebook in UC_NOTEBOOKS:
+    assert "## Quick Reference (Phase35 Main)" in source
+    assert "deprecated compatibility alias" in source
+    for notebook in QUICKREF_NOTEBOOKS:
         assert notebook in source, notebook
 
 
-def test_legacy_phase_notebooks_are_removed() -> None:
-    for notebook in REMOVED_LEGACY_NOTEBOOKS:
-        assert not (Path("notebooks") / notebook).exists(), notebook
+def test_quick_reference_markdown_cells_are_english_only() -> None:
+    jp_pattern = re.compile(r"[ぁ-んァ-ン一-龯]")
+    for notebook in QUICKREF_NOTEBOOKS:
+        payload = _load(Path("notebooks") / notebook)
+        for cell in payload.get("cells", []):
+            if cell.get("cell_type") != "markdown":
+                continue
+            raw = cell.get("source", [])
+            source = "".join(raw) if isinstance(raw, list) else str(raw)
+            assert not jp_pattern.search(source), f"{notebook}: {source}"

@@ -565,10 +565,23 @@ Notebook includes:
 - Propensity diagnostics (`e_raw` and `e_hat`) and overlap summary
 - Balance diagnostics via SMD (unweighted vs ATT-weighted)
 
-Phase26.3 notebook execution policy:
-- `notebooks/quick_reference/reference_01_regression_fit_evaluate.ipynb` 〜 `notebooks/quick_reference/reference_08_artifact_reevaluate.ipynb` と `notebooks/quick_reference/reference_11_multiclass_fit_evaluate.ipynb` / `notebooks/quick_reference/reference_12_timeseries_fit_evaluate.ipynb` は、実行済みセルをコミットして配布します。
-- 実行証跡は `examples/out/phase26_*/summary.json` と生成物ファイル群で管理します。
-- 構造契約は通常テストで検証し、重い証跡検証は `pytest -m notebook_e2e` で実行します。
+Phase35 notebook execution policy:
+- `notebooks/quick_reference/reference_01` to `reference_13` are the canonical quick reference notebooks.
+- Markdown content in Phase35 quick reference notebooks is standardized in English.
+- Executed notebooks are committed with materialized outputs.
+- Evidence is tracked by `examples/out/phase35_*/summary.json` plus generated artifacts.
+- Structural contracts run in standard tests; heavy evidence checks run under `pytest -m notebook_e2e`.
+
+Cutover / compatibility policy:
+- Hard cutover is complete: `notebooks/quick_reference/` now points to Phase35.
+- `--target preview_alias` remains available as a deprecated compatibility alias and routes to canonical generation (`quick_reference/`).
+- A duplicated tracked `quick_reference_preview/` set is no longer required by contracts.
+- Public snapshot data (`data/lalonde.csv`, `data/cps_panel.csv`) can be refreshed with `scripts/prepare_quick_reference_data.py --fetch-snapshots`.
+
+Canonical script names (recommended):
+- `scripts/generate_quick_reference_notebooks.py`: Main quick-reference generator CLI.
+- `scripts/generate_quick_reference_notebook_specs.py`: Notebook section/spec builder used by the main generator.
+- `scripts/prepare_quick_reference_data.py`: Local data generation + contract checks + snapshot refresh.
 
 Export demo:
 

@@ -128,10 +128,10 @@ def test_train_regression_with_cv_timeseries_path(monkeypatch) -> None:
         regression,
         "iter_cv_splits",
         lambda config, data, x, y=None: [
+            (np.array([0, 1], dtype=int), np.array([2, 3], dtype=int)),
             (np.array([0, 1, 2, 3], dtype=int), np.array([4, 5], dtype=int)),
-            (np.array([2, 3, 4, 5], dtype=int), np.array([0, 1], dtype=int)),
-            (np.array([0, 1, 4, 5], dtype=int), np.array([2, 3], dtype=int)),
         ],
     )
     output = regression.train_regression_with_cv(cfg, frame)
     assert output.metrics["mean"]["rmse"] >= 0.0
+    assert output.training_history["oof_coverage_ratio"] < 1.0

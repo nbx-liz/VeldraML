@@ -151,9 +151,9 @@ def test_train_multiclass_with_cv_timeseries_path(monkeypatch) -> None:
         multiclass,
         "iter_cv_splits",
         lambda config, data, x, y=None: [
-            (np.array([0, 1, 2, 3, 4, 5], dtype=int), np.array([6, 7, 8], dtype=int)),
-            (np.array([3, 4, 5, 6, 7, 8], dtype=int), np.array([0, 1, 2], dtype=int)),
-            (np.array([0, 1, 2, 6, 7, 8], dtype=int), np.array([3, 4, 5], dtype=int)),
+            (np.array([0, 1, 2], dtype=int), np.array([3, 4], dtype=int)),
+            (np.array([0, 1, 2, 3, 4], dtype=int), np.array([5, 6], dtype=int)),
+            (np.array([0, 1, 2, 3, 4, 5, 6], dtype=int), np.array([7, 8], dtype=int)),
         ],
     )
     monkeypatch.setattr(
@@ -164,3 +164,4 @@ def test_train_multiclass_with_cv_timeseries_path(monkeypatch) -> None:
 
     output = multiclass.train_multiclass_with_cv(cfg, frame)
     assert output.metrics["mean"]["accuracy"] >= 0.0
+    assert output.training_history["oof_coverage_ratio"] < 1.0

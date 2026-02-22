@@ -1980,3 +1980,186 @@
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_frontier_demo_data.py` を実施（`2 passed`）。
 - `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_frontier_demo_data.py` を実施し、`data/demo/frontier/train_eval.csv`（12,000行）と `data/demo/frontier/latest.csv`（6,000行）を生成。
 - `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施（`766 passed, 15 deselected`）。
+
+### 2026-02-22（作業/PR: phase35-1-1-plus-staged-preview-migration）
+**背景**
+- Phase35.1 以降は既存 quick_reference を壊さず段階移行する方針が必要で、preview 導線とテスト契約を分離して固定する必要があった。
+- Notebook 実行時の外部依存を排除するため、`data/` ローカルCSVの生成・検証フローを先に確定する必要があった。
+
+**変更内容**
+- `scripts/generate_phase263_notebooks.py` に `--target {legacy,phase35_preview,all}` を追加し、Phase35 preview 生成を切り替え可能にした。
+- `scripts/generate_phase35_preview_notebooks.py` を追加し、`notebooks/quick_reference_phase35/reference_{01..04}_*.ipynb` を生成・実行可能にした（出力先: `examples/out/phase35_*`）。
+- `scripts/prepare_phase35_data.py` と `data/{ames_housing,titanic,penguins,bike_sharing}.csv` を追加し、ローカルデータ生成 + 契約検証（列/件数/型）を導入した。
+- diagnostics を拡張し、`binary_metrics.top5_pct_positive`、`multiclass_metrics` 4指標、`plot_confusion_matrix`、`plot_roc_multiclass` を追加した。
+- Phase35 専用テストを追加（`tests/test_phase35_data_contract.py`, `tests/test_phase35_quickref_structure.py`, `tests/test_phase35_quickref_paths.py`, `tests/test_phase35_notebook_execution_outputs.py`）。
+- `notebooks/reference_index.ipynb` と `README.md` に Legacy + Phase35 preview 併存方針、Phase35.5 cutover 方針を追記した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Phase35.1.1〜35.4 は `notebooks/quick_reference_phase35/` を preview 導線として運用し、Legacy quick_reference は維持する。
+  - 理由: 既存運用への影響を最小化しつつ、Notebook 構造・データ契約・可視化刷新を段階適用するため。
+  - 影響範囲: notebooks, scripts, tests, README
+- Decision: confirmed（確定）
+  - 内容: Phase35 preview の 01〜04 Notebook、ローカルCSVデータ契約、診断API拡張、回帰テスト追加を実装し、cutover を Phase35.5 へ先送りする方針を文書化した。
+  - 理由: Stable API / legacy quick_reference を維持したまま、実行可能な preview と検証導線を確立できたため。
+  - 影響範囲: `scripts/generate_phase263_notebooks.py`, `scripts/generate_phase35_preview_notebooks.py`, `scripts/prepare_phase35_data.py`, `src/veldra/diagnostics/*`, `notebooks/quick_reference_phase35/*`, `tests/test_phase35_*`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/prepare_phase35_data.py` を実施し、`data/*.csv` を生成・契約検証した。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_preview` を実施し、preview Notebook 4本を実行済み出力付きで生成した。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_diagnostics_metrics.py tests/test_diagnostics_plots.py tests/test_phase35_data_contract.py tests/test_phase35_quickref_structure.py tests/test_phase35_quickref_paths.py` を実施し、対象テストを通過した。
+
+### 2026-02-22（作業/PR: phase35-5a-preview-uc05-uc08）
+**背景**
+- Phase35 preview は 01〜04 まで先行実装済みだったが、frontier / causal / artifact-evaluate の主要導線（05〜08）が未実装だった。
+- cutover を遅らせる段階移行方針を維持したまま、preview 側で 05〜08 を完結させる必要があった。
+
+**変更内容**
+- `scripts/generate_phase35_preview_notebooks.py` を拡張し、`reference_05_frontier_fit_evaluate.ipynb`、`reference_06_dr_estimate.ipynb`、`reference_07_drdid_estimate.ipynb`、`reference_08_artifact_evaluate.ipynb` を新規生成対象に追加した。
+- `reference_05` で `latest_artifact_path.txt` を出力し、`reference_08` の artifact 探索順（marker -> latest artifact）を固定した。
+- `scripts/prepare_phase35_data.py` に `--fetch-snapshots` を追加し、`data/lalonde.csv` と `data/cps_panel.csv` の取得・正規化フロー、および `data/phase35_sources.json`（URL/sha/取得時刻等）管理を追加した。
+- `data/lalonde.csv`、`data/cps_panel.csv`、`data/phase35_sources.json` を追加し、`check-only` 契約で検証できる状態にした。
+- `tests/test_phase35_*` を 05〜08 対応へ拡張し、構造・パス・出力物・データ契約を更新した。
+- `notebooks/reference_index.ipynb`、`README.md`、`DESIGN_BLUEPRINT.md`、`HISTORY.md` を更新し、Phase35 preview 進捗（01〜08）と cutover 見送り継続を記録した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: `prepare_phase35_data.py --fetch-snapshots` は公開URL取得を試行し、失敗時は例外で停止する（暗黙フォールバックなし）。
+  - 理由: データ出所の監査性を優先し、取得失敗時の不透明な代替データ混入を避けるため。
+  - 影響範囲: `scripts/prepare_phase35_data.py`, `data/phase35_sources.json`
+- Decision: confirmed（確定）
+  - 内容: Phase35 preview の対象を `reference_01`〜`reference_08` へ拡張し、frontier/causal/artifact 再評価の一連シナリオを preview 側で実行可能にした。
+  - 理由: Legacy 非破壊を維持しながら、Phase35.5A の実利用導線と検証導線を確立できたため。
+  - 影響範囲: `scripts/generate_phase35_preview_notebooks.py`, `notebooks/quick_reference_phase35/*`, `examples/out/phase35_uc0[1-8]_*`, `tests/test_phase35_*`, docs
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/prepare_phase35_data.py --check-only` を実施し、`data/{ames_housing,titanic,penguins,bike_sharing,lalonde,cps_panel}.csv` と `data/phase35_sources.json` の契約を確認した。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_preview` を実施し、`reference_01`〜`reference_08` の実行済み notebook と `examples/out/phase35_uc0[1-8]_*/summary.json` を生成した。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_phase35_data_contract.py tests/test_phase35_quickref_structure.py tests/test_phase35_quickref_paths.py tests/test_phase35_notebook_execution_outputs.py -m notebook_e2e` を実施（対象テストを通過）。
+
+### 2026-02-22（作業/PR: phase35-5b-preview-uc09-uc13）
+**背景**
+- Phase35 preview は `reference_01`〜`reference_08` まで実装済みで、残る tuning 系シナリオ（09〜13）が未実装だった。
+- 段階移行方針を維持したまま、preview 側で 13 本のシナリオを完結させる必要があった。
+
+**変更内容**
+- `scripts/generate_phase35_preview_notebooks.py` を拡張し、`reference_09_binary_tune_evaluate.ipynb`、`reference_10_timeseries_tune_evaluate.ipynb`、`reference_11_frontier_tune_evaluate.ipynb`、`reference_12_dr_tune_estimate.ipynb`、`reference_13_drdid_tune_estimate.ipynb` を生成対象に追加した。
+- Setup import に `tune` を追加し、各 notebook で `tune -> best_params反映 -> fit/estimate_dr` の 1セル1処理フローを実装した（`n_trials=3`, `resume=true`, `preset=standard`）。
+- `reference_08_artifact_evaluate.ipynb` の artifact 探索順を `UC-11 marker -> UC-5 marker -> UC-11 artifacts latest -> UC-5 artifacts latest` へ更新した。
+- `tests/test_phase35_quickref_structure.py` を `reference_01`〜`reference_13` 対応へ拡張した。
+- `tests/test_phase35_quickref_paths.py` に `reference_09`〜`reference_13` と UC-8 新探索順の断片検証を追加した。
+- `tests/test_phase35_notebook_execution_outputs.py` に `UC-9`〜`UC-13` の `summary.json`・CSV列契約（`tuning_trials.csv` を含む）を追加した。
+- `notebooks/reference_index.ipynb`、`README.md`、`DESIGN_BLUEPRINT.md` を更新し、Phase35 preview 進捗を `01`〜`13` へ更新した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: tuning 系 notebook（UC-9〜13）の `tuning.n_trials` は一律 `3` に固定し、CI/実行安定性を優先する。
+  - 理由: notebook_e2e の時間・ばらつきを抑えつつ、導線契約を先に確定するため。
+  - 影響範囲: `scripts/generate_phase35_preview_notebooks.py`, `notebooks/quick_reference_phase35/reference_{09,10,11,12,13}_*.ipynb`
+- Decision: confirmed（確定）
+  - 内容: Phase35 preview の対象を `reference_01`〜`reference_13` に拡張し、tuning 系を含む全 quick reference を preview 側で生成・実行・検証可能にした。
+  - 理由: Legacy 非破壊を維持したまま、Phase35 の全シナリオを単一の生成/テスト契約で運用可能になったため。
+  - 影響範囲: `scripts/generate_phase35_preview_notebooks.py`, `notebooks/quick_reference_phase35/*`, `examples/out/phase35_uc0[1-9]_*`, `examples/out/phase35_uc1[0-3]_*`, `tests/test_phase35_*`, docs
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/prepare_phase35_data.py --check-only` を実施し、必要データ契約を確認した。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_preview` を実施し、`reference_01`〜`reference_13` を実行済みで生成した。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施し、回帰ゲートを確認した。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_phase35_notebook_execution_outputs.py -m notebook_e2e` を実施し、Phase35 notebook 出力契約を確認した。
+
+### 2026-02-22（作業/PR: phase35-completion-hard-cutover-timeseries-cs）
+**背景**
+- Phase35 preview（`quick_reference_phase35/reference_01..13`）は完成していたが、`quick_reference` 本線は phase26 系のままで完了定義を満たしていなかった。
+- 時系列 notebook（UC-4/UC-10）の生成設定が `kfold` で、`split.type='timeseries'` 契約と不一致だった。
+- timeseries split では先頭学習区間が OOF 未スコアになり得るが、コアが全件 OOF 必須だったためエラー化していた。
+
+**変更内容**
+- `src/veldra/modeling/_cv_runner.py` を更新し、`split.type='timeseries'` のみ partial OOF を許容、非timeseriesは従来どおり欠損 OOF をエラー継続にした。
+- `training_history` へ `oof_total_rows` / `oof_scored_rows` / `oof_coverage_ratio` を追加した。
+- `src/veldra/modeling/binary.py` を更新し、timeseries 時の calibration / threshold 最適化 / mean metrics を OOF 有効行ベースで計算するよう変更した。
+- `scripts/generate_phase35_preview_notebooks.py` を更新し、`reference_04` / `reference_10` を `split.type='timeseries'` + `time_col='dteday'` へ修正した。
+- 同 generator に出力先切替（`quick_reference` / `quick_reference_phase35`）を追加した。
+- `scripts/generate_phase263_notebooks.py` に `--target phase35_main` を追加し、default を `phase35_main` に変更した。
+- Hard cutover を実施し、`notebooks/quick_reference/` を Phase35 `reference_01..13` へ置換した。
+- 旧 quick reference は `notebooks/quick_reference_legacy/phase26/` へ退避した。
+- `tests/test_quickref_*` / `tests/test_notebook_execution_*` / `tests/test_notebook_reference_ab_contract.py` / `tests/e2e_playwright/conftest.py` を本線=Phase35前提へ更新した。
+- `README.md` / `DESIGN_BLUEPRINT.md` / `notebooks/reference_index.ipynb` を Phase35 本線化方針へ更新した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: Hard cutover（`quick_reference` 本線化）と timeseries partial OOF 許容を同一フェーズで適用する。
+  - 理由: Phase35 DoD（本線01〜13統一 + timeseries split契約）を同時に満たすため。
+  - 影響範囲: modeling core, notebook generators, quick reference tests, docs/index
+- Decision: confirmed（確定）
+  - 内容: 2026-02-22 時点で `quick_reference` は Phase35 01〜13 へ切替完了し、legacy は `quick_reference_legacy/phase26` へ退避済み。timeseries は partial OOF 契約で学習/評価可能になった。
+  - 理由: 非timeseriesの厳格契約を維持したまま、時系列 split の実データ挙動と notebook 契約の不一致を解消できたため。
+  - 影響範囲: `src/veldra/modeling/{_cv_runner.py,binary.py}`, `scripts/generate_{phase35_preview,phase263}_notebooks.py`, `notebooks/{quick_reference,quick_reference_legacy,reference_index}.ipynb`, `tests/test_quickref_*`, `tests/test_notebook_execution_*`, `tests/test_notebook_reference_ab_contract.py`, `tests/e2e_playwright/conftest.py`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_preview` を実施。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_main` を実施。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_split_time_series.py tests/test_regression_internal.py tests/test_binary_internal.py tests/test_multiclass_internal.py tests/test_frontier_internal.py` を実施。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施。
+
+### 2026-02-22（作業/PR: phase35-5c-dedup-english-standardization）
+**背景**
+- Hard cutover 後も `quick_reference_phase35` の重複導線と関連契約が残っており、canonical 運用の複雑さを増やしていた。
+- `reference_01`〜`reference_13` の markdown が日本語混在で、Notebook言語標準が未固定だった。
+
+**変更内容**
+- `scripts/generate_phase35_preview_notebooks.py` の section 見出し/表示文言を英語へ統一し、`reference_01`〜`reference_13` の英語Notebook生成を標準化した。
+- `scripts/generate_phase263_notebooks.py` で `--target phase35_preview` を deprecated alias とし、内部的に canonical（`quick_reference`）へルーティングするよう変更した。
+- `--target all` を `legacy + canonical` のみ生成する挙動へ整理し、重複 preview セット生成を停止した。
+- `tests/test_generate_phase263_notebooks_targets.py` を追加し、preview alias の warning 出力と canonical ルーティング契約を固定した。
+- `tests/test_quickref_structure.py` に「Phase35 quick_reference markdown は日本語非含有（英語標準）」テストを追加した。
+- `notebooks/reference_index.ipynb` を更新し、preview一覧を廃止して compatibility note（deprecated alias）へ置換した。
+- `README.md` / `DESIGN_BLUEPRINT.md` を更新し、canonical-only 方針・英語Notebook標準・alias互換ウィンドウを明文化した。
+
+**決定事項**
+- Decision: provisional（暫定）
+  - 内容: `phase35_preview` alias は Phase35.5C では維持するが、次フェーズ（35.5D）で廃止判断可能な状態まで de-dup を先行する。
+  - 理由: 既存運用への影響を抑えつつ、CLI/テスト/ドキュメントの canonical 化を段階適用するため。
+  - 影響範囲: generation CLI, notebook index, quickref tests, docs
+- Decision: confirmed（確定）
+  - 内容: quick reference の canonical は `notebooks/quick_reference/` のみとし、`reference_01`〜`reference_13` は英語Notebook標準を適用した。
+  - 理由: 重複資産を必須契約から外し、運用コストを下げながら互換性（legacy archive / preview alias）を維持できるため。
+  - 影響範囲: `scripts/generate_{phase35_preview,phase263}_notebooks.py`, `notebooks/quick_reference/reference_{01..13}_*.ipynb`, `notebooks/reference_index.ipynb`, `tests/test_{quickref_structure,generate_phase263_notebooks_targets}.py`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
+
+**検証結果**
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_preview --no-execute` を実施し、deprecation warning と canonical 生成経路を確認。
+- `UV_CACHE_DIR=.uv_cache uv run python scripts/generate_phase263_notebooks.py --target phase35_main` を実施し、`reference_01`〜`reference_13` を実行済み再生成した。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q -m "not gui_e2e and not notebook_e2e"` を実施。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_notebook_execution_outputs.py -m notebook_e2e` を実施。
+- `UV_CACHE_DIR=.uv_cache uv run pytest -q tests/test_phase35_notebook_execution_outputs.py -m notebook_e2e` を実施（retained suite）。
+
+### 2026-02-22（作業/PR: quickref-phase-name-clarification）
+**背景**
+- `phase` 接頭辞のファイル名が増え、責務（正準/互換/履歴）の判別が難しくなっていた。
+- 既存の運用コマンド互換は維持したまま、命名と役割の可読性を上げる必要があった。
+
+**変更内容**
+- 正準スクリプトを追加:
+  - `scripts/generate_quick_reference_notebooks.py`
+  - `scripts/generate_quick_reference_notebook_specs.py`
+  - `scripts/prepare_quick_reference_data.py`
+- phase-prefix スクリプト名を廃止（正準スクリプトへ一本化）。
+- データ manifest を正準名へ移行:
+  - `data/quick_reference_sources.json`（正準）
+  - `phase35_sources.json` は互換読み取りのみ
+- テスト/fixture を目的ベース命名へ整理:
+  - `tests/test_quick_reference_generator_targets.py`
+  - `tests/test_quick_reference_data_contract.py`
+  - `tests/test_quick_reference_output_contracts.py`
+  - `tests/test_runconfig_metric_extensions.py`
+  - `tests/test_tuning_metric_aliases.py`
+  - `tests/test_training_output_parity.py`
+  - `tests/fixtures/training_output_parity/`
+- Legacy notebook 退避先を `notebooks/quick_reference_legacy/archive_2025/` へ改名。
+- GUI関連の phase-prefix テストファイルを意味ベース名へ改名。
+- `README.md` と `DESIGN_BLUEPRINT.md` に正準名と互換ラッパーの役割を明記。
+
+**決定事項**
+- Decision: confirmed（確定）
+  - 内容: phase-prefix の実ファイル名を排除し、quick-reference 系の意味ベース命名へ統一した。
+  - 理由: 開発者がファイル名だけで責務を理解できる状態を保証するため。
+  - 影響範囲: `scripts/*quick_reference*.py`, `tests/test_*`, `tests/fixtures/*`, `notebooks/quick_reference_legacy/archive_2025/*`, `data/quick_reference_sources.json`, `README.md`, `DESIGN_BLUEPRINT.md`, `HISTORY.md`
